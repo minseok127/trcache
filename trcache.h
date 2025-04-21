@@ -6,8 +6,13 @@ extern "C" {
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 typedef struct trcache trcache;
+
+#ifndef TRCACHE_SIMD_ALIGN
+#define TRCACHE_SIMD ALIGN (64)
+#endif /* TRCACHE_SIMD_ALIGN */
 
 /*
  * The basic unit provided by the user to trcache.
@@ -59,7 +64,7 @@ typedef enum {
 } trcache_candle_type;
 
 /*
- *
+ * A single candle data structured in row-oriented format.
  */
 typedef struct trcache_candle {
 	int symbol_id;
@@ -74,11 +79,9 @@ typedef struct trcache_candle {
 } trcache_candle;
 
 /*
- *
+ * A collection of multiple candles structured in column-oriented format.
  */
 typedef struct trcache_candle_batch {
-	int symbol_id;
-	int candle_type;
 	uint64_t *first_timestamp_array;
 	uint64_t *last_timestamp_array;
 	double *open_array;
@@ -86,7 +89,10 @@ typedef struct trcache_candle_batch {
 	double *low_array;
 	double *close_array;
 	double *volume_array;
+	int capacity;
 	int num_candles;
+	int candle_type;
+	int symbol_id;
 } trcache_candle_batch;
 
 /*
@@ -123,6 +129,19 @@ void trcache_destroy(struct trcache *cache);
 /* Reflects a single trading data into the cache */
 void trcache_add_raw_data(struct trcache *cache,
 	struct trcache_raw_data *raw_data);
+
+/* Allocates a candle batch in heap memory */
+struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);
+
+/* Frees the candle batch from heap memory */
+void trcache_heap_free_candle_batch(struct trcache_candle_batch *batch);
+
+/* Allocates a candle batch in stack memory */
+void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
+
+#define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
+	struct trcache_candle_batch var;
+	trcache_stack_alloc_candle_batch(&(var), (capacity));
 
 #ifdef __cplusplus
 }
