@@ -40,29 +40,76 @@ typedef struct trcache_raw_data {
 } trcache_raw_data;
 
 /*
+ * Identifiers used by the user and trcache to recognize candle types.
+ */
+typedef enum {
+	TRCACHE_MONTH_CANDLE,
+	TRCACHE_WEEK_CANDLE,
+	TRCACHE_DAY_CANDLE,
+	TRCACHE_1H_CANDLE,
+	TRCACHE_30MIN_CANDLE,
+	TRCACHE_15MIN_CANDLE,
+	TRCACHE_5MIN_CANDLE,
+	TRCACHE_1MIN_CANDLE,
+	TRCACHE_1S_CANDLE,
+	TRCACHE_100TICK_CANDLE,
+	TRCACHE_50TICK_CANDLE,
+	TRCACHE_10TICK_CANDLE,
+	TRCACHE_5TICK_CANDLE,
+} trcache_candle_type;
+
+/*
+ *
+ */
+typedef struct trcache_candle {
+	int symbol_id;
+	int candle_type;
+	uint64_t first_timestamp;
+	uint64_t last_timestamp;
+	double open;
+	double high;
+	double low;
+	double close;
+	double volume;
+} trcache_candle;
+
+/*
+ *
+ */
+typedef struct trcache_candle_batch {
+	int symbol_id;
+	int candle_type;
+	uint64_t *first_timestamp_array;
+	uint64_t *last_timestamp_array;
+	double *open_array;
+	double *high_array;
+	double *low_array;
+	double *close_array;
+	double *volume_array;
+	int num_candles;
+} trcache_candle_batch;
+
+/*
  * An argument of the trcache_init().
- * @tick_candle_unit_list: tick-based candles to manage.
- * @time_candle_{}_unit_list: time-based candles to manage.
- * @num_{}_candles_units: size of the corresponding unit list.
- * @use_month_candle: whether to manage month-based candles.
- * @use_week_candle: whether to manage week-based candles.
- * @use_day_candle: whether to manage day-based candles.
+ * @use_{}_candle: flags to specify which candles trcache should manage.
  * @num_worker_threads: number of worker threads to be used by trcache.
  */
 typedef struct trcache_init_context {
-	int *tick_candle_unit_list;
-	int *time_candle_hour_unit_list;
-	int *time_candle_minute_unit_list;
-	int *time_candle_second_unit_list;
-
-	int num_tick_candle_units;
-	int num_time_candle_hour_units;
-	int num_time_candle_minute_units;
-	int num_time_candle_second_units;
-
 	bool use_month_candle;
 	bool use_week_candle;
 	bool use_day_candle;
+
+	bool use_1h_candle;
+	bool use_30min_candle;
+	bool use_15min_candle;
+	bool use_5min_candle;
+	bool use_1min_candle;
+	bool use_1s_candle;
+
+	bool use_100tick_candle;
+	bool use_50tick_candle;
+	bool use_10tick_candle;
+	bool use_5tick_candle;
 
 	int num_worker_threads;
 } trcache_init_context;
