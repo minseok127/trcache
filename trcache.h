@@ -64,13 +64,29 @@ typedef enum {
 } trcache_candle_type;
 
 /*
+ * Identifires for candle's fields. This is used in a bitmap to distinguish
+ * fields, so the values should be a power of two.
+ */
+typedef enum {
+	TRCACHE_FIRST_TIMESTAMP = 1,
+	TRCACHE_FIRST_TRADE_ID = 2,
+	TRCACHE_TIMESTAMP_INTERVAL = 4,
+	TRCACHE_TRADE_ID_INTERVAL = 8,
+	TRCACHE_OPEN = 16,
+	TRCACHE_HIGH = 32,
+	TRCACHE_LOW = 64,
+	TRCACHE_CLOSE = 128,
+	TRCACHE_VOLUME = 256,
+} trcache_candle_field_type;
+
+/*
  * A single candle data structured in row-oriented format.
  */
 typedef struct trcache_candle {
-	int symbol_id;
-	int candle_type;
 	uint64_t first_timestamp;
-	uint64_t last_timestamp;
+	uint64_t first_trade_id;
+	uint32_t timestamp_interval;
+	uint32_t trade_id_interval;
 	double open;
 	double high;
 	double low;
@@ -83,7 +99,9 @@ typedef struct trcache_candle {
  */
 typedef struct trcache_candle_batch {
 	uint64_t *first_timestamp_array;
-	uint64_t *last_timestamp_array;
+	uint64_t *first_trade_id_array;
+	uint32_t *timestamp_interval_array;
+	uint32_t *trade_id_interval_array;
 	double *open_array;
 	double *high_array;
 	double *low_array;
@@ -137,9 +155,7 @@ struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);
 
 /* Allocates a selective candle batch in heap memory */
 struct trcache_candle_batch *trcache_heap_alloc_candle_batch_selective(
-	int capacity, bool use_first_timestamp, bool use_last_timestamp,
-	bool use_open, bool use_high, bool use_low, bool use_close,
-	bool use_volume);
+	int capacity, int field_flag);
 
 /* Frees the candle batch from heap memory */
 void trcache_heap_free_candle_batch(struct trcache_candle_batch *batch);
@@ -149,21 +165,15 @@ void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
 
 /* Allocates a selective candle batch in stack memory */
 void trcache_stack_alloc_candle_batch_selective(struct trcache_candle_batch *b,
-	int capacity, bool use_first_timestamp, bool use_last_timestamp,
-	bool use_open, bool use_high, bool use_low, bool use_close,
-	bool use_volume);
+	int capacity, int field_flag);
 
 #define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
 	struct trcache_candle_batch var; \
 	trcache_stack_alloc_candle_batch(&(var), (capacity));
 
-#define TRCACHE_DEFINE_SELECTIVE_CANDLE_BATCH_ON_STACK(var, capacity, \
-	use_first_timestamp, use_last_timestamp, use_open, use_high, use_low, \
-	use_close, use_volume) \
+#define TRCACHE_DEFINE_SELECTIVE_CANDLE_BATCH_ON_STACK(var, capacity, flag) \
 	struct trcache_candle_batch var; \
-	trcache_stack_alloc_candle_batch(&(var), (capacity), \
-		(use_first_timestamp), (use_last_timestamp), (use_open), (use_high), \
-		(use_low), (use_close), (use_volume));
+	trcache_stack_alloc_candle_batch(&(var), (capacity), (flag));
 
 /* Exports old candles in trcache into the given batch argument */
 void trcache_export_candle_batch(struct trcache *cache,
