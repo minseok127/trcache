@@ -11,7 +11,7 @@ extern "C" {
 typedef struct trcache trcache;
 
 #ifndef TRCACHE_SIMD_ALIGN
-#define TRCACHE_SIMD ALIGN (64)
+#define TRCACHE_SIMD_ALIGN (64)
 #endif /* TRCACHE_SIMD_ALIGN */
 
 /*
