@@ -132,18 +132,38 @@ void trcache_destroy(struct trcache *cache);
 void trcache_add_raw_data(struct trcache *cache,
 	struct trcache_raw_data *raw_data);
 
-/* Allocates a candle batch in heap memory */
+/* Allocates an entire candle batch in heap memory */
 struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);
+
+/* Allocates a selective candle batch in heap memory */
+struct trcache_candle_batch *trcache_heap_alloc_candle_batch_selective(
+	int capacity, bool use_first_timestamp, bool use_last_timestamp,
+	bool use_open, bool use_high, bool use_low, bool use_close,
+	bool use_volume);
 
 /* Frees the candle batch from heap memory */
 void trcache_heap_free_candle_batch(struct trcache_candle_batch *batch);
 
-/* Allocates a candle batch in stack memory */
+/* Allocates an entire candle batch in stack memory */
 void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
 
+/* Allocates a selective candle batch in stack memory */
+void trcache_stack_alloc_candle_batch_selective(struct trcache_candle_batch *b,
+	int capacity, bool use_first_timestamp, bool use_last_timestamp,
+	bool use_open, bool use_high, bool use_low, bool use_close,
+	bool use_volume);
+
 #define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
-	struct trcache_candle_batch var;
+	struct trcache_candle_batch var; \
 	trcache_stack_alloc_candle_batch(&(var), (capacity));
+
+#define TRCACHE_DEFINE_SELECTIVE_CANDLE_BATCH_ON_STACK(var, capacity, \
+	use_first_timestamp, use_last_timestamp, use_open, use_high, use_low, \
+	use_close, use_volume) \
+	struct trcache_candle_batch var; \
+	trcache_stack_alloc_candle_batch(&(var), (capacity), \
+		(use_first_timestamp), (use_last_timestamp), (use_open), (use_high), \
+		(use_low), (use_close), (use_volume));
 
 /* Exports old candles in trcache into the given batch argument */
 void trcache_export_candle_batch(struct trcache *cache,
