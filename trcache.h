@@ -99,6 +99,7 @@ typedef struct trcache_candle_batch {
  * An argument of the trcache_init().
  * @use_{}_candle: flags to specify which candles trcache should manage.
  * @num_worker_threads: number of worker threads to be used by trcache.
+ * @total_num_candles: how many candles the cache will keep in memory.
  */
 typedef struct trcache_init_context {
 	bool use_month_candle;
@@ -118,6 +119,7 @@ typedef struct trcache_init_context {
 	bool use_5tick_candle;
 
 	int num_worker_threads;
+	int total_num_candles;
 } trcache_init_context;
 
 /* Initialize trcache structure */
@@ -142,6 +144,11 @@ void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
 #define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
 	struct trcache_candle_batch var;
 	trcache_stack_alloc_candle_batch(&(var), (capacity));
+
+/* Exports old candles in trcache into the given batch argument */
+void trcache_export_candle_batch(struct trcache *cache,
+	struct trcache_candle_batch *exported_batch, 
+	int symbol_id, int candle_type);
 
 #ifdef __cplusplus
 }
