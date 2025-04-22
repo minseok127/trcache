@@ -8,9 +8,6 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TRCACHE_MAX_WORKER_THREAD_NUM (1 << 10)
-#define TRCACHE_MAX_SYMBOL_NUM	(1 << 20)
-
 typedef struct trcache trcache;
 
 /*
