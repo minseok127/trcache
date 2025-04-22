@@ -1,8 +1,5 @@
 #ifndef ATOMSNAP_H
 #define ATOMSNAP_H
-#ifdef __cplusplus
-extern "C" {
-#endif /* __cplusplus */
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -112,7 +109,4 @@ void atomsnap_exchange_version(struct atomsnap_gate *gate,
 bool atomsnap_compare_exchange_version(struct atomsnap_gate *gate,
 	struct atomsnap_version *old_version, struct atomsnap_version *new_version);
 
-#ifdef __cplusplus
-}
-#endif /* __cplusplus */
 #endif /* ATOMSNAP_H */

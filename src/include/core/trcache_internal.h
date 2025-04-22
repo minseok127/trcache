@@ -1,0 +1,4 @@
+#ifndef TRCACHE_INTERNAL_H
+#define TRCACHE_INTERNAL_H
+
+#endif /* TRCACHE_INTERNAL_H */

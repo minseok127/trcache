@@ -8,11 +8,10 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct trcache trcache;
+#define TRCACHE_MAX_WORKER_THREAD_NUM (1 << 10)
+#define TRCACHE_MAX_SYMBOL_NUM	(1 << 20)
 
-#ifndef TRCACHE_SIMD_ALIGN
-#define TRCACHE_SIMD_ALIGN (64)
-#endif /* TRCACHE_SIMD_ALIGN */
+typedef struct trcache trcache;
 
 /*
  * The basic unit provided by the user to trcache.
@@ -123,6 +122,9 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles
 
 /* Destory trcache structure */
 void trcache_destroy(struct trcache *cache);
+
+/* Register symbol ID */
+void trcache_register_symbol_id(struct trcache *cache, int symbol_id);
 
 /* Reflects a single trading data into the cache */
 void trcache_add_raw_data(struct trcache *cache,

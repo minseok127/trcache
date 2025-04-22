@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = atomsnap.o scalable_queue.o atomic_array.o spsc_page.o
+OBJS =
 
 .PHONY: all clean
 

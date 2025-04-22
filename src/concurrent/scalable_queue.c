@@ -5,10 +5,12 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
+#include "trcache.h"
+
 #include "concurrent/scalable_queue.h"
 
 #define MAX_SCQ_NUM (1024)
-#define MAX_THREAD_NUM (1024)
+#define MAX_THREAD_NUM (TRCACHE_MAX_WORKER_THREAD_NUM)
 
 /*
  * scq_node - Linked list node
