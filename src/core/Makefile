@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = atomsnap.o scalable_queue.o
+OBJS = trcache.o
 
 .PHONY: all clean
 
