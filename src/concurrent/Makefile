@@ -1,9 +1,5 @@
 CC = gcca
 
-CFLAGS ?= -Wall -Wextra -O2 -std=c11 -fPIC
-
-INCLUDES = -I../include -I../include/concurrent
-
 OBJS = atomsnap.o scalable_queue.o
 
 .PHONY: all clean

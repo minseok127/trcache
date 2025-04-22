@@ -14,10 +14,13 @@ else
 	$(error Unknown BUILD_MODE: $(BUILD_MODE). Use 'release' or 'debug')
 endif
 
+PROJECT_ROOT := $(realpath .)
 SRC_DIR := src
 SUBDIRS := concurrent
 
 OBJS := $(foreach dir, $(SUBDIRS), $(wildcard $(SRC_DIR)/$(dir)/*.o))
+
+INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 
 STATIC_LIB = libtrcache.a
 SHARED_LIB = libtrcache.so
@@ -26,7 +29,7 @@ SHARED_LIB = libtrcache.so
 
 all:
 	@for dir in $(SUBDIRS); do \
-		$(MAKE) -C $(SRC_DIR)/$$dir CFLAGS="$(CFLAGS)"; \
+		$(MAKE) -C $(SRC_DIR)/$$dir CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)"; \
 	done
 	$(AR) src $(STATIC_LIB) $(OBJS)
 	$(CC) -shared -o $(SHARED_LIB) $(OBJS)
