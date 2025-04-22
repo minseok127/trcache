@@ -48,36 +48,40 @@ typedef struct trcache_raw_data {
  * Identifiers used by the user and trcache to recognize candle types.
  */
 typedef enum {
-	TRCACHE_MONTH_CANDLE,
-	TRCACHE_WEEK_CANDLE,
-	TRCACHE_DAY_CANDLE,
-	TRCACHE_1H_CANDLE,
-	TRCACHE_30MIN_CANDLE,
-	TRCACHE_15MIN_CANDLE,
-	TRCACHE_5MIN_CANDLE,
-	TRCACHE_1MIN_CANDLE,
-	TRCACHE_1S_CANDLE,
-	TRCACHE_100TICK_CANDLE,
-	TRCACHE_50TICK_CANDLE,
-	TRCACHE_10TICK_CANDLE,
-	TRCACHE_5TICK_CANDLE,
+	TRCACHE_MONTH_CANDLE = 1 << 0,
+	TRCACHE_WEEK_CANDLE = 1 << 1,
+	TRCACHE_DAY_CANDLE = 1 << 2,
+	TRCACHE_1H_CANDLE = 1 << 3,
+	TRCACHE_30MIN_CANDLE = 1 << 4,
+	TRCACHE_15MIN_CANDLE = 1 << 5,
+	TRCACHE_5MIN_CANDLE = 1 << 6,
+	TRCACHE_1MIN_CANDLE = 1 << 7,
+	TRCACHE_1S_CANDLE = 1 << 8,
+	TRCACHE_100TICK_CANDLE = 1 << 9,
+	TRCACHE_50TICK_CANDLE = 1 << 10,
+	TRCACHE_10TICK_CANDLE = 1 << 11,
+	TRCACHE_5TICK_CANDLE = 1 << 12,
 } trcache_candle_type;
+
+typedef uint32_t trcache_candle_type_flags;
 
 /*
  * Identifires for candle's fields. This is used in a bitmap to distinguish
  * fields, so the values should be a power of two.
  */
 typedef enum {
-	TRCACHE_FIRST_TIMESTAMP = 1,
-	TRCACHE_FIRST_TRADE_ID = 2,
-	TRCACHE_TIMESTAMP_INTERVAL = 4,
-	TRCACHE_TRADE_ID_INTERVAL = 8,
-	TRCACHE_OPEN = 16,
-	TRCACHE_HIGH = 32,
-	TRCACHE_LOW = 64,
-	TRCACHE_CLOSE = 128,
-	TRCACHE_VOLUME = 256,
+	TRCACHE_FIRST_TIMESTAMP = 1 << 0,
+	TRCACHE_FIRST_TRADE_ID = 1 << 1,
+	TRCACHE_TIMESTAMP_INTERVAL = 1 << 2,
+	TRCACHE_TRADE_ID_INTERVAL = 1 << 3,
+	TRCACHE_OPEN = 1 << 4,
+	TRCACHE_HIGH = 1 << 5,
+	TRCACHE_LOW = 1 << 6,
+	TRCACHE_CLOSE = 1 << 7,
+	TRCACHE_VOLUME = 1 << 8,
 } trcache_candle_field_type;
+
+typedef uint32_t trcache_candle_field_flags;
 
 /*
  * A single candle data structured in row-oriented format.
@@ -113,35 +117,9 @@ typedef struct trcache_candle_batch {
 	int symbol_id;
 } trcache_candle_batch;
 
-/*
- * An argument of the trcache_init().
- * @use_{}_candle: flags to specify which candles trcache should manage.
- * @num_worker_threads: number of worker threads to be used by trcache.
- * @total_num_candles: how many candles the cache will keep in memory.
- */
-typedef struct trcache_init_context {
-	bool use_month_candle;
-	bool use_week_candle;
-	bool use_day_candle;
-
-	bool use_1h_candle;
-	bool use_30min_candle;
-	bool use_15min_candle;
-	bool use_5min_candle;
-	bool use_1min_candle;
-	bool use_1s_candle;
-
-	bool use_100tick_candle;
-	bool use_50tick_candle;
-	bool use_10tick_candle;
-	bool use_5tick_candle;
-
-	int num_worker_threads;
-	int total_num_candles;
-} trcache_init_context;
-
 /* Initialize trcache structure */
-struct trcache *trcache_init(struct trcache_init_context *context);
+struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles,
+	trcache_candle_type_flags candle_type_flags);
 
 /* Destory trcache structure */
 void trcache_destroy(struct trcache *cache);
@@ -155,7 +133,7 @@ struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);
 
 /* Allocates a selective candle batch in heap memory */
 struct trcache_candle_batch *trcache_heap_alloc_candle_batch_selective(
-	int capacity, int field_flag);
+	int capacity, trcache_candle_field_flags field_flag);
 
 /* Frees the candle batch from heap memory */
 void trcache_heap_free_candle_batch(struct trcache_candle_batch *batch);
@@ -165,7 +143,7 @@ void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
 
 /* Allocates a selective candle batch in stack memory */
 void trcache_stack_alloc_candle_batch_selective(struct trcache_candle_batch *b,
-	int capacity, int field_flag);
+	int capacity, trcache_candle_field_flags field_flag);
 
 #define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
 	struct trcache_candle_batch var; \
@@ -178,7 +156,7 @@ void trcache_stack_alloc_candle_batch_selective(struct trcache_candle_batch *b,
 /* Exports old candles in trcache into the given batch argument */
 void trcache_export_candle_batch(struct trcache *cache,
 	struct trcache_candle_batch *exported_batch, 
-	int symbol_id, int candle_type);
+	int symbol_id, enum trcache_candle_type candle_type);
 
 #ifdef __cplusplus
 }
