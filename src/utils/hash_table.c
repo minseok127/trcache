@@ -45,6 +45,7 @@ static int ht_resize(struct ht_hash_table *t, size_t new_cap)
 	while (cap < new_cap) {
 		cap <<= 1;
 	}
+	t->capacity = cap;
 
 	new_buckets = calloc(cap, sizeof(struct ht_item *));
 	if (!new_buckets) {
@@ -64,7 +65,6 @@ static int ht_resize(struct ht_hash_table *t, size_t new_cap)
 	}
 	free(t->buckets);
 	t->buckets  = new_buckets;
-	t->capacity = cap;
 	return 0;
 }
 
@@ -167,7 +167,7 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 	/* Resize if load factor exceeded */
 	if (t->size * HT_LOAD_FACTOR_DEN >= t->capacity * HT_LOAD_FACTOR_NUM) {
 		if (ht_resize(t, t->capacity << 1) != 0) {
-			fprintf(stderr, "ht_set: ht_resize failed\n");
+			fprintf(stderr, "ht_insert: ht_resize failed\n");
 			return -1;
 		}
 	}
@@ -176,7 +176,6 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 	it = t->buckets[idx];
 	while (it) {
 		if (t->cmp_func(key, len, it->key, it->len)) {
-			it->value = value;
 			return 0;
 		}
 		it = it->next;
@@ -232,7 +231,7 @@ void ht_remove(struct ht_hash_table *t, const void *key, size_t len)
 				t->buckets[idx] = it->next;
 			}
 
-			t->free_func(it->key);
+			t->free_func(it->key, it->len);
 			free(it);
 			t->size -= 1;
 			return;
