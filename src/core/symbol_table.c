@@ -9,15 +9,26 @@
 
 #include "trcache.h"
 
-/* Callback function used in the symbol id hash table */
+/*
+ * Duplicate a string key by allocating len bytes and copying.
+ * Returns NULL on allocation failure.
+ */
 static void *duplicate_symbol_str(const void *symbol_str, size_t len)
 {
 	char *symbol_str_dup = malloc(len);
+
+	if (symbol_str_dup == NULL) {
+		fprintf(stderr, "duplicate_symbol_str: malloc failed\n");
+		return NULL;
+	}
+
 	memcpy(symbol_str_dup, symbol_str, len);
 	return symbol_str_dup;
 }
 
-/* Callback function used in the symbol id hash table */
+/*
+ * Compare two string keys of given lengths. Return 1 if equal.
+ */
 static int compare_symbol_str(const void *symbol_str_1, size_t len1,
 	const void *symbol_str_2, size_t len2)
 {
@@ -28,37 +39,47 @@ static int compare_symbol_str(const void *symbol_str_1, size_t len1,
 	return (memcmp(symbol_str_1, symbol_str_2, len1) == 0);
 }
 
-/* Callback function used in the symbol id hash table */
+/*
+ * Free a duplicated string key.
+ */
 static void free_symbol_str(const void *symbol_str,
 	size_t len __attribute__((unused)))
 {
 	free(symbol_str);
 }
 
-/* Callback function for atomsnap used in public symbol table synchronization */
+/*
+ * atomsnap version allocation callback.
+ * alloc_arg is passed as capacity of the struct public_symbol_entry pointer
+ * array.
+ */
 static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 	struct atomsnap_version *version = malloc(sizeof(struct atomsnap_version));
 	uint64_t capacity = (uint64_t)arg;
 
 	if (version == NULL) {
-		fprintf("symbol_array_version_alloc: malloc failed\n");
+		fprintf(stderr, "symbol_array_version_alloc: malloc failed\n");
 		return NULL;
 	}
 
 	/* Allocate public_symbol_entry pointer array */
 	version->object = malloc(capacity * sizeof(void *));
 	if (version->object == NULL) {
-		fprintf("symbol_array_version_alloc: array malloc failed\n");
+		fprintf(stderr, "symbol_array_version_alloc: array malloc failed\n");
 		free(version);
 		return NULL;
 	}
 
 	version->free_context = NULL;
 
+	/* atomsnap_make_version initializes gate and opaque */
     return version;
 }
 
-/* Callback function for atomsnap used in public symbol table synchronization */
+/*
+ * atomsnap version free callback.
+ * Frees the array and version object.
+ */
 static void symbol_array_version_free(struct atomsnap_version *version) {
     struct public_symbol_entry **symbol_array
 		= (struct public_symbol_entry **) version->object;
@@ -66,6 +87,10 @@ static void symbol_array_version_free(struct atomsnap_version *version) {
     free(version);
 }
 
+/*
+ * Initialize public_symbol_table with atomsnap gate and initial
+ * public_symbol_entry pointer array version.
+ */
 static struct public_symbol_table *
 init_public_symbol_table(int initial_capacity)
 {
@@ -109,13 +134,19 @@ init_public_symbol_table(int initial_capacity)
 	return table;
 }
 
+/*
+ * Destroy public_symbol_table and atomsnap gate.
+ */
 static void
-destory_public_symbol_table(struct public_symbol_table *table)
+destroy_public_symbol_table(struct public_symbol_table *table)
 {
-	atomsnap_destroy(table->symbol_array_gate);
+	atomsnap_destroy_gate(table->symbol_array_gate);
 	free(table);
 }
 
+/*
+ * Initialize admin_symbol_table with given capacity.
+ */
 static struct admin_symbol_table *
 init_admin_symbol_table(int initial_capacity)
 {
@@ -139,8 +170,11 @@ init_admin_symbol_table(int initial_capacity)
 	return table;
 }
 
+/*
+ * Free admin_symbol_table resources.
+ */
 static void
-destory_admin_symbol_table(struct admin_symbol_table *table)
+destroy_admin_symbol_table(struct admin_symbol_table *table)
 {
 	free(table->symbol_array);
 	free(table);
@@ -201,6 +235,9 @@ struct symbol_table *init_symbol_table(int initial_capacity)
 	return table;
 }
 
+/*
+ * Clean up entire symbol_table, including hash map, public and admin tables.
+ */
 void destory_symbol_table(struct symbol_table *table)
 {
 	if (table == NULL) {
@@ -216,4 +253,94 @@ void destory_symbol_table(struct symbol_table *table)
 	destroy_admin_symbol_table(table->admin_symbol_table);
 
 	free(table);
+}
+
+/*
+ * Lock-free lookup of public_symbol_entry by symbol_id.
+ * Acquires a snapshot via atomsnap, reads entry, and releases snapshot.
+ */
+struct public_symbol_entry *
+symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
+{
+    struct atomsnap_version *version =
+        atomsnap_acquire_version(table->pub_symbol_table->symbol_array_gate);
+    struct public_symbol_entry *result = NULL;
+
+    if (symbol_id < version->capacity) {
+        res = (struct public_symbol_entry *)version->object[symbol_id];
+    }
+
+    atomsnap_release_version(version);
+
+    return result;
+}
+
+static struct public_symbol_entry *init_public_symbol_entry(int id)
+{
+	struct public_symbol_entry *entry = malloc(
+		sizeof(struct public_symbol_entry));
+
+	if (entry == NULL) {
+		fprintf(stderr, "init_public_symbol_entry: malloc failed\n");
+		return NULL;
+	}
+
+	entry->id = id;
+
+	return entry;
+}
+
+/*
+ * Registers a new symbol name and entry.
+ * Uses a mutex to synchronize hash map insertion, then add the new entry into
+ * the given index. If the array need to be resized, use atomsnap.
+ * Returns the assigned symbol ID.
+ */
+int symbol_table_register(struct symbol_table *table,
+	const char *symbol_str, size_t symbol_str_len)
+{
+	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
+	struct public_symbol_entry **symbol_array = NULL;
+	struct atomsnap_version *version = NULL, *new_version = NULL;
+    int id, oldcap, newcap;
+
+	pthread_mutex_lock(&st->ht_hash_table_mutex);
+
+	id = table->next_symbol_id;
+
+	ht_insert(table->symbol_id_map, name, symbol_str_len, (void *)id);
+
+	version = atomsnap_acquire_version(pub_symbol_table->symbol_array_gate);
+	symbol_array = (struct public_symbol_entry **) version->object;
+	oldcap = pub_symbol_table->capacity;
+
+	if (id >= oldcap) {
+		newcap = oldcap * 2;
+
+		new_version = atomsnap_make_version(pub_symbol_table->symbol_array_gate,
+			(void *) newcap);
+
+		memcpy((struct public_symbol_entry **) new_version->object,
+				(struct public_symbol_entry **) version->object,
+				oldcap * sizeof(struct public_symbol_entry *));
+
+		pub_symbol_table->capacity = newcap;
+
+		symbol_array = (struct public_symbol_entry **) new_version->object;
+
+		atomsnap_exchange_version(pub_symbol_table->symbol_array_gate,
+			new_vesrion);
+	}
+
+	atomsnap_release_version(version);
+
+	symbol_array[id] = init_public_symbol_entry(id);
+
+	pub_symbol_table->num_symbols++;
+
+	table->next_symbol_id++;
+
+	pthread_mutex_unlock(&st->ht_hash_table_mutex);
+
+	return id;
 }

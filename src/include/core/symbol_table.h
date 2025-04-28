@@ -7,7 +7,7 @@
 #include "utils/hash_table.h"
 
 struct public_symbol_entry {
-
+	int id;
 };
 
 /*
@@ -60,5 +60,11 @@ struct symbol_table {
 struct symbol_table *init_symbol_table(int initial_capacity);
 
 void destroy_symbol_table(struct symbol_table *symbol_table);
+
+struct public_symbol_entry *symbol_table_lookup_public_entry(
+	struct symbol_table *table, int symbol_id);
+
+int symbol_table_register(struct symbol_table *table,
+	const char *symbol_str, size_t symbol_str_len);
 
 #endif /* SYMBOL_TABLE_H */
