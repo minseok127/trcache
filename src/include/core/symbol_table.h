@@ -7,6 +7,7 @@
 #include "concurrent/atomsnap.h"
 #include "utils/hash_table.h"
 
+/* Publicly visible symbol entry. */
 struct public_symbol_entry {
 	int id;
 };
@@ -58,14 +59,27 @@ struct symbol_table {
 	int next_symbol_id;
 };
 
+/*
+ * Create a fresh symbol_table. Returns NULL on error.
+ */
 struct symbol_table *init_symbol_table(int initial_capacity);
 
+/*
+ * Tear down all resources (hash map, atomsnap gates, tables).
+ */
 void destroy_symbol_table(struct symbol_table *symbol_table);
 
+/*
+ * Lock-free lookup of a public_symbol_entry by ID.
+ * Returns NULL if symbol_id is out of range.
+ */
 struct public_symbol_entry *symbol_table_lookup_public_entry(
 	struct symbol_table *table, int symbol_id);
 
-int symbol_table_register(struct symbol_table *table,
-	const char *symbol_str, size_t symbol_str_len);
+/*
+ * Register a new symbol (NUL-terminated). Returns assigned ID
+ * or –1 on error.
+ */
+int symbol_table_register(struct symbol_table *table, const char *symbol_str);
 
 #endif /* SYMBOL_TABLE_H */

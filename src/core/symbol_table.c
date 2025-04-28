@@ -306,19 +306,24 @@ static struct public_symbol_entry *init_public_symbol_entry(int id)
  * the given index. If the array need to be resized, use atomsnap.
  * Returns the assigned symbol ID.
  */
-int symbol_table_register(struct symbol_table *table,
-	const char *symbol_str, size_t symbol_str_len)
+int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 {
 	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
 	struct public_symbol_entry **symbol_array = NULL;
 	struct atomsnap_version *version = NULL, *new_version = NULL;
     int id, oldcap, newcap;
 
-	pthread_mutex_lock(&st->ht_hash_table_mutex);
+	pthread_mutex_lock(&table->ht_hash_table_mutex);
 
 	id = table->next_symbol_id;
 
-	ht_insert(table->symbol_id_map, name, symbol_str_len, (void *)id);
+	if (ht_insert(table->symbol_id_map, symbol_str,
+			strlen(symbol_str) + 1, /* string + NULL */
+			(void *)id) < 0) {
+		fprintf(stderr, "symbol_table_register: ht_insert error\n");
+		pthread_mutex_unlock(&table->ht_hash_table_mutex);
+		return -1;
+	}
 
 	version = atomsnap_acquire_version(pub_symbol_table->symbol_array_gate);
 	symbol_array = (struct public_symbol_entry **) version->object;
@@ -339,7 +344,7 @@ int symbol_table_register(struct symbol_table *table,
 		symbol_array = (struct public_symbol_entry **) new_version->object;
 
 		atomsnap_exchange_version(pub_symbol_table->symbol_array_gate,
-			new_vesrion);
+			new_version);
 	}
 
 	atomsnap_release_version(version);
@@ -350,7 +355,7 @@ int symbol_table_register(struct symbol_table *table,
 
 	table->next_symbol_id++;
 
-	pthread_mutex_unlock(&st->ht_hash_table_mutex);
+	pthread_mutex_unlock(&table->ht_hash_table_mutex);
 
 	return id;
 }
