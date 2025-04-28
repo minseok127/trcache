@@ -121,10 +121,11 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles
 void trcache_destroy(struct trcache *cache);
 
 /* Register symbol ID */
-void trcache_register_symbol_id(struct trcache *cache, int symbol_id);
+int trcache_register_symbol(struct trcache *cache, const char *symbol,
+	int len, int symbol_id);
 
-/* Reflects a single trading data into the cache */
-void trcache_add_raw_data(struct trcache *cache,
+/* Feed a single trading data into the cache */
+void trcache_feed_raw_data(struct trcache *cache,
 	struct trcache_raw_data *raw_data);
 
 /* Allocates an entire candle batch in heap memory */

@@ -96,7 +96,11 @@ static void default_free_func(void *key, size_t len)
 {
 }
 
-/* Allocate and init hash table */
+/* 
+ * Allocate and init hash table. The function pointers passed as arguments are
+ * used during hash table operations. If they are NULL, default functions are
+ * used.
+ */
 struct ht_hash_table *ht_create(size_t initial_capacity, uint64_t seed,
 	ht_hash_func hash_func, ht_cmp_key_func cmp_func,
 	ht_dup_key_func dup_func, ht_free_key_func free_func)
@@ -176,6 +180,7 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 	it = t->buckets[idx];
 	while (it) {
 		if (t->cmp_func(key, len, it->key, it->len)) {
+			it->value = value; /* overwrite */
 			return 0;
 		}
 		it = it->next;
