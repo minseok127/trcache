@@ -114,7 +114,7 @@ init_public_symbol_table(int initial_capacity)
 
 	table->symbol_array_gate = atomsnap_init_gate(&ctx);
 	if (table->symbol_array_gate == NULL) {
-		fprintf(stderr, "init_public_symbol_tabe: atomsnap_init_gate failed\n");
+		fprintf(stderr, "init_public_symbol_table: atomsnap_init_gate failed\n");
 		free(table);
 		return NULL;
 	}
@@ -273,7 +273,7 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 		(struct public_symbol_entry **) version->object;
 	struct public_symbol_entry *result = NULL;
 
-	if (symbol_id < pub_symbol_table->capacity) {
+	if (symbol_id >= 0 && symbol_id < pub_symbol_table->capacity) {
 		result = array[symbol_id];
 	}
 
@@ -334,6 +334,12 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 
 		new_version = atomsnap_make_version(pub_symbol_table->symbol_array_gate,
 			(void *) newcap);
+
+		if (new_version == NULL) {
+			fprintf(stderr, "symbol_table_register: new_version alloc failed\n");
+			pthread_mutex_unlock(&table->ht_hash_table_mutex);
+			return -1;
+		}
 
 		memcpy((struct public_symbol_entry **) new_version->object,
 				(struct public_symbol_entry **) version->object,
