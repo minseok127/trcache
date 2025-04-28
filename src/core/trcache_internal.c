@@ -11,8 +11,8 @@
  * During initialization, the trcache gets an unique ID.
  * This ID is later used when threads access their thread-local data.
  */
-static _Atomic int global_trcache_id_spinlock;
-static int global_trcache_id_array[MAX_TRCACHE_NUM];
+static _Atomic int global_trcache_id_spinlock = 0;
+static _Atomic int global_trcache_id_array[MAX_TRCACHE_NUM];
 
 static void trcache_id_lock(void)
 {
@@ -77,22 +77,24 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 /*
  * Destroy all resources.
  */
-void trcache_destory(struct trcache *tc)
+void trcache_destroy(struct trcache *tc)
 {
 	if (tc == NULL) {
 		return;
 	}
 
-	destroy_symbol_table(tc->symbol_table);
-
-	free(tc);
+	assert(tc->trcache_id >= 0 && tc->trcache_id < MAX_TRCACHE_NUM);
 
 	/* Return back trcachd id */
 	trcache_id_lock();
 
-	atomic_store(&global_trcache_id_array[i], 0);
+	atomic_store(&global_trcache_id_array[tc->trcache_id], 0);
 
 	trcache_id_unlock();
+
+	destroy_symbol_table(tc->symbol_table);
+
+	free(tc);
 }
 
 /*
