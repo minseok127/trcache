@@ -204,21 +204,22 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 }
 
 /* Find value corresponding to the given key */
-bool ht_find(const struct ht_hash_table *t, const void *key,
-	size_t len, void **out)
+void *ht_find(const struct ht_hash_table *t, const void *key,
+	size_t len, bool *found)
 {
 	size_t idx = ht_index(t, key, len);
 	struct ht_item *it = t->buckets[idx];
 
 	while (it) {
 		if (t->cmp_func(key, len, it->key, it->len)) {
-			*out = it->value;
-			return true;
+			*found = true;
+			return it->value;
 		}
 		it = it->next;
 	}
 
-	return false;
+	*found = false;
+	return NULL;
 }
 
 /* Remove the given key */

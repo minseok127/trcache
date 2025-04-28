@@ -293,9 +293,9 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 
 	pthread_mutex_lock(&table->ht_hash_table_mutex);
 
-	found = ht_find(table->symbol_id_map, symbol_str,
+	symbol_id = (int) ht_find(table->symbol_id_map, symbol_str,
 		strlen(symbol_str) + 1, /* string + NULL */
-		&symbol_id);
+		&found);
 
 	pthread_mutex_unlock(&table->ht_hash_table_mutex);
 
