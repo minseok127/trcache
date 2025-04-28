@@ -23,7 +23,7 @@ void ht_destroy(ht_hash_table *table);
 
 int ht_insert(ht_hash_table *t, const void *key, size_t len, void *value);
 
-void *ht_find(const ht_hash_table *t, const void *key, size_t len, bool *found);
+bool ht_find(const ht_hash_table *t, const void *key, size_t len, void **out);
 
 void ht_remove(ht_hash_table *t, const void *key, size_t len);
 

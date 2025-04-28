@@ -283,6 +283,26 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 }
 
 /*
+ * Find symbol id from the hash table.
+ */
+int symbol_table_lookup_symbol_id(struct symbol_table *table,
+	const char *symbol_str)
+{
+	bool found = false;
+	int symbol_id = -1;
+
+	pthread_mutex_lock(&table->ht_hash_table_mutex);
+
+	found = ht_find(table->symbol_id_map, symbol_str,
+		strlen(symbol_str) + 1, /* string + NULL */
+		&symbol_id);
+
+	pthread_mutex_unlock(&table->ht_hash_table_mutex);
+
+	return (found ? symbol_id : -1);
+}
+
+/*
  * Allocate and init public symbol entry.
  */
 static struct public_symbol_entry *init_public_symbol_entry(int id)

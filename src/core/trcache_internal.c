@@ -103,7 +103,13 @@ void trcache_destroy(struct trcache *tc)
  */
 int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 {
-	return symbol_table_register(tc->symbol_table, symbol_str);
+	int symbol_id = symbol_table_lookup_symbol_id(tc->symbol_table, symbol_str);
+
+	if (symbol_id == -1) {
+		symbol_id = symbol_table_register(tc->symbol_table, symbol_str);
+	}
+
+	return symbol_id;
 }
 
 /*

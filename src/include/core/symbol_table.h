@@ -77,6 +77,13 @@ struct public_symbol_entry *symbol_table_lookup_public_entry(
 	struct symbol_table *table, int symbol_id);
 
 /*
+ * Lookup symbol id of the given symbol string.
+ * Returns symbol id (>= 0), or -1 on failure.
+ */
+int symbol_table_lookup_symbol_id(
+	struct symbol_table *table, const char *symbol_str);
+
+/*
  * Register a new symbol (NULL-terminated). Returns assigned ID
  * or –1 on error.
  */
