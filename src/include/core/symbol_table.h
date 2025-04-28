@@ -15,7 +15,7 @@ struct public_symbol_entry {
  * Synchronization for table expansion is handled through atomsnap.
  */
 struct public_symbol_table {
-	struct atomsnap_gate *symbol_array;
+	struct atomsnap_gate *symbol_array_gate;
 	int num_symbols;
 	int capacity;
 };
@@ -57,7 +57,7 @@ struct symbol_table {
 	int next_symbol_id;
 };
 
-struct symbol_table *init_public_symbol_table(int initial_capacity);
+struct symbol_table *init_symbol_table(int initial_capacity);
 
 void destroy_symbol_table(struct symbol_table *symbol_table);
 
