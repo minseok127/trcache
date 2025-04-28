@@ -238,7 +238,7 @@ struct symbol_table *init_symbol_table(int initial_capacity)
 /*
  * Clean up entire symbol_table, including hash map, public and admin tables.
  */
-void destory_symbol_table(struct symbol_table *table)
+void destroy_symbol_table(struct symbol_table *table)
 {
 	if (table == NULL) {
 		return;
@@ -258,23 +258,33 @@ void destory_symbol_table(struct symbol_table *table)
 /*
  * Lock-free lookup of public_symbol_entry by symbol_id.
  * Acquires a snapshot via atomsnap, reads entry, and releases snapshot.
+ * Internally:
+ *     1. atomsnap_acquire_version (outer ref++)  
+ *     2. read from snapshot->object array  
+ *     3. atomsnap_release_version (inner ref++ → free if zero) 
  */
 struct public_symbol_entry *
 symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 {
-    struct atomsnap_version *version =
-        atomsnap_acquire_version(table->pub_symbol_table->symbol_array_gate);
-    struct public_symbol_entry *result = NULL;
+	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
+	struct atomsnap_version *version =
+		atomsnap_acquire_version(pub_symbol_table->symbol_array_gate);
+	struct public_symbol_entry **array =
+		(struct public_symbol_entry **) version->object;
+	struct public_symbol_entry *result = NULL;
 
-    if (symbol_id < version->capacity) {
-        res = (struct public_symbol_entry *)version->object[symbol_id];
-    }
+	if (symbol_id < pub_symbol_table->capacity) {
+		result = array[symbol_id];
+	}
 
-    atomsnap_release_version(version);
+	atomsnap_release_version(version);
 
-    return result;
+	return result;
 }
 
+/*
+ * Allocate and init public symbol entry.
+ */
 static struct public_symbol_entry *init_public_symbol_entry(int id)
 {
 	struct public_symbol_entry *entry = malloc(
