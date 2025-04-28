@@ -311,7 +311,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
 	struct public_symbol_entry **symbol_array = NULL;
 	struct atomsnap_version *version = NULL, *new_version = NULL;
-    int id, oldcap, newcap;
+	int id, oldcap, newcap;
 
 	pthread_mutex_lock(&table->ht_hash_table_mutex);
 
