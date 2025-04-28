@@ -273,7 +273,7 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 		(struct public_symbol_entry **) version->object;
 	struct public_symbol_entry *result = NULL;
 
-	if (symbol_id >= 0 && symbol_id < pub_symbol_table->capacity) {
+	if (symbol_id >= 0 && symbol_id < pub_symbol_table->num_symbols) {
 		result = array[symbol_id];
 	}
 
@@ -353,13 +353,13 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 			new_version);
 	}
 
-	atomsnap_release_version(version);
-
 	symbol_array[id] = init_public_symbol_entry(id);
 
 	pub_symbol_table->num_symbols++;
 
 	table->next_symbol_id++;
+
+	atomsnap_release_version(version);
 
 	pthread_mutex_unlock(&table->ht_hash_table_mutex);
 
