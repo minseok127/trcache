@@ -8,6 +8,8 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+#define MAX_TRCACHE_NUM (1024)
+
 typedef struct trcache trcache;
 
 /*
@@ -121,10 +123,9 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles
 void trcache_destroy(struct trcache *cache);
 
 /* Register symbol ID */
-int trcache_register_symbol(struct trcache *cache, const char *symbol,
-	int len, int symbol_id);
+int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 
-/* Feed a single trading data into the cache */
+/* Feeds a single trading data into the cache */
 void trcache_feed_raw_data(struct trcache *cache,
 	struct trcache_raw_data *raw_data);
 

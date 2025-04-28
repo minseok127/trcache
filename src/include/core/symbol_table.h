@@ -77,7 +77,7 @@ struct public_symbol_entry *symbol_table_lookup_public_entry(
 	struct symbol_table *table, int symbol_id);
 
 /*
- * Register a new symbol (NUL-terminated). Returns assigned ID
+ * Register a new symbol (NULL-terminated). Returns assigned ID
  * or –1 on error.
  */
 int symbol_table_register(struct symbol_table *table, const char *symbol_str);
