@@ -34,13 +34,13 @@ typedef struct trcache trcache;
  * distinguished is not determined by trcache but should be defined by the
  * user's own logic.
  */
-typedef struct trcache_raw_data {
+typedef struct trcache_trade_data {
 	uint64_t timestamp;
 	uint64_t trade_id;
 	double price;
 	double volume;
 	int symbol_id;
-} trcache_raw_data;
+} trcache_trade_data;
 
 /*
  * Identifiers used by the user and trcache to recognize candle types.
@@ -126,8 +126,8 @@ void trcache_destroy(struct trcache *cache);
 int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 
 /* Feeds a single trading data into the cache */
-void trcache_feed_raw_data(struct trcache *cache,
-	struct trcache_raw_data *raw_data);
+void trcache_feed_trade_data(struct trcache *cache,
+	struct trcache_trade_data *trade_data);
 
 /* Allocates an entire candle batch in heap memory */
 struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);

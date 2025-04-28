@@ -1,0 +1,6 @@
+#ifndef TRADE_DATA_BUFFER
+#define TRADE_DATA_BUFFER
+
+
+
+#endif /* TRADE_DATA_BUFFER */

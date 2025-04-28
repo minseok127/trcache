@@ -109,7 +109,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 /*
  * Feed a single trading data into the trcache.
  */
-void trcache_feed_raw_data(struct trcache *tc, struct trcache_raw_data *data)
+void trcache_feed_trade_data(struct trcache *tc, struct trcache_trade_data *data)
 {
 
 }
