@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = trcache_internal.o symbol_table.o
+OBJS = trcache_internal.o symbol_table.o trade_data_buffer.o
 
 .PHONY: all clean
 

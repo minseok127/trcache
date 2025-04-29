@@ -60,6 +60,8 @@ typedef enum {
 	TRCACHE_5TICK_CANDLE = 1 << 12,
 } trcache_candle_type;
 
+#define TRCACHE_NUM_CANDLE_TYPE (13)
+
 typedef uint32_t trcache_candle_type_flags;
 
 /*
