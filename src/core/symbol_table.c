@@ -44,7 +44,7 @@ static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 	version->free_context = NULL;
 
 	/* atomsnap_make_version initializes gate and opaque */
-    return version;
+	return version;
 }
 
 /**
@@ -55,10 +55,10 @@ static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
  * @param version: atomsnap_version to free.
  */
 static void symbol_array_version_free(struct atomsnap_version *version) {
-    struct public_symbol_entry **symbol_array
+	struct public_symbol_entry **symbol_array
 		= (struct public_symbol_entry **) version->object;
-    free(symbol_array);
-    free(version);
+	free(symbol_array);
+	free(version);
 }
 
 /**
@@ -76,7 +76,7 @@ init_public_symbol_table(int initial_capacity)
 	struct atomsnap_init_context ctx = {
 		.atomsnap_alloc_impl = symbol_array_version_alloc,
 		.atomsnap_free_impl = symbol_array_version_free
-    };
+	};
 
 	struct atomsnap_version *symbol_array_version = NULL;
 
