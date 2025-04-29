@@ -1,12 +1,23 @@
+/*
+ * @file utils/hash_table_callbacks.c
+ * @brief Default callbacks for string keys and MurmurHash.
+ */
+
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "utils/hash_table_callbacks.h"
 
-/*
- * Duplicate a string key by allocating len bytes and copying.
- * Returns NULL on allocation failure.
+/**
+ * @brief Duplicate a string key.
+ *
+ * @param key: Pointer to original string.
+ * @param len: Length of string in bytes (including '\0').
+ *
+ * @return Newly allocated copy, or NULL on malloc failure.
  */
 void *duplicate_symbol_str(const void *symbol_str, size_t len)
 {
@@ -21,30 +32,44 @@ void *duplicate_symbol_str(const void *symbol_str, size_t len)
 	return symbol_str_dup;
 }
 
-/*
- * Compare two string keys of given lengths. Return 1 if equal.
+/**
+ * @brief Compare two string keys.
+ *
+ * @param k1:  First string pointer.
+ * @param l1:  Length of first string.
+ * @param k2:  Second string pointer.
+ * @param l2:  Length of second string.
+ *
+ * @return 1 if lengths equal and content matches, else 0.
  */
-int compare_symbol_str(const void *symbol_str_1, size_t len1,
-	const void *symbol_str_2, size_t len2)
+int compare_symbol_str(const void *k1, size_t l1,
+			 const void *k2, size_t l2)
 {
-	if (len1 != len2) {
+	if (l1 != l2)
 		return 0;
-	}
-
-	return (memcmp(symbol_str_1, symbol_str_2, len1) == 0);
+	return (memcmp(k1, k2, l1) == 0);
 }
 
-/*
- * Free a duplicated string key.
+/**
+ * @brief Free a duplicated string key.
+ *
+ * @param key: Pointer returned by duplicate_symbol_str.
+ * @param len: Unused length parameter.
  */
-void free_symbol_str(const void *symbol_str,
-	size_t len __attribute__((unused)))
+void free_symbol_str(const void *key, size_t len)
 {
-	free(symbol_str);
+	(void)len;
+	free((void *)key);
 }
 
-/*
- * Murmur hash function.
+/**
+ * @brief 64-bit MurmurHash implementation.
+ *
+ * @param key: Pointer to data to hash.
+ * @param len: Length of data in bytes.
+ * @param seed: 32-bit seed for randomized hashing.
+ *
+ * @return 64-bit hash value.
  */
 uint64_t murmur_hash(const void *key, size_t len, uint32_t seed)
 {

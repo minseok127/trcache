@@ -1,6 +1,14 @@
+/**
+ * @file core/trcache_internal.c
+ * @brief APIs for trcache, and thread-local cache management for trcache.
+ */
+
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdatomic.h>
+#include <pthread.h>
 
 #include "core/symbol_table.h"
 #include "core/trcache_internal.h"
@@ -8,10 +16,16 @@
 
 #include "trcache.h"
 
-/*
- * Ensures that the per-thread data is initialized and returns it.
- * If the thread-local data is already initialized, returns it directly.
- * Otherwise, initializes the data and then returns it.
+/**
+ * @brief Retrieve or create thread-local data for this trcache instance.
+ *
+ * If TLS already exists, returns it. Otherwise allocates a new
+ * trcache_tls_data, assigns a unique thread_id under mutex, and installs
+ * it via pthread_setspecific.
+ *
+ * @param tc: Pointer to trcache instance.
+ *
+ * @return Pointer to initialized trcache_tls_data, or NULL on error.
  */
 static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 {
@@ -33,8 +47,8 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	tls_data_ptr->trcache_ptr = tc;
 	tls_data_ptr->thread_id = -1;
 
+	/* Acquire a free thread ID */
 	pthread_mutex_lock(&tc->tls_id_mutex);
-
 	for (int i = 0; i < MAX_NUM_THREADS; i++) {
 		if (atomic_load(&tc->tls_id_assigned_flag[i]) == 0) {
 			atomic_store(&tc->tls_id_assigned_flag[i], 1);
@@ -43,7 +57,6 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 			break;
 		}
 	}
-
 	pthread_mutex_unlock(&tc->tls_id_mutex);
 
 	if (tls_data_ptr->thread_id == -1) {
@@ -58,9 +71,10 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	return tls_data_ptr;
 }
 
-/*
- * Function commonly used by both the per-thread destructor and
- * trcache_destroy.
+/**
+ * @brief Clean up per-thread data (called by destructor or trcache_destroy).
+ *
+ * @param tls: Pointer to trcache_tls_data to free.
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
@@ -71,8 +85,12 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	free(tls_data);
 }
 
-/* 
- * Destructor for freeing per-thread data upon thread termination.
+/**
+ * @brief TLS destructor invoked on thread exit.
+ *
+ * Returns thread_id and TLS pointer to pool, then frees data.
+ *
+ * @param value: TLS pointer from pthread_getspecific.
  */
 static void trcache_per_thread_destructor(void *value)
 {
@@ -81,19 +99,21 @@ static void trcache_per_thread_destructor(void *value)
 
 	/* Give back the thread id into the trcache */
 	pthread_mutex_lock(&tc->tls_id_mutex);
-
 	atomic_store(&tc->tls_id_assigned_flag[tls_data_ptr->thread_id], 0);
-
 	atomic_store(&tc->tls_data_ptr_arr[tls_data_ptr->thread_id], NULL);
-
 	pthread_mutex_unlock(&tc->tls_id_mutex);
 
 	destroy_tls_data(tls_data_ptr);
 }
 
-/*
- * Allocate trcache structure and initialize it.
- * Return trcache pointer, or NULL on failure.
+/**
+ * @brief Initialize trcache, set up TLS key and symbol table.
+ *
+ * @param num_worker_threads: Expected number of threads.
+ * @param flush_threshold:    Flush threshold value.
+ * @param candle_type_flags:  Data type flags.
+ *
+ * @return Pointer to new trcache, or NULL on failure.
  */
 struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 	trcache_candle_type_flags candle_type_flags)
@@ -106,6 +126,7 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 		return NULL;
 	}
 
+	/* Create TLS key with destructor */
 	ret = pthread_key_create(&tc->pthread_trcache_key,
 		trcache_per_thread_destructor);
 	if (ret != 0) {
@@ -115,6 +136,7 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 		return NULL;
 	}
 
+	/* Initialize shared symbol table */
 	tc->symbol_table = init_symbol_table(1024);
 	if (tc->symbol_table == NULL) {
 		fprintf(stderr, "trcache_init: init_symbol_table failed\n");
@@ -132,8 +154,10 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 	return tc;
 }
 
-/*
- * Destroy all resources.
+/**
+ * @brief Destroy trcache, freeing all resources including TLS data.
+ *
+ * @param tc: Pointer to trcache to destroy.
  */
 void trcache_destroy(struct trcache *tc)
 {
@@ -157,9 +181,13 @@ void trcache_destroy(struct trcache *tc)
 	free(tc);
 }
 
-/*
- * Register the given symbol string.
- * Return symbol id (>= 0), or -1 on failure.
+/**
+ * @brief Register symbol string via TLS cache or shared table.
+ *
+ * @param tc:         Pointer to trcache instance.
+ * @param symbol_str: NULL-terminated string.
+ *
+ * @return Symbol ID >=0, or -1 on error.
  */
 int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 {
@@ -206,8 +234,11 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 	return symbol_id;
 }
 
-/*
- * Feed a single trading data into the trcache.
+/**
+ * @brief Stub for feeding trade data (to be implemented).
+ *
+ * @param tc:   Pointer to trcache instance.
+ * @param data: Pointer to trade data struct.
  */
 void trcache_feed_trade_data(struct trcache *tc, struct trcache_trade_data *data)
 {

@@ -57,11 +57,12 @@ struct ht_hash_table {
 };
 
 /**
- * @internal
  * @brief Compute bucket index for a given key.
+ *
  * @param t:	Hash table pointer.
  * @param key:	Key pointer.
  * @param len:	Key length.
+ *
  * @return Index in [0, capacity).
  */
 static size_t ht_index(const struct ht_hash_table *t, void *key, size_t len)
@@ -71,10 +72,11 @@ static size_t ht_index(const struct ht_hash_table *t, void *key, size_t len)
 }
 
 /**
- * @internal
  * @brief Resize table to at least new_cap buckets (rounded up).
+ *
  * @param t:		Hash table pointer.
  * @param new_cap:	Desired minimum capacity.
+ *
  * @return 0 on success, -1 on failure.
  */
 static int ht_resize(struct ht_hash_table *t, size_t new_cap)
@@ -138,6 +140,7 @@ static void default_free_func(void *key, size_t len)
 
 /**
  * @brief Create a new hash table.
+ *
  * @param initial_capacity:	Minimum bucket count
  *                          (will be rounded up to a power of two).
  * @param seed:       Hash seed value for user hash_func.
@@ -148,6 +151,7 @@ static void default_free_func(void *key, size_t len)
  *                    (or NULL for default).
  * @param free_func:  User-provided key free function
  *                    (or NULL for default).
+ *
  * @return Pointer to new table, or NULL on allocation failure.
  */
 struct ht_hash_table *ht_create(size_t initial_capacity, uint64_t seed,
@@ -191,6 +195,7 @@ struct ht_hash_table *ht_create(size_t initial_capacity, uint64_t seed,
 
 /**
  * @brief Destroy a hash table, freeing all keys and items.
+ *
  * @param t Pointer to table created by ht_create().
  */
 void ht_destroy(struct ht_hash_table *t)
@@ -216,10 +221,12 @@ void ht_destroy(struct ht_hash_table *t)
 
 /**
  * @brief Insert or overwrite a key–value pair.
+ *
  * @param t:     Pointer to hash table.
  * @param key:   Pointer to key data.
  * @param len:   Length of key in bytes.
  * @param value: Pointer to associated value.
+ *
  * @return 0 on success, -1 on failure.
  */
 int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
@@ -264,10 +271,12 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 
 /**
  * @brief Lookup a value by key.
+ *
  * @param t:     Pointer to hash table.
  * @param key:   Pointer to key data.
  * @param len:   Length of key in bytes.
  * @param found: Output flag set to true if found.
+ *
  * @return Pointer to value or NULL.
  */
 void *ht_find(const struct ht_hash_table *t, const void *key,
@@ -290,6 +299,7 @@ void *ht_find(const struct ht_hash_table *t, const void *key,
 
 /**
  * @brief Remove a key–value pair.
+ *
  * @param t:   Pointer to hash table.
  * @param key: Pointer to key data.
  * @param len: Length of key in bytes.

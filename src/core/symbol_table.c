@@ -1,3 +1,9 @@
+/**
+ * @file core/symbol_table.c
+ * @brief Implements a thread-safe symbol table with lock-free reads by atomsnap
+ *        and mutex-protected copy-on-write updates for writes.
+ */
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -8,10 +14,15 @@
 
 #include "trcache.h"
 
-/*
- * atomsnap version allocation callback.
- * alloc_arg is passed as capacity of the struct public_symbol_entry pointer
- * array.
+/**
+ * @brief atomsnap version allocation callback.
+ *
+ * Allocates a new atomsnap_version and its underlying array of
+ * public_symbol_entry pointers.
+ *
+ * @param arg:  Capacity for the pointer array (cast via (uint64_t)arg).
+ *
+ * @return Pointer to initialized atomsnap_version, or NULL on error.
  */
 static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 	struct atomsnap_version *version = malloc(sizeof(struct atomsnap_version));
@@ -36,9 +47,12 @@ static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
     return version;
 }
 
-/*
- * atomsnap version free callback.
- * Frees the array and version object.
+/**
+ * @brief atomsnap version free callback.
+ *
+ * Frees the object array and the version struct itself.
+ *
+ * @param version: atomsnap_version to free.
  */
 static void symbol_array_version_free(struct atomsnap_version *version) {
     struct public_symbol_entry **symbol_array
@@ -47,9 +61,14 @@ static void symbol_array_version_free(struct atomsnap_version *version) {
     free(version);
 }
 
-/*
- * Initialize public_symbol_table with atomsnap gate and initial
- * public_symbol_entry pointer array version.
+/**
+ * @brief Initialize public symbol table.
+ *
+ * Creates atomsnap_gate and installs initial empty snapshot.
+ *
+ * @param initial_capacity: Initial array capacity.
+ *
+ * @return Pointer to public_symbol_table, or NULL on error.
  */
 static struct public_symbol_table *
 init_public_symbol_table(int initial_capacity)
@@ -72,6 +91,7 @@ init_public_symbol_table(int initial_capacity)
 	table->num_symbols = 0;
 	table->capacity = initial_capacity;
 
+	/* Create gate for version management */
 	table->symbol_array_gate = atomsnap_init_gate(&ctx);
 	if (table->symbol_array_gate == NULL) {
 		fprintf(stderr, "init_public_symbol_table: atomsnap_init_gate failed\n");
@@ -79,6 +99,7 @@ init_public_symbol_table(int initial_capacity)
 		return NULL;
 	}
 
+	/* Install initial empty version */
 	symbol_array_version = atomsnap_make_version(table->symbol_array_gate,
 		(void *)initial_capacity);
 	if (symbol_array_version == NULL) {
@@ -88,24 +109,35 @@ init_public_symbol_table(int initial_capacity)
 		return NULL;
 	}
 
-	/* This version has an empty public_symbol_entry pointer array */
 	atomsnap_exchange_version(table->symbol_array_gate, symbol_array_version);
 
 	return table;
 }
 
-/*
- * Destroy public_symbol_table and atomsnap gate.
+/**
+ * @brief Destroy public_symbol_table and its gate.
+ *
+ * @param table: public_symbol_table to destroy.
  */
 static void
 destroy_public_symbol_table(struct public_symbol_table *table)
 {
+	if (table == NULL) {
+		return;
+	}
+
 	atomsnap_destroy_gate(table->symbol_array_gate);
 	free(table);
 }
 
-/*
- * Initialize admin_symbol_table with given capacity.
+/**
+ * @brief Initialize admin symbol table.
+ *
+ * Allocates array of admin entries.
+ *
+ * @param initial_capacity: Number of entries.
+ *
+ * @return Pointer to admin_symbol_table, or NULL on error.
  */
 static struct admin_symbol_table *
 init_admin_symbol_table(int initial_capacity)
@@ -130,21 +162,28 @@ init_admin_symbol_table(int initial_capacity)
 	return table;
 }
 
-/*
- * Free admin_symbol_table resources.
+/**
+ * @brief Destroy admin_symbol_table.
+ *
+ * @param table: admin_symbol_table to destroy.
  */
 static void
 destroy_admin_symbol_table(struct admin_symbol_table *table)
 {
+	if (table == NULL) {
+		return;
+	}
+
 	free(table->symbol_array);
 	free(table);
 }
 
-/*
- * Creates and initializes the symbol table structure that abstracts the public
- * and admin symbol tables. The hash table mapping symbols to symbol IDs uses
- * symbols as keys, which are variable-length strings. Therefore, callback
- * functions are defined and passed to the hash table to handle them properly.
+/**
+ * @brief Create and initialize symbol_table.
+ *
+ * @param initial_capacity: Initial size for public/admin tables.
+ *
+ * @return Pointer to symbol_table, or NULL on error.
  */
 struct symbol_table *init_symbol_table(int initial_capacity)
 {
@@ -159,12 +198,14 @@ struct symbol_table *init_symbol_table(int initial_capacity)
 
 	table->next_symbol_id = 0;
 
-	table->symbol_id_map = ht_create(1024, /* initial capacity */
-		0xDEADBEEFULL, /* seed */
-		murmur_hash, /* hash function */
-		compare_symbol_str, /* cmp_func */
-		duplicate_symbol_str, /* dup_func */
-		free_symbol_str /* free_func */
+	/* Create ID map with string callbacks */
+	table->symbol_id_map = ht_create(
+		1024,					/* initial capacity */
+		0xDEADBEEFULL,			/* seed */
+		murmur_hash,			/* hash function */
+		compare_symbol_str,		/* cmp_func */
+		duplicate_symbol_str,	/* dup_func */
+		free_symbol_str			/* free_func */
 	);
 
 	if (table->symbol_id_map == NULL) {
@@ -195,8 +236,10 @@ struct symbol_table *init_symbol_table(int initial_capacity)
 	return table;
 }
 
-/*
- * Clean up entire symbol_table, including hash map, public and admin tables.
+/**
+ * @brief Destroy symbol_table and all substructures.
+ *
+ * @param table: symbol_table to destroy.
  */
 void destroy_symbol_table(struct symbol_table *table)
 {
@@ -215,13 +258,13 @@ void destroy_symbol_table(struct symbol_table *table)
 	free(table);
 }
 
-/*
- * Lock-free lookup of public_symbol_entry by symbol_id.
- * Acquires a snapshot via atomsnap, reads entry, and releases snapshot.
- * Internally:
- *     1. atomsnap_acquire_version (outer ref++)  
- *     2. read from snapshot->object array  
- *     3. atomsnap_release_version (inner ref++ → free if zero) 
+/**
+ * @brief Lock-free lookup of public_symbol_entry by ID.
+ *
+ * @param table: symbol_table pointer.
+ * @param symbol_id: ID to lookup.
+ *
+ * @return public_symbol_entry or NULL if out of range.
  */
 struct public_symbol_entry *
 symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
@@ -242,8 +285,13 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 	return result;
 }
 
-/*
- * Find symbol id from the hash table.
+/**
+ * @brief Lookup symbol ID by string.
+ *
+ * @param table: symbol_table pointer.
+ * @param symbol_str: NULL-terminated string.
+ *
+ * @return ID >=0, or -1 if not found.
  */
 int symbol_table_lookup_symbol_id(struct symbol_table *table,
 	const char *symbol_str)
@@ -262,8 +310,12 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 	return (found ? symbol_id : -1);
 }
 
-/*
- * Allocate and init public symbol entry.
+/**
+ * @brief Allocate a new public symbol entry.
+ *
+ * @param id: Symbol ID to assign.
+ *
+ * @return Pointer to entry, or NULL on failure.
  */
 static struct public_symbol_entry *init_public_symbol_entry(int id)
 {
@@ -280,11 +332,13 @@ static struct public_symbol_entry *init_public_symbol_entry(int id)
 	return entry;
 }
 
-/*
- * Registers a new symbol name and entry.
- * Uses a mutex to synchronize hash map insertion, then add the new entry into
- * the given index. If the array need to be resized, use atomsnap.
- * Returns the assigned symbol ID.
+/**
+ * @brief Register a new symbol string.
+ *
+ * @param table: symbol_table pointer.
+ * @param symbol_str: NULL-terminated string.
+ *
+ * @return Assigned ID >=0, or -1 on error.
  */
 int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 {
@@ -309,6 +363,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 	symbol_array = (struct public_symbol_entry **) version->object;
 	oldcap = pub_symbol_table->capacity;
 
+	/* Resize the array (CoW) */
 	if (id >= oldcap) {
 		newcap = oldcap * 2;
 
