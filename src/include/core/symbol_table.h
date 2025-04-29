@@ -13,6 +13,12 @@ struct public_symbol_entry {
 };
 
 /*
+ * public_symbol_table - Lock-free table of public symbols.
+ *
+ * @symbol_array_gate:	Gate for snapshot versioning
+ * @num_symbols:		Number of registered symbols
+ * @capacity:			Allocated array capacity
+ *
  * This table holds the symbol entries accessed by both user and system threads.
  * Synchronization for table expansion is handled through atomsnap.
  */
@@ -23,6 +29,10 @@ struct public_symbol_table {
 };
 
 /*
+ * admin_symbol_entry - Admin-only symbol entry.
+ *
+ * @pub_symbol_entry_ptr: Corresponding public_symbol_entry
+ *
  * This is a data structure accessed only by the admin thread. It holds
  * statistics and pointers associated with a single symbol. It also contains a
  * pointer to the corresponding public symbol entry, allowing the admin thread
@@ -34,6 +44,12 @@ struct admin_symbol_entry {
 };
 
 /*
+ * admin_symbol_table - Admin-only symbol table.
+ *
+ * @symbol_array:	Array of admin entries
+ * @num_symbols:	Number of entries
+ * @capacity:		Allocated array capacity
+ *
  * This is a symbol table accessed only by the admin thread. The admin thread
  * continuously monitors the number of symbols in the public symbol table and
  * expands this table accordingly. Since only the admin thread accesses it, no
@@ -46,6 +62,14 @@ struct admin_symbol_table {
 };
 
 /*
+ * symbol_table - Combined public/admin symbol table abstraction.
+ *
+ * @ht_hash_table_mutex:	Protects registration path
+ * @symbol_id_map:			Hash table that maps from string to ID
+ * @pub_symbol_table:		Lock-free reader table
+ * @admin_symbol_table:		Admin-thread-only table
+ * @next_symbol_id:			Next ID to assign
+ *
  * This is an abstracted table that combines the public and admin symbol tables.
  * It manages symbol IDs issued during user symbol registration using a hash
  * table. Since symbol registration rarely occurs after system initialization,
@@ -59,33 +83,56 @@ struct symbol_table {
 	int next_symbol_id;
 };
 
-/*
- * Create a fresh symbol_table. Returns NULL on error.
+/**
+ * @brief Create a new symbol_table.
+ *
+ * @param initial_capacity Initial bucket/array size (rounded up to power of two).
+ * @return Pointer to a newly allocated symbol_table, or NULL on error.
+ * @thread-safety Single-threaded: must be called before any concurrent access.
  */
 struct symbol_table *init_symbol_table(int initial_capacity);
 
-/*
- * Tear down all resources (hash map, atomsnap gates, tables).
+/**
+ * @brief Destroy a symbol_table and free all resources.
+ *
+ * @param symbol_table Pointer returned by init_symbol_table().
+ * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
 void destroy_symbol_table(struct symbol_table *symbol_table);
 
-/*
- * Lock-free lookup of a public_symbol_entry by ID.
- * Returns NULL if symbol_id is out of range.
+/**
+ * @brief Lookup a public symbol by ID.
+ *
+ * Lock-free, reader-safe via atomsnap.  
+ * @param table       Pointer to symbol_table.
+ * @param symbol_id   Symbol ID to lookup.
+ * @return Pointer to public_symbol_entry, or NULL if out of range.
+ * @thread-safety Safe for concurrent readers.
  */
 struct public_symbol_entry *symbol_table_lookup_public_entry(
 	struct symbol_table *table, int symbol_id);
 
-/*
- * Lookup symbol id of the given symbol string.
- * Returns symbol id (>= 0), or -1 on failure.
+/**
+ * @brief Lookup symbol ID by its string name.
+ *
+ * Performs a mutex-protected hash lookup.  
+ * @param table       Pointer to symbol_table.
+ * @param symbol_str  NULL-terminated symbol string.
+ * @return Symbol ID >=0 on success, or -1 if not found.
+ * @thread-safety Safe for concurrent callers; protected by internal mutex.
  */
 int symbol_table_lookup_symbol_id(
 	struct symbol_table *table, const char *symbol_str);
 
-/*
- * Register a new symbol (NULL-terminated). Returns assigned ID
- * or –1 on error.
+/**
+ * @brief Register a new symbol or return existing ID.
+ *
+ * Inserts the string into the internal hash map and expands 
+ * public symbol table via copy-on-write if needed.  
+ * @param table       Pointer to symbol_table.
+ * @param symbol_str  NULL-terminated symbol string.
+ * @return Assigned symbol ID >=0, or -1 on error.
+ * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
  */
 int symbol_table_register(struct symbol_table *table, const char *symbol_str);
 
