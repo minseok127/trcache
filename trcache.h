@@ -13,11 +13,11 @@ typedef struct trcache trcache;
 /*
  * trcache_trade_data - the basic unit provided by the user to trcache.
  *
- * @timestamp:	unix timestamp in milliseconds.
- * @trade_id:	trade ID used to construct an n-tick candle.
- * @price:		traded price of a single trade.
- * @volume:		traded volume of a single trade.
- * @symbol_id:	ID of the symbol to which the data will be applied.
+ * @timestamp: unix timestamp in milliseconds.
+ * @trade_id:  trade ID used to construct an n-tick candle.
+ * @price:     traded price of a single trade.
+ * @volume:    traded volume of a single trade.
+ * @symbol_id: ID of the symbol to which the data will be applied.
  *
  * The address of this data structure is passed by the user as an argument to
  * the trcache_add_raw_data(). Since the function does not deallocate this
@@ -115,19 +115,19 @@ typedef struct trcache_candle_batch {
 } trcache_candle_batch;
 
 /* 
- * trcache_init - allocate and initialize the top-level trcache.
+ * trcache_init - Allocate and initialize the top-level trcache.
  *
- * @num_worker_threads: number of threads that will feed data
- * @flush_threshold:    how many items to buffer before flush
- * @candle_type_flags:  which data types to track
+ * @param num_worker_threads: number of threads that will feed data
+ * @param flush_threshold:    how many items to buffer before flush
+ * @param candle_type_flags:  which data types to track
  *
- * Returns pointer or NULL on failure.
+ * @return Pointer to trcache or NULL on failure.
  */
 struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles,
 	trcache_candle_type_flags candle_type_flags);
 
 /*
- * Destroy all trcache state, including per-thread caches.
+ * trcache_destroy - Destroy all trcache state, including per-thread caches.
  * Safe to call after all worker threads have exited.
  */
 void trcache_destroy(struct trcache *cache);

@@ -16,9 +16,9 @@ typedef struct trcache trcache;
 /*
  * trcache_tls_data - Per-thread cache.
  *   
- * @local_symbol_id_map:	Thread-local map from symbol string to ID
- * @trcache_ptr:			Back-pointer to owner trcache instance
- * @thread_id:				Assigned index in tls_data_ptr_arr[]
+ * @local_symbol_id_map: Thread-local map from symbol string to ID
+ * @trcache_ptr:         Back-pointer to owner trcache instance
+ * @thread_id:           Assigned index in tls_data_ptr_arr[]
  */
 struct trcache_tls_data {
 	struct ht_hash_table *local_symbol_id_map;
@@ -29,14 +29,14 @@ struct trcache_tls_data {
 /*
  * trcache - trcache internal state.
  *
- * @pthread_trcache_key:	Key for pthread_get/setspecific
- * @tls_id_mutex:			Protects allocation/release of thread IDs
- * @tls_id_assigned_flag:	_Atomic flags, which slots are in use
- * @tls_data_ptr_arr:		_Atomic pointers to each thread’s tls_data
- * @candle_type_flags:		Candle type configuration flags
- * @num_workers:			Number of worker threads
- * @flush_threshold:		Buffer flush threshold
- * @symbol_table:			Abstracted symbol table (public + admin)
+ * @pthread_trcache_key:   Key for pthread_get/setspecific
+ * @tls_id_mutex:          Protects allocation/release of thread IDs
+ * @tls_id_assigned_flag:  _Atomic flags, which slots are in use
+ * @tls_data_ptr_arr:      _Atomic pointers to each thread’s tls_data
+ * @candle_type_flags:     Candle type configuration flags
+ * @num_workers:           Number of worker threads
+ * @flush_threshold:       Buffer flush threshold
+ * @symbol_table:          Abstracted symbol table (public + admin)
  */
 struct trcache {
 	pthread_key_t pthread_trcache_key;
