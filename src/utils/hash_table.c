@@ -14,9 +14,9 @@
 
 #include "utils/hash_table.h"
 
-#define HT_MIN_CAP 8			/* Minimum bucket count (power of two) */
-#define HT_LOAD_FACTOR_NUM 3	/* Load factor numerator (3/4) */
-#define HT_LOAD_FACTOR_DEN 4	/* Load factor denominator (4/4) */
+#define HT_MIN_CAP 8            /* Minimum bucket count (power of two) */
+#define HT_LOAD_FACTOR_NUM 3    /* Load factor numerator (3/4) */
+#define HT_LOAD_FACTOR_DEN 4    /* Load factor denominator (4/4) */
 
 /*
  * ht_item - Single bucket item holding a key, length, value, and next pointer.
