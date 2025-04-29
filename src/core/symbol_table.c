@@ -1,52 +1,12 @@
-#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
 
 #include "core/symbol_table.h"
-#include "utils/hash_func.h"
+#include "utils/hash_table_callbacks.h"
 
 #include "trcache.h"
-
-/*
- * Duplicate a string key by allocating len bytes and copying.
- * Returns NULL on allocation failure.
- */
-static void *duplicate_symbol_str(const void *symbol_str, size_t len)
-{
-	char *symbol_str_dup = malloc(len);
-
-	if (symbol_str_dup == NULL) {
-		fprintf(stderr, "duplicate_symbol_str: malloc failed\n");
-		return NULL;
-	}
-
-	memcpy(symbol_str_dup, symbol_str, len);
-	return symbol_str_dup;
-}
-
-/*
- * Compare two string keys of given lengths. Return 1 if equal.
- */
-static int compare_symbol_str(const void *symbol_str_1, size_t len1,
-	const void *symbol_str_2, size_t len2)
-{
-	if (len1 != len2) {
-		return 0;
-	}
-
-	return (memcmp(symbol_str_1, symbol_str_2, len1) == 0);
-}
-
-/*
- * Free a duplicated string key.
- */
-static void free_symbol_str(const void *symbol_str,
-	size_t len __attribute__((unused)))
-{
-	free(symbol_str);
-}
 
 /*
  * atomsnap version allocation callback.

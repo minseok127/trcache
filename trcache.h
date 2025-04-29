@@ -8,8 +8,6 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
-#define MAX_TRCACHE_NUM (1024)
-
 typedef struct trcache trcache;
 
 /*

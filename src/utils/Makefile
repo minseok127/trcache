@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = hash_table.o hash_func.o
+OBJS = hash_table.o hash_table_callbacks.o
 
 .PHONY: all clean
 
