@@ -42,8 +42,8 @@ struct ht_item {
  * @dup_func:	User-provided key duplication function
  * @free_func:	User-provided key free function
  * @capacity:	Number of buckets (power of two)
- * @size:		Number of stored key–value pairs
- * @seed:		Hash seed for randomized hashing
+ * @size:       Number of stored key–value pairs
+ * @seed:       Hash seed for randomized hashing
  */
 struct ht_hash_table {
 	struct ht_item **buckets;
@@ -141,16 +141,17 @@ static void default_free_func(void *key, size_t len)
 /**
  * @brief Create a new hash table.
  *
- * @param initial_capacity:	Minimum bucket count
+ * @param initial_capacity: Minimum bucket count
  *                          (will be rounded up to a power of two).
- * @param seed:       Hash seed value for user hash_func.
- * @param hash_func:  User-provided hash function (or NULL for default).
- * @param cmp_func:   User-provided key compare function
- *                    (or NULL for default).
- * @param dup_func:   User-provided key duplication function
- *                    (or NULL for default).
- * @param free_func:  User-provided key free function
- *                    (or NULL for default).
+ * @param seed:             Hash seed value for user hash_func.
+ * @param hash_func:        User-provided hash function
+ *                          (or NULL for default).
+ * @param cmp_func:         User-provided key compare function
+ *                          (or NULL for default).
+ * @param dup_func:         User-provided key duplication function
+ *                          (or NULL for default).
+ * @param free_func:        User-provided key free function
+ *                          (or NULL for default).
  *
  * @return Pointer to new table, or NULL on allocation failure.
  */
