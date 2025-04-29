@@ -119,10 +119,8 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
  *
  * @param buf:     Buffer to consume from.
  * @param cursor:  Pointer to cursor used in peek.
- *
- * @return	0 on success, -1 on error.
  */
-int trade_data_buffer_consume(struct trade_data_buffer *buf,
+void trade_data_buffer_consume(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor);
 
 #endif /* TRADE_DATA_BUFFER_H */

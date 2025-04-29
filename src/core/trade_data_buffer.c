@@ -29,26 +29,15 @@ struct trade_data_buffer *trade_data_buffer_create(size_t candle_type_count)
 		return NULL;
 	}
 
-	/* allocate initial chunk */
-	struct trade_data_chunk *chunk = malloc(sizeof(struct trade_data_chunk));
-	if (chunk == NULL) {
-		fprintf(stderr, "trade_data_buffer_create: chunk malloc failed\n");
-		free(buf);
-		return NULL;
-	}
-
-	chunk->next = NULL;
-	chunk->write_idx = 0;
-	atomic_init(&chunk->consume_count, 0);
-
-	buf->head = chunk;
-	buf->tail = chunk;
+	// 이거 head랑 tail을 어케해야하지? 워커들과 유저스레드가 같은 헤드 테일에
+	// 있으면?
+	buf->head = NULL;
+	buf->tail = NULL;
 	buf->consume_threshold = NUM_TRADE_CHUNK_CAP * candle_type_count;
 
 	buf->free_chunk_scq = scq_init();
 	if (buf->free_chunk_scq == NULL) {
 		fprintf(stderr, "trade_data_buffer_create: scq_init failed\n");
-		free(chunk);
 		free(buf);
 		return NULL;
 	}
@@ -150,28 +139,24 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	struct trade_data_chunk *chunk = NULL;
 
 	if (!buf || !cursor || !data_array || !count) {
-		*count = 0;
 		return 0;
 	}
 
+	/* Initial state */
 	if (cursor->peek_chunk == NULL) {
 		cursor->peek_chunk = buf->head;
 		cursor->peek_idx = 0;
 	}
 
 	chunk = cursor->peek_chunk;
-	assert(cursor->peek_chunk != NULL && cursor->peek_idx <= chunk->write_idx);
+	assert(cursor->peek_idx <= chunk->write_idx);
 
 	if (cursor->peek_idx == chunk->write_idx) {
 		if (cursor->peek_idx == NUM_TRADE_CHUNK_CAP && chunk->next != NULL) {
 			cursor->peek_chunk = chunk->next;
 			cursor->peek_idx = 0;
-			chunk = cursor->peek_chunk;
-
-			if (cursor->peek_idx == chunk->write_idx) {
-				*count = 0;
-				return 0;
-			}
+			chunk = chunk->next;
+			assert(chunk->write_idx != 0);
 		} else {
 			*count = 0;
 			return 0;
@@ -186,3 +171,81 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 
 	return 1;
 }
+
+/**
+ * @brief	Consume all entries that the caller has already peeked.
+ *
+ *	When a chunk’s global consume_count reaches
+ *	    buf->consume_threshold
+ *	it is considered fully processed by every candle type and is
+ *	recycled into the SCQ free-list.
+ *
+ * @param	buf:	buffer to consume from.
+ * @param	cursor:	caller-managed cursor (same one used for peek).
+ */
+void trade_data_buffer_consume(struct trade_data_buffer	*buf,
+	struct trade_data_buffer_cursor *cursor)
+{
+	struct trade_data_chunk *chunk = NULL;
+	size_t start, end, consume_count;
+
+	if (!buf || !cursor || !cursor->peek_chunk) {
+		return;
+	}
+
+	/* Initial state */
+	if (cursor->consume_chunk == NULL) {
+		cursor->consume_chunk = buf->head;
+		cursor->consume_idx = 0;
+	}
+
+	/* nothing new to consume? */
+	if (cursor->consume_chunk == cursor->peek_chunk &&
+		cursor->consume_idx == cursor->peek_idx) {
+		return;
+	}
+
+	/* loop until we catch up with peek position */
+	chunk = cursor->consume_chunk;
+	do {
+		start = cursor->consume_idx;
+
+		if (chunk == cursor->peek_chunk) {
+			end = cursor->peek_idx;
+		} else {
+			end = NUM_TRADE_CHUNK_CAP;
+		}
+
+		if (end > start) {
+			consume_count = atomic_fetch_add(&chunk->consume_count, end - start)
+				+ (end - start);
+
+			/* advance consume cursor inside this chunk */
+			cursor->consume_idx = end;
+		}
+
+		if (chunk == cursor->peek_chunk) {
+			break;
+		}
+
+		/* chunk fully consumed by this cursor: move to next */
+		cursor->consume_chunk = chunk->next;
+		cursor->consume_idx   = 0;
+
+		/* was this the last candle-type to finish the chunk? */
+		if (atomic_load(&chunk->consume_count) == buf->consume_threshold) {
+
+			/* unlink only if chunk is still head and there is
+			   another chunk behind it — keep at least one chunk
+			   alive so producer has a target to write */
+			if (buf->head == chunk && chunk->next) {
+				buf->head = chunk->next;
+			}
+			/* recycle into SCQ */
+			scq_enqueue(buf->free_chunk_scq,
+				    (uint64_t)chunk);
+		}
+	} while (chunk != NULL);
+
+	return 0;
+}1
