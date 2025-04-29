@@ -11,12 +11,13 @@ extern "C" {
 typedef struct trcache trcache;
 
 /*
- * The basic unit provided by the user to trcache.
- * @timestamp: unix timestamp in milliseconds.
- * @trade_id: trade ID used to construct an n-tick candle.
- * @price: traded price of a single trade.
- * @volume: traded volume of a single trade.
- * @symbol_id: ID of the symbol to which the data will be applied.
+ * trcache_trade_data - the basic unit provided by the user to trcache.
+ *
+ * @timestamp:	unix timestamp in milliseconds.
+ * @trade_id:	trade ID used to construct an n-tick candle.
+ * @price:		traded price of a single trade.
+ * @volume:		traded volume of a single trade.
+ * @symbol_id:	ID of the symbol to which the data will be applied.
  *
  * The address of this data structure is passed by the user as an argument to
  * the trcache_add_raw_data(). Since the function does not deallocate this
@@ -113,17 +114,35 @@ typedef struct trcache_candle_batch {
 	int symbol_id;
 } trcache_candle_batch;
 
-/* Initialize trcache structure */
+/* 
+ * trcache_init - allocate and initialize the top-level trcache.
+ *
+ * @num_worker_threads: number of threads that will feed data
+ * @flush_threshold:    how many items to buffer before flush
+ * @candle_type_flags:  which data types to track
+ *
+ * Returns pointer or NULL on failure.
+ */
 struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles,
 	trcache_candle_type_flags candle_type_flags);
 
-/* Destory trcache structure */
+/*
+ * Destroy all trcache state, including per-thread caches.
+ * Safe to call after all worker threads have exited.
+ */
 void trcache_destroy(struct trcache *cache);
 
-/* Register symbol ID */
+/*
+ * Register or lookup a symbol string in the shared symbol table.
+ * Thread-safe, may be called concurrently.
+ * Returns symbol ID >= 0 on success, or -1 on error.
+ */
 int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 
-/* Feeds a single trading data into the cache */
+/*
+ * Feed a single trading raw data into the trcache.
+ * Caller must fill a trcache_trade_data struct.
+ */
 void trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data);
 

@@ -67,6 +67,8 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	if (tls_data->local_symbol_id_map != NULL) {
 		ht_destroy(tls_data->local_symbol_id_map);
 	}
+
+	free(tls_data);
 }
 
 /* 
