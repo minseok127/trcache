@@ -184,8 +184,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	__sync_synchronize();
 
 	/* copy data */
-	chunk->entries[chunk->write_idx] = *data;
-	atomic_store(&chunk->write_idx, chunk->write_idx + 1);
+	tail->entries[tail->write_idx] = *data;
+	atomic_store(&tail->write_idx, tail->write_idx + 1);
 	return 0;
 }
 
