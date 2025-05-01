@@ -24,7 +24,7 @@
  *
  * @return pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(size_t num_cursor,
+struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
 	struct list_head *free_list_head)
 {
 	struct trade_data_buffer *buf = NULL;

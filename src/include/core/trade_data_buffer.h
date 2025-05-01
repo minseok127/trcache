@@ -65,14 +65,14 @@ struct trade_data_buffer_cursor {
  *
  * @chunk_list:         Linked list for chunks
  * @cursor_arr:         Cursor array
- * @num_cursor:         Number of cursors
  * @free_list:          Global linked list pointer holding recycled chunks
+ * @num_cursor:         Number of cursors
  */
 struct trade_data_buffer {
 	struct list_head chunk_list;
 	struct trade_data_buffer_cursor *cursor_arr;
-	size_t num_cursor;
 	struct list_head *free_list;
+	int num_cursor;
 };
 
 /**
