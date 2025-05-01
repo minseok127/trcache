@@ -86,7 +86,7 @@ int vector_push_back(struct vector *v, const void *elem)
 
 	/* grow when full (double-capacity or start with 8) */
 	if (v->size == v->capacity &&
-	    vector_reserve(v, v->capacity ? v->capacity * 2 : 8) < 0) {
+			vector_reserve(v, v->capacity ? v->capacity * 2 : 8) < 0) {
 		return -1;
 	}
 
