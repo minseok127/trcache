@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdatomic.h>
 
-#include "concurrent/scalable_queue.h"
 #include "utils/list_head.h"
 
 #include "trcache.h"
@@ -40,7 +39,7 @@ struct trade_data_chunk {
 	struct trcache_trade_data entries[NUM_TRADE_CHUNK_CAP];
 };
 
-#ifndef __get_trd_chunk_ptr(list_node_ptr)
+#ifndef __get_trd_chunk_ptr
 #define __get_trd_chunk_ptr(list_node_ptr) \
 	list_entry(list_node_ptr, struct trade_data_chunk, list_node)
 #endif /* __get_trd_chunk_ptr */
