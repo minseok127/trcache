@@ -3,40 +3,10 @@
  * @brief  Single-thread dynamic array (vector) implementation.
  *
  * Memory order is irrelevant because the container is intended for
- * single-thread use; no atomics are employed.  Realloc growth policy is
- * power-of-two starting at 8 elements.
+ * single-thread use; no atomics are employed.
  */
 
-#include "vector.h"
-
-/**
- * @brief	Round x up to the next power-of-two (minimum 8).
- *
- * @param	x:	Value to round.
- * @return	Smallest power-of-two ≥ x and ≥ 8.
- *
- * @note	Bit-twiddling hack works for 32/64-bit size_t.
- */
-static size_t next_pow2(size_t x)
-{
-	if (x < 8) {
-		return 8;
-	}
-
-	x--;				/* make 111… pattern below current bit */
-	x |= x >> 1;
-	x |= x >> 2;
-	x |= x >> 4;
-#if SIZE_MAX > 0xFFFF
-	x |= x >> 8;
-#endif
-#if SIZE_MAX > 0xFFFFFFFF
-	x |= x >> 16;
-	x |= x >> 32;
-#endif
-	return ++x;			/* carry into next power-of-two */
-}
-
+#include "utils/vector.h"
 
 struct vector *vector_init(size_t elem_size)
 {
@@ -82,23 +52,21 @@ void vector_destroy(struct vector *v)
  */
 int vector_reserve(struct vector *v, size_t new_cap)
 {
-	size_t cap;
 	void *tmp;
 
 	if (new_cap <= v->capacity) {
 		return 0;
 	}
 
-	cap = next_pow2(new_cap);
-	tmp = realloc(v->data, cap * v->elem_size);
+	tmp = realloc(v->data, new_cap * v->elem_size);
 
 	if (!tmp) {
-		fprintf(stderr, "vector_reserve: realloc failed\n");
+		fprintf(stderr, "vector_reservsize_trealloc failed\n");
 		return -1;
 	}
 
 	v->data = tmp;
-	v->capacity = cap;
+	v->capacity = new_cap;
 
 	return 0;
 }
