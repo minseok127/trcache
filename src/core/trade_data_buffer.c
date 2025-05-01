@@ -1,6 +1,6 @@
 /**
  * @file   trade_data_buffer.c
- * @brief  Chunk‐based buffer for trcache_trade_data with SCQ reuse.
+ * @brief  Chunk‐based buffer for trcache_trade_data
  *
  * Producer pushes trade data into chunks; when full, obtains a free
  * chunk from free list or mallocs a new one. Consumer uses a cursor to peek
