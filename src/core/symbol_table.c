@@ -185,7 +185,7 @@ destroy_admin_symbol_table(struct admin_symbol_table *table)
  *
  * @return Pointer to symbol_table, or NULL on error.
  */
-struct symbol_table *init_symbol_table(int initial_capacity)
+struct symbol_table *symbol_table_init(int initial_capacity)
 {
 	struct symbol_table *table = calloc(1, sizeof(struct symbol_table));
 
@@ -241,7 +241,7 @@ struct symbol_table *init_symbol_table(int initial_capacity)
  *
  * @param table: symbol_table to destroy.
  */
-void destroy_symbol_table(struct symbol_table *table)
+void symbol_table_destroy(struct symbol_table *table)
 {
 	if (table == NULL) {
 		return;

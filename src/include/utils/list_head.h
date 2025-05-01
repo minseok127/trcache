@@ -1,6 +1,13 @@
 #ifndef LIST_HEAD_H
 #define LIST_HEAD_H
 
+#include <stddef.h>
+
+#ifndef container_of
+#define container_of(ptr, type, member) \
+	((type *)((char *)(ptr) - offsetof(type, member))
+#endif /* container_of */
+
 /*
  * list_head - Node for a circular doubly-linked list.
  *
@@ -15,6 +22,9 @@
 struct list_head {
 	struct list_head *next, *prev;
 };
+
+#define list_entry(ptr, type, member) \
+	container_of(ptr, type, member)
 
 /**
  * @brief	Static initializer for a list head.
@@ -47,6 +57,52 @@ static inline void INIT_LIST_HEAD(struct list_head *list)
 static inline int list_empty(const struct list_head *head)
 {
 	return head->next == head;
+}
+
+/**
+ * @brief   Tests whether a entry is the first entry in head
+ * @param   entry: the entry to test.
+ * @param   head:  the list to test.
+ * @return  1 on true, 0 on false.
+ */
+static inline int list_is_first(const struct list_head *entry,
+	const struct list_head *head)
+{
+	return entry->prev == head;
+}
+
+/**
+ * @brief   Tests whether a entry is the last entry in head
+ * @param   entry: the entry to test.
+ * @param   head:  the list to test.
+ * @return  1 on true, 0 on false.
+ */
+static inline int list_is_last(const struct list_head *entry,
+	const struct list_head *head)
+{
+	return entry->next == head;
+}
+
+/**
+ * @brief   Get first entry of the list.
+ * @param   head: the list to get the first entry.
+ * @return  Pointer of the first entry.
+ */
+static inline struct list_head *list_get_first(
+	const struct list_head *head)
+{
+	return head->next;
+}
+
+/**
+ * @brief   Get last entry of the list.
+ * @param   head: the list to get the last entry.
+ * @return  Pointer of the last entry.
+ */
+static inline struct list_head *list_get_last(
+	const struct list_head *head)
+{
+	return head->prev;
 }
 
 /**

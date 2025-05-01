@@ -92,7 +92,7 @@ struct symbol_table {
  *
  * @thread-safety Single-threaded: must be called before any concurrent access.
  */
-struct symbol_table *init_symbol_table(int initial_capacity);
+struct symbol_table *symbol_table_init(int initial_capacity);
 
 /**
  * @brief Destroy a symbol_table and free all resources.
@@ -101,7 +101,7 @@ struct symbol_table *init_symbol_table(int initial_capacity);
  *
  * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
-void destroy_symbol_table(struct symbol_table *symbol_table);
+void symbol_table_destroy(struct symbol_table *symbol_table);
 
 /**
  * @brief Lookup a public symbol by ID.

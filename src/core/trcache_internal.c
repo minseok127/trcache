@@ -137,7 +137,7 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 	}
 
 	/* Initialize shared symbol table */
-	tc->symbol_table = init_symbol_table(1024);
+	tc->symbol_table = symbol_table_init(1024);
 	if (tc->symbol_table == NULL) {
 		fprintf(stderr, "trcache_init: init_symbol_table failed\n");
 		pthread_key_delete(tc->pthread_trcache_key);
@@ -176,7 +176,7 @@ void trcache_destroy(struct trcache *tc)
 
 	pthread_mutex_destroy(&tc->tls_id_mutex);
 
-	destroy_symbol_table(tc->symbol_table);
+	symbol_table_destroy(tc->symbol_table);
 
 	free(tc);
 }

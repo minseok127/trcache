@@ -5,8 +5,13 @@
 #include <stdatomic.h>
 
 #include "concurrent/scalable_queue.h"
+#include "utils/list_head.h"
 
 #include "trcache.h"
+
+#ifndef __cacheline_aligned
+#define __cacheline_aligned __attribute__((aligned(64)))
+#endif /* __cacheline_aligned */
 
 /**
  * @brief Number of entries per trade data chunk.
@@ -20,20 +25,26 @@
 /*
  * trade_data_chunk - Single chunk storing multiple trade entries.
  *
- * @next:          Next chunk in list
+ * @list_node:     Linked list node
  * @write_idx:     Next write index [0..NUM_TRADE_CHUNK_CAP)
- * @consume_count: Atomic count of total consumed data
+ * @consume_count: Atomic count of totally consumed cursor
  * @entries:       Fixed array of data
  *
  * @note Entries are copied into the chunk; pointer ownership remains with
  *       the caller.
  */
 struct trade_data_chunk {
-	struct trade_data_chunk *next;
-	size_t write_idx;
-	_Atomic size_t consume_count;
+	struct list_head list_node;
+	_Atomic size_t write_idx;
+	_Atomic size_t num_consumed_cursor;
 	struct trcache_trade_data entries[NUM_TRADE_CHUNK_CAP];
 };
+
+#ifndef __get_trd_chunk_ptr(list_node_ptr)
+#define __get_trd_chunk_ptr(list_node_ptr) \
+	list_entry(list_node_ptr, struct trade_data_chunk, list_node)
+#endif /* __get_trd_chunk_ptr */
+	
 
 /*
  * trade_data_buffer_cursor - Cursor for iterating and consuming a buffer.
@@ -41,7 +52,6 @@ struct trade_data_chunk {
  * @peek_chunk:    Chunk for next peek
  * @peek_idx:      Index in the peek_chunk for next peek
  * @consume_chunk: Chunk for next consume
- * @consume_idx:   Index in the consume_chunk for next consume
  *
  * Caller allocates this and passes to peek/consume.
  */
@@ -49,32 +59,31 @@ struct trade_data_buffer_cursor {
 	struct trade_data_chunk *peek_chunk;
 	size_t peek_idx; 
 	struct trade_data_chunk	*consume_chunk;
-	size_t consume_idx; 
-};
+} __cacheline_aligned;
 
 /*
  * trade_data_buffer - Buffer managing a linked list of trade_data_chunk.
  *
- * @head:               Chunk to read from
- * @tail:               Chunk to write to
- * @consume_threshold:  Total reads before recycling a chunk
- * @free_chunk_scq:     SCQ holding recycled chunks
+ * @chunk_list:         Linked list for chunks
+ * @cursor_arr:         Cursor array
+ * @num_cursor:         Number of cursors
+ * @free_list:          Global linked list pointer holding recycled chunks
  */
 struct trade_data_buffer {
-	trade_data_chunk *head;
-	trade_data_chunk *tail;
-	size_t consume_threshold;
-	struct scalable_queue *free_chunk_scq;
+	struct list_head chunk_list;
+	struct trade_data_buffer_cursor *cursor_arr;
+	size_t num_cursor;
+	struct list_head *free_list;
 };
 
 /**
  * @brief Create a new trade data buffer.
  *
- * @param candle_count: Number of candle types tracked per trade.
+ * @param num_cursor: Number of cursors (candle types) tracked per trade.
  *
  * @return Pointer to buffer, or NULL on allocation failure.
  */
-struct trade_data_buffer *trade_data_buffer_create(int candle_type_count);
+struct trade_data_buffer *trade_data_buffer_init(int num_cursor);
 
 /**
  * @brief Destroy a trade data buffer and free resources.
