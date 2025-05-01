@@ -124,7 +124,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	const trcache_trade_data *data,
 	struct list_head *free_list)
 {
-	struct trade_data_chunk *tail = NULL, *new_chunk = NULL
+	struct trade_data_chunk *tail = NULL, *new_chunk = NULL;
 
 	if (!buf || !data) {
 		return -1;
