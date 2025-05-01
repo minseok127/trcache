@@ -183,11 +183,16 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		atomic_store(&new_chunk->num_consumed_cursor, 0);
 	}
 
+	tail->entries[tail->write_idx] = *data;
+
+	/*
+	 * Consumers must access the last entry only after
+	 * the new chunk has been linked.
+	 */
 	__sync_synchronize();
 
-	/* copy data */
-	tail->entries[tail->write_idx] = *data;
 	atomic_store(&tail->write_idx, tail->write_idx + 1);
+
 	return 0;
 }
 
@@ -231,7 +236,7 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 
 	if (cursor->peek_idx == NUM_TRADE_CHUNK_CAP) {
 		assert(&chunk->list_node != list_get_last(&buf->chunk_list));
-		chunk = chunk->list_node.next;
+		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
 		cursor->peek_chunk = chunk;
 		cursor->peek_idx = 0;
 	}
@@ -257,16 +262,23 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 
 	assert(cursor->peek_chunk != NULL && cursor->consume_chunk != NULL);
 
-	chunk = cursor->consume_chunk;
-	if (chunk == cursor->peek_chunk) {
+	if (cursor->consume_chunk == cursor->peek_chunk) {
 		return;
 	}
 
-	while (chunk != cursor->peek_chunk) {
-		atomic_fetch_add(&chunk->num_consumed_cursor, 1);
+	chunk = cursor->consume_chunk;
 
+	while (chunk != cursor->peek_chunk) {
 		c = chunk->list_node.next;
+
 		assert(c != &buf->chunk_list);
+
+		/*
+		 * Dereferencing the chunk must occur before incrementing the counter.
+		 */
+		__sync_synchronize();
+
+		atomic_fetch_add(&chunk->num_consumed_cursor, 1);
 
 		chunk = __get_trd_chunk_ptr(c);
 	}
