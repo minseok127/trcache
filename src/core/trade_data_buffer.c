@@ -20,12 +20,10 @@
  * @brief   Create and initialize a trade_data_buffer.
  *
  * @param num_cursor:     Number of cursors (candle types) to track
- * @param free_list_head: list_head holding recycled chunks
  *
  * @return pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
-	struct list_head *free_list_head)
+struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 {
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
@@ -33,11 +31,6 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
 
 	if (num_cursor == 0) {
 		fprintf(stderr, "trade_data_buffer_init: num_cursor is 0\n");
-		return NULL;
-	}
-
-	if (free_list_head == NULL) {
-		fprintf(stderr, "trade_data_buffer_init: free_list_head is NULL\n");
 		return NULL;
 	}
 
@@ -86,8 +79,6 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
 
 	buf->next_tail_write_idx = 0;
 
-	buf->free_list = free_list_head;
-
 	return buf;
 }
 
@@ -98,7 +89,8 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
  */
 void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 {
-	struct trade_data_chunk *c = NULL, *next = NULL;
+	struct trade_data_chunk *chunk = NULL;
+	struct list_head *c = NULL, *n = NULL;
 
 	if (buf == NULL) {
 		return;
@@ -106,8 +98,13 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 
 	/* free all chunks in list */
 	if (!list_empty(&buf->chunk_list)) {
-		list_bulk_move_tail(buf->free_list, 
-			list_get_first(&buf->chunk_list), list_get_last(&buf->chunk_list));
+		c = list_get_first(&buf->chunk_list);
+		while (c != &buf->chunk_list) {
+			n = c->next;
+			chunk = __get_trd_chunk_ptr(c);
+			free(chunk);
+			c = n;
+		}
 	}
 
 	free(buf->cursor_arr);
@@ -117,13 +114,15 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 /**
  * @brief   Push one trade record into buffer.
  *
- * @param buf:  Buffer to push into.
- * @param data: Trade record to copy.
+ * @param buf:       Buffer to push into.
+ * @param data:      Trade record to copy.
+ * @param free_list: Linked list pointer holding recycled chunks.
  *
  * @return: 0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const trcache_trade_data *data)
+	const trcache_trade_data *data,
+	struct list_head *free_list)
 {
 	struct trade_data_chunk *tail = NULL, *new_chunk = NULL
 
@@ -146,8 +145,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 * to ensure the consumer’s cursor never points to a fully consumed chunk.
 	 */
 	if ((tail->write_idx + 1) == NUM_TRADE_CHUNK_CAP) {
-		if (!list_empty(buf->free_list)) {
-			list_move_tail(buf->free_list->next, &buf->chunk_list);
+		if (free_list != NULL && !list_empty(free_list)) {
+			list_move_tail(free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
 		} else {
 			new_chunk = malloc(sizeof(struct trade_data_chunk));
@@ -277,12 +276,18 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 /**
  * @brief   Move free chunks into the free list
  *
- * @param   buf: Buffer to reap the free chunks.
+ * @param   buf:       Buffer to reap the free chunks.
+ * @param   free_list: Linked list pointer holding recycled chunks.
  */
-void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf)
+void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
+	struct list_head *free_list)
 {
 	struct trade_data_chunk *tail = NULL, *chunk = NULL;
 	struct list_head *first = NULL, *last = NULL;
+
+	if (free_list == NULL) {
+		return;
+	}
 
 	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
 
@@ -300,6 +305,6 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf)
 	}
 
 	if (last != NULL) {
-		list_bulk_move_tail(buf->free_list, first, last);
+		list_bulk_move_tail(free_list, first, last);
 	}
 }

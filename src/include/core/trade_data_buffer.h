@@ -65,14 +65,12 @@ struct trade_data_buffer_cursor {
  *
  * @chunk_list:          Linked list for chunks
  * @cursor_arr:          Cursor array
- * @free_list:           Global linked list pointer holding recycled chunks
  * @num_cursor:          Number of cursors
  * @next_tail_write_idx: Next write_idx of the tail chunk
  */
 struct trade_data_buffer {
 	struct list_head chunk_list;
 	struct trade_data_buffer_cursor *cursor_arr;
-	struct list_head *free_list;
 	int num_cursor;
 	int next_tail_write_idx;
 };
@@ -81,12 +79,10 @@ struct trade_data_buffer {
  * @brief Create a new trade data buffer.
  *
  * @param num_cursor: Number of cursors (candle types) tracked per trade.
- * @param free_list:  Free list pointer.
  *
  * @return Pointer to buffer, or NULL on allocation failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
-	struct list_head *free_list);
+struct trade_data_buffer *trade_data_buffer_init(int num_cursor);
 
 /**
  * @brief Destroy a trade data buffer and free resources.
@@ -101,13 +97,15 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf);
  * Copies the data into the tail chunk, allocating a new chunk if
  * the current one is full.
  *
- * @param buf:  Buffer to push into.
- * @param data: Pointer to trcache_trade_data to copy.
+ * @param buf:       Buffer to push into.
+ * @param data:      Pointer to trcache_trade_data to copy.
+ * @param free_list: Linked list pointer holding recycled chunks.
  *
  * @return 0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const struct trcache_trade_data *data);
+	const struct trcache_trade_data *data,
+	struct list_head *free_list);
 
 /**
  * @brief	Peek at next entries for a given cursor.
@@ -135,8 +133,10 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
 /**
  * @brief   Move free chunks into the free list
  *
- * @param buf: Buffer to reap the free chunks.
+ * @param buf:       Buffer to reap the free chunks.
+ * @param free_list: Linked list pointer holding recycled chunks.
  */
-void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf);
+void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
+	struct list_head *free_list);
 
 #endif /* TRADE_DATA_BUFFER_H */
