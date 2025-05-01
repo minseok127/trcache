@@ -17,28 +17,21 @@ typedef struct trcache trcache;
  * @trade_id:  trade ID used to construct an n-tick candle.
  * @price:     traded price of a single trade.
  * @volume:    traded volume of a single trade.
- * @symbol_id: ID of the symbol to which the data will be applied.
  *
  * The address of this data structure is passed by the user as an argument to
- * the trcache_add_raw_data(). Since the function does not deallocate this
+ * the trcache_feed_trade_data(). Since the function does not deallocate this
  * structure internally, the user can declare it on their own stack before
  * calling the function.
  *
  * The raw data is reflected in all types of candles managed by trcache.
  * @timestamp is used to distinguish time-based candles, while @trade_id is used
  * to distinguish tick-based candles.
- *
- * The symbol ID is an integer value used by the user to distinguish between
- * different trading symbols. In other words, how actual trading targets are
- * distinguished is not determined by trcache but should be defined by the
- * user's own logic.
  */
 typedef struct trcache_trade_data {
 	uint64_t timestamp;
 	uint64_t trade_id;
 	double price;
 	double volume;
-	int symbol_id;
 } trcache_trade_data;
 
 /*
@@ -146,37 +139,7 @@ int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
  * Caller must fill a trcache_trade_data struct.
  */
 void trcache_feed_trade_data(struct trcache *cache,
-	struct trcache_trade_data *trade_data);
-
-/* Allocates an entire candle batch in heap memory */
-struct trcache_candle_batch *trcache_heap_alloc_candle_batch(int capacity);
-
-/* Allocates a selective candle batch in heap memory */
-struct trcache_candle_batch *trcache_heap_alloc_candle_batch_selective(
-	int capacity, trcache_candle_field_flags field_flag);
-
-/* Frees the candle batch from heap memory */
-void trcache_heap_free_candle_batch(struct trcache_candle_batch *batch);
-
-/* Allocates an entire candle batch in stack memory */
-void trcache_stack_alloc_candle_batch(struct trcache_candle_batch *b, int c);
-
-/* Allocates a selective candle batch in stack memory */
-void trcache_stack_alloc_candle_batch_selective(struct trcache_candle_batch *b,
-	int capacity, trcache_candle_field_flags field_flag);
-
-#define TRCACHE_DEFINE_CANDLE_BATCH_ON_STACK(var, capacity) \
-	struct trcache_candle_batch var; \
-	trcache_stack_alloc_candle_batch(&(var), (capacity));
-
-#define TRCACHE_DEFINE_SELECTIVE_CANDLE_BATCH_ON_STACK(var, capacity, flag) \
-	struct trcache_candle_batch var; \
-	trcache_stack_alloc_candle_batch(&(var), (capacity), (flag));
-
-/* Exports old candles in trcache into the given batch argument */
-void trcache_export_candle_batch(struct trcache *cache,
-	struct trcache_candle_batch *exported_batch, 
-	int symbol_id, enum trcache_candle_type candle_type);
+	struct trcache_trade_data *trade_data, int symbol_id);
 
 #ifdef __cplusplus
 }

@@ -10,7 +10,6 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "core/symbol_table.h"
 #include "core/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
 
@@ -44,6 +43,8 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	}
 
 	tls_data_ptr->local_symbol_id_map = NULL;
+	tls_data_ptr->local_trd_databuf_map = NULL;
+	tls_data_ptr->local_trd_databuf_vec = NULL;
 	tls_data_ptr->trcache_ptr = tc;
 	tls_data_ptr->thread_id = -1;
 
@@ -68,6 +69,8 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	/* Set argument of trcache_per_thread_destructor() */
 	pthread_setspecific(tc->pthread_trcache_key, (void *)tls_data_ptr);
 
+	INIT_LIST_HEAD(&tls_data_ptr->local_free_list);
+
 	return tls_data_ptr;
 }
 
@@ -78,8 +81,36 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
+	struct trade_data_buffer *buf = NULL;
+	struct trade_data_chunk *chunk = NULL;
+	struct list_head *c = NULL, *n = NULL;
+
 	if (tls_data->local_symbol_id_map != NULL) {
 		ht_destroy(tls_data->local_symbol_id_map);
+	}
+
+	if (tls_data->local_trd_databuf_map != NULL) {
+		ht_destroy(tls_data->local_trd_databuf_map);
+	}
+
+	if (tls_data->local_trd_databuf_vec != NULL) {
+		for (int i = 0; i < tls_data->local_trd_databuf_vec->size; i++) {
+			buf = (struct trade_data_buffer *) vector_at(
+				tls_data->local_trd_databuf_vec, i);
+			trade_data_buffer_destroy(buf);
+		}
+
+		vector_destroy(tls_data->local_trd_databuf_vec);
+	}
+
+	if (!list_empty(&tls_data->local_free_list)) {
+		c = list_get_first(&tls_data->local_free_list);
+		while (c != &tls_data->local_free_list) {
+			n = c->next;
+			chunk = __get_trd_chunk_ptr(c);
+			free(chunk);
+			c = n;
+		}
 	}
 
 	free(tls_data);
@@ -237,10 +268,87 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 /**
  * @brief Stub for feeding trade data (to be implemented).
  *
- * @param tc:   Pointer to trcache instance.
- * @param data: Pointer to trade data struct.
+ * @param tc:        Pointer to trcache instance.
+ * @param data:      Pointer to trade data struct.
+ * @param symbol_id: Symbol ID of trade data.
  */
-void trcache_feed_trade_data(struct trcache *tc, struct trcache_trade_data *data)
+void trcache_feed_trade_data(struct trcache *tc,
+	struct trcache_trade_data *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
+	struct trade_data_buf *trd_databuf = NULL, *buf = NULL;
+	bool found = false;
+
+	if (data == NULL || tls_data_ptr == NULL) {
+		return;
+	}
+
+	/* Initial state */
+	if (tls_data_ptr->local_trd_databuf_map == NULL) {
+		tls_data_ptr->local_trd_databuf_map /* simple hash table */
+			= ht_create(128, 0, NULL, NULL, NULL, NULL);
+
+		if (tls_data_ptr->local_trd_databuf_map == NULL) {
+			fprintf(stderr, "trcache_feed_trade_data: map init failed\n");
+			return;
+		}
+
+		tls_data_ptr->local_trd_databuf_vec = vector_init(sizeof(void *));
+
+		if (tls_data_ptr->local_trd_databuf_vec == NULL) {
+			ht_destroy(tls_data_ptr->local_trd_databuf_map);
+			tls_data_ptr->local_trd_databuf_map = NULL;
+			fprintf(stderr, "trcache_feed_trade_data: vec init failed\n");
+			return;
+		}
+	}
+
+	trd_databuf = (struct trade_data_buf *) ht_find(
+		tls_data_ptr->local_trd_databuf_map, symbol_id,
+		sizeof(void *), &found);
+
+	if (!found) {
+		trd_databuf = trade_data_buffer_init(tc->num_candle_types);
+
+		if (trd_databuf == NULL) {
+			fprintf(stderr, "trcache_feed_trade_data: databuf init failed\n");
+			return;
+		}
+		
+		/* Insert it to the hash table */
+		if (ht_insert(tls_data_ptr->local_trd_databuf_map,
+				symbol_id, sizeof(void *), trd_databuf) < 0) {
+			trade_data_buffer_destroy(trd_databuf);
+			fprintf(stderr, "trcache_feed_trade_data: ht_insert failed\n");
+			return;
+		}
+
+		/* Add it to the vector */
+		if (vector_push_back(tls_data_ptr->local_trd_databuf_vec,
+				trd_databuf) < 0) {
+			trade_data_buffer_destroy(trd_databuf);
+			fprintf(stderr, "trcache_feed_trade_data: vec push back failed\n");
+			return;
+		}
+	}
+
+	/*
+	 * If we need free chunk, reap it from data buffers.
+	 */
+	if (trd_databuf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
+		list_empty(&tls_data_ptr->local_free_list)) {
+		for (int i = 0; i < tls_data_ptr->local_trd_databuf_vec->size; i++) {
+			buf = (struct trade_data_buffer *) vector_at(
+				tls_data_ptr->local_trd_databuf_vec, i);
+
+			trade_data_buffer_reap_free_chunks(buf,
+				&tls_data_ptr->local_free_list);
+
+			if (!list_empty(&tls_data_ptr->local_free_list)) {
+				break;
+			}
+		}
+	}
+
+	trade_data_buffer_push(trd_databuf, data, &tls_data_ptr->local_free_list);
 }
