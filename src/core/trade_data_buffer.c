@@ -103,8 +103,10 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 	}
 
 	/* free all chunks in list */
-	list_bulk_move_tail(buf->free_list, 
-		list_get_first(&buf->chunk_list), list_get_last(&buf->chunk_list));
+	if (!list_empty(&buf->chunk_list)) {
+		list_bulk_move_tail(buf->free_list, 
+			list_get_first(&buf->chunk_list), list_get_last(&buf->chunk_list));
+	}
 
 	free(buf->cursor_arr);
 	free(buf);

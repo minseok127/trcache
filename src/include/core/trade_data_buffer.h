@@ -24,10 +24,10 @@
 /*
  * trade_data_chunk - Single chunk storing multiple trade entries.
  *
- * @list_node:     Linked list node
- * @write_idx:     Next write index [0..NUM_TRADE_CHUNK_CAP)
- * @consume_count: Atomic count of totally consumed cursor
- * @entries:       Fixed array of data
+ * @list_node:           Linked list node
+ * @write_idx:           Next write index [0..NUM_TRADE_CHUNK_CAP)
+ * @num_consumed_cursor: Atomic count of totally consumed cursor
+ * @entries:             Fixed array of data
  *
  * @note Entries are copied into the chunk; pointer ownership remains with
  *       the caller.
@@ -123,9 +123,6 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 
 /**
  * @brief	Consume entries up to cursor’s peek position.
- *
- * Advances consume cursor; when a chunk’s total
- * consume_count reaches threshold, returns chunk to pool.
  *
  * @param buf:     Buffer to consume from.
  * @param cursor:  Pointer to cursor used in peek.
