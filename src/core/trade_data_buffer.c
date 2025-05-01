@@ -80,7 +80,6 @@ struct trade_data_buffer *trade_data_buffer_init(size_t num_cursor,
 		c->peek_chunk = chunk;
 		c->peek_idx = 0;
 		c->consume_chunk = chunk;
-		c->consume_idx = 0;
 	}
 
 	buf->num_cursor = num_cursor;

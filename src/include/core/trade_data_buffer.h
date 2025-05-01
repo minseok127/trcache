@@ -79,10 +79,12 @@ struct trade_data_buffer {
  * @brief Create a new trade data buffer.
  *
  * @param num_cursor: Number of cursors (candle types) tracked per trade.
+ * @param free_list:  Free list pointer.
  *
  * @return Pointer to buffer, or NULL on allocation failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(int num_cursor);
+struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
+	struct list_head *free_list);
 
 /**
  * @brief Destroy a trade data buffer and free resources.
