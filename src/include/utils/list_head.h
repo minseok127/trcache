@@ -5,7 +5,7 @@
 
 #ifndef container_of
 #define container_of(ptr, type, member) \
-	((type *)((char *)(ptr) - offsetof(type, member))
+	((type *)((char *)(ptr) - offsetof(type, member)))
 #endif /* container_of */
 
 /*
@@ -179,7 +179,7 @@ static inline void list_move_tail(struct list_head *entry,
  * @param	first:	First entry of the sublist.
  * @param	last:	Last entry of the sublist.
  */
-struct inline void list_bulk_move_tail(struct list_head *head,
+static inline void list_bulk_move_tail(struct list_head *head,
 	struct list_head *first, struct list_head *last)
 {
 	first->prev->next = last->next;
