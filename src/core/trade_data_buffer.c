@@ -3,7 +3,7 @@
  * @brief  Chunk‐based buffer for trcache_trade_data
  *
  * Producer pushes trade data into chunks; when full, obtains a free
- * chunk from free list or mallocs a new one. Consumer uses a cursor to peek
+ * chunk from free list or mallocs a new one. Consumers use a cursor to peek
  * and consume entries; when threshold reached, chunk is enqueued back
  * to free list by producer's context.
  */
@@ -274,7 +274,10 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 		assert(c != &buf->chunk_list);
 
 		/*
-		 * Dereferencing the chunk must occur before incrementing the counter.
+		 * Dereferencing the chunk must occur before incrementing the counter
+		 * because this counter is the criterion for deciding when to free the
+		 * chunk. Incrementing the counter before dereferencing could result in
+		 * accessing a freed chunk.
 		 */
 		__sync_synchronize();
 
