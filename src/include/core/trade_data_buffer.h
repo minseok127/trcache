@@ -63,16 +63,18 @@ struct trade_data_buffer_cursor {
 /*
  * trade_data_buffer - Buffer managing a linked list of trade_data_chunk.
  *
- * @chunk_list:         Linked list for chunks
- * @cursor_arr:         Cursor array
- * @free_list:          Global linked list pointer holding recycled chunks
- * @num_cursor:         Number of cursors
+ * @chunk_list:          Linked list for chunks
+ * @cursor_arr:          Cursor array
+ * @free_list:           Global linked list pointer holding recycled chunks
+ * @num_cursor:          Number of cursors
+ * @next_tail_write_idx: Next write_idx of the tail chunk
  */
 struct trade_data_buffer {
 	struct list_head chunk_list;
 	struct trade_data_buffer_cursor *cursor_arr;
 	struct list_head *free_list;
 	int num_cursor;
+	int next_tail_write_idx;
 };
 
 /**
@@ -129,5 +131,12 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
  */
 void trade_data_buffer_consume(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor);
+
+/**
+ * @brief   Move free chunks into the free list
+ *
+ * @param buf: Buffer to reap the free chunks.
+ */
+void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf);
 
 #endif /* TRADE_DATA_BUFFER_H */

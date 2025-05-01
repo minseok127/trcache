@@ -84,6 +84,8 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor,
 
 	buf->num_cursor = num_cursor;
 
+	buf->next_tail_write_idx = 0;
+
 	buf->free_list = free_list_head;
 
 	return buf;
@@ -123,8 +125,7 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 int trade_data_buffer_push(struct trade_data_buffer *buf,
 	const trcache_trade_data *data)
 {
-	struct trade_data_chunk *tail = NULL, *new_chunk = NULL, *chunk = NULL;
-	struct list_head *first = NULL, *last = NULL;
+	struct trade_data_chunk *tail = NULL, *new_chunk = NULL
 
 	if (!buf || !data) {
 		return -1;
@@ -145,26 +146,6 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 * to ensure the consumer’s cursor never points to a fully consumed chunk.
 	 */
 	if ((tail->write_idx + 1) == NUM_TRADE_CHUNK_CAP) {
-		/*
-		 * Before receiving a new chunk, check if there are any chunks in
-		 * the current list to be freed and places them into the free list.
-		 */
-		first = list_get_first(&buf->chunk_list);
-		chunk = __get_trd_chunk_ptr(first);
-		while (chunk != tail) {
-			if (atomic_load(&chunk->num_consumed_cursor) != buf->num_cursor) {
-				break;
-			}
-
-			last = (struct list_head *) &chunk->list_node;
-			chunk = __get_trd_chunk_ptr(chunk->list_node.next);
-		}
-
-		if (last != NULL) {
-			list_bulk_move_tail(buf->free_list, first, last);
-		}
-
-		/* obtain a free chunk or allocate */
 		if (!list_empty(buf->free_list)) {
 			list_move_tail(buf->free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
@@ -181,6 +162,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 
 		atomic_store(&new_chunk->write_idx, 0);
 		atomic_store(&new_chunk->num_consumed_cursor, 0);
+
+		buf->next_tail_write_idx = 0;
+	} else {
+		buf->next_tail_write_idx += 1;
 	}
 
 	tail->entries[tail->write_idx] = *data;
@@ -287,4 +272,34 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 	}
 
 	cursor->consume_chunk = chunk;
+}
+
+/**
+ * @brief   Move free chunks into the free list
+ *
+ * @param   buf: Buffer to reap the free chunks.
+ */
+void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf)
+{
+	struct trade_data_chunk *tail = NULL, *chunk = NULL;
+	struct list_head *first = NULL, *last = NULL;
+
+	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+
+	first = list_get_first(&buf->chunk_list);
+
+	chunk = __get_trd_chunk_ptr(first);
+
+	while (chunk != tail) {
+		if (atomic_load(&chunk->num_consumed_cursor) != buf->num_cursor) {
+			break;
+		}
+
+		last = (struct list_head *) &chunk->list_node;
+		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
+	}
+
+	if (last != NULL) {
+		list_bulk_move_tail(buf->free_list, first, last);
+	}
 }
