@@ -6,6 +6,8 @@
  * single-thread use; no atomics are employed.
  */
 
+#include <stdio.h>
+
 #include "utils/vector.h"
 
 struct vector *vector_init(size_t elem_size)
@@ -61,7 +63,7 @@ int vector_reserve(struct vector *v, size_t new_cap)
 	tmp = realloc(v->data, new_cap * v->elem_size);
 
 	if (!tmp) {
-		fprintf(stderr, "vector_reservsize_trealloc failed\n");
+		fprintf(stderr, "vector_reserve realloc failed\n");
 		return -1;
 	}
 

@@ -8,6 +8,7 @@
  * to free list by producer's context.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -285,7 +286,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	struct trade_data_chunk *tail = NULL, *chunk = NULL;
 	struct list_head *first = NULL, *last = NULL;
 
-	if (free_list == NULL) {
+	if (free_list == NULL || list_empty(&buf->chunk_list)) {
 		return;
 	}
 

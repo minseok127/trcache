@@ -277,7 +277,7 @@ void trcache_feed_trade_data(struct trcache *tc,
 	struct trcache_trade_data *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
-	struct trade_data_buf *trd_databuf = NULL, *buf = NULL;
+	struct trade_data_buffer *trd_databuf = NULL, *buf = NULL;
 	bool found = false;
 
 	if (data == NULL || tls_data_ptr == NULL) {
@@ -304,9 +304,9 @@ void trcache_feed_trade_data(struct trcache *tc,
 		}
 	}
 
-	trd_databuf = (struct trade_data_buf *) ht_find(
-		tls_data_ptr->local_trd_databuf_map, symbol_id,
-		sizeof(void *), &found);
+	trd_databuf = (struct trade_data_buffer *) ht_find(
+		tls_data_ptr->local_trd_databuf_map, (uint64_t)symbol_id,
+		sizeof(uint64_t), &found);
 
 	if (!found) {
 		trd_databuf = trade_data_buffer_init(tc->num_candle_types);
@@ -318,7 +318,7 @@ void trcache_feed_trade_data(struct trcache *tc,
 		
 		/* Insert it to the hash table */
 		if (ht_insert(tls_data_ptr->local_trd_databuf_map,
-				symbol_id, sizeof(void *), trd_databuf) < 0) {
+				(uint64_t)symbol_id, sizeof(uint64_t), trd_databuf) < 0) {
 			trade_data_buffer_destroy(trd_databuf);
 			fprintf(stderr, "trcache_feed_trade_data: ht_insert failed\n");
 			return;
