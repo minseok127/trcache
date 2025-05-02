@@ -176,6 +176,7 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 		return NULL;
 	}
 
+	tc->num_candle_types = trcache_candle_type_count(candle_type_flags);
 	tc->num_workers = num_worker_threads;
 	tc->candle_type_flags = candle_type_flags;
 	tc->flush_threshold = flush_threshold;
