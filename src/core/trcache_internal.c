@@ -267,7 +267,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 }
 
 /**
- * @brief Stub for feeding trade data (to be implemented).
+ * @brief Stub for feeding trade data.
  *
  * @param tc:        Pointer to trcache instance.
  * @param data:      Pointer to trade data struct.
