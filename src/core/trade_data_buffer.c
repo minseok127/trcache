@@ -194,7 +194,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor,
 	struct trcache_trade_data **data_array,
-	size_t *count)
+	int *count)
 {
 	struct trade_data_chunk *chunk = NULL;
 

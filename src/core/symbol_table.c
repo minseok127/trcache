@@ -353,7 +353,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 
 	if (ht_insert(table->symbol_id_map, symbol_str,
 			strlen(symbol_str) + 1, /* string + NULL */
-			(void *)id) < 0) {
+			(void *)(uintptr_t)id) < 0) {
 		fprintf(stderr, "symbol_table_register: ht_insert error\n");
 		pthread_mutex_unlock(&table->ht_hash_table_mutex);
 		return -1;

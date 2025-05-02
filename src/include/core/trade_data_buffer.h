@@ -34,8 +34,8 @@
  */
 struct trade_data_chunk {
 	struct list_head list_node;
-	_Atomic size_t write_idx;
-	_Atomic size_t num_consumed_cursor;
+	_Atomic int write_idx;
+	_Atomic int num_consumed_cursor;
 	struct trcache_trade_data entries[NUM_TRADE_CHUNK_CAP];
 };
 
@@ -49,15 +49,15 @@ struct trade_data_chunk {
  * trade_data_buffer_cursor - Cursor for iterating and consuming a buffer.
  *
  * @peek_chunk:    Chunk for next peek
- * @peek_idx:      Index in the peek_chunk for next peek
  * @consume_chunk: Chunk for next consume
+ * @peek_idx:      Index in the peek_chunk for next peek
  *
  * Caller allocates this and passes to peek/consume.
  */
 struct trade_data_buffer_cursor {
 	struct trade_data_chunk *peek_chunk;
-	size_t peek_idx; 
 	struct trade_data_chunk	*consume_chunk;
+	int peek_idx; 
 } __cacheline_aligned;
 
 /*
@@ -119,7 +119,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
  */
 int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor,
-	struct trcache_trade_data **data_array, size_t *count);
+	struct trcache_trade_data **data_array, int *count);
 
 /**
  * @brief	Consume entries up to cursor’s peek position.

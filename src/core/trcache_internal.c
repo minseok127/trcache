@@ -258,7 +258,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 
 		/* Add it into local cache */
 		if (ht_insert(tls_data_ptr->local_symbol_id_map, symbol_str,
-				strlen(symbol_str) + 1, (void *)id) < 0) {
+				strlen(symbol_str) + 1, (void *)(uintptr_t)symbol_id) < 0) {
 			fprintf(stderr, "trcache_register_symbol: local cache insert failed\n");
 		}
 	}
@@ -305,8 +305,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 	}
 
 	trd_databuf = (struct trade_data_buffer *) ht_find(
-		tls_data_ptr->local_trd_databuf_map, (uint64_t)symbol_id,
-		sizeof(uint64_t), &found);
+		tls_data_ptr->local_trd_databuf_map, (void *)(uintptr_t)symbol_id,
+		sizeof(void *), &found);
 
 	if (!found) {
 		trd_databuf = trade_data_buffer_init(tc->num_candle_types);
@@ -318,7 +318,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 		
 		/* Insert it to the hash table */
 		if (ht_insert(tls_data_ptr->local_trd_databuf_map,
-				(uint64_t)symbol_id, sizeof(uint64_t), trd_databuf) < 0) {
+				(void *)(uintptr_t)symbol_id, sizeof(void *),
+				trd_databuf) < 0) {
 			trade_data_buffer_destroy(trd_databuf);
 			fprintf(stderr, "trcache_feed_trade_data: ht_insert failed\n");
 			return;
