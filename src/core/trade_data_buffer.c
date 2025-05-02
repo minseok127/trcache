@@ -197,6 +197,7 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	int *count)
 {
 	struct trade_data_chunk *chunk = NULL;
+	int write_idx;
 
 	if (!buf || !cursor || !data_array || !count) {
 		if (count) {
@@ -207,14 +208,15 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 
 	assert(cursor->peek_chunk != NULL);
 	chunk = cursor->peek_chunk;
+	write_idx = atomic_load(&chunk->write_idx);
 
-	if (cursor->peek_idx == chunk->write_idx) {
+	if (cursor->peek_idx == write_idx) {
 		*count = 0;
 		return 0;
 	} 
 
 	*data_array = &chunk->entries[cursor->peek_idx];
-	*count = chunk->write_idx - cursor->peek_idx;
+	*count = write_idx - cursor->peek_idx;
 
 	/* advance peek cursor */
 	cursor->peek_idx += *count;

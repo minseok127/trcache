@@ -67,6 +67,11 @@ struct trade_data_buffer_cursor {
  * @cursor_arr:          Cursor array
  * @num_cursor:          Number of cursors
  * @next_tail_write_idx: Next write_idx of the tail chunk
+ *
+ * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
+ * after the very next push. It lets external code (caller side) decide *before*
+ * calling trade_data_buffer_push() whether this push will require allocating /
+ * linking a new chunk.
  */
 struct trade_data_buffer {
 	struct list_head chunk_list;
