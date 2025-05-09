@@ -49,35 +49,12 @@ struct candle_row_page {
 } __cacheline_aligned;
 
 /*
- * candle_column_batch - Column (SoA) view of one chunk.
- *
- * Each field pointer is 64-byte aligned for efficient SIMD loads.
- *
- * @field pointers:       SoA arrays – length == TRCACHE_CHUNK_CAP
- * @capacity:             Always TRCACHE_CHUNK_CAP
- * @num_filled:           Rows already copied from row pages
- */
-struct candle_column_batch {
-	uint64_t *first_timestamp;
-	uint64_t *first_trade_id;
-	uint32_t *timestamp_interval;
-	uint32_t *trade_id_interval;
-	double *open;
-	double *high;
-	double *low;
-	double *close;
-	double *volume;
-	int capacity;
-	_Atomic int num_filled;
-} __cacheline_aligned;
-
-/*
  * candle_chunk - Owns a sequence window of candles.
  *
  * @seq_begin:            First global sequence number in this chunk (inclusive)
  * @seq_end:              Last  +1  (exclusive)
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots
- * @column_batch:         Pre-allocated SoA buffer (NULL until first need)
+ * @column_batch:         SoA buffer (NULL until first need)
  * @last_row_completed:   Highest sequence no. whose row is finished
  * @last_row_copied:      Highest seq already copied to COLUMN
  */
@@ -85,7 +62,7 @@ struct candle_chunk {
 	uint64_t seq_begin;
 	uint64_t seq_end;
 	struct atomsnap_gate *row_gate;
-	struct candle_column_batch *column_batch;
+	struct trcache_candle_batch *column_batch;
 	_Atomic uint64_t last_row_completed;
 	_Atomic uint64_t last_row_copied;
 } __cacheline_aligned;

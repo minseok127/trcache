@@ -113,7 +113,6 @@ typedef struct trcache_candle_batch {
 	double *low_array;
 	double *close_array;
 	double *volume_array;
-	int capacity;
 	int num_candles;
 	int candle_type;
 	int symbol_id;
