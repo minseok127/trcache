@@ -154,7 +154,7 @@ void candle_chunk_mark_row_complete(struct candle_chunk *ck, int seq_complete);
  * @return 'true'  if there are remained rows in a next page.
  *         'false' if nothing is left to copy.
  */
-void candle_chunk_acquire_completed_rows(struct candle_chunk *ck,
+bool candle_chunk_acquire_completed_rows(struct candle_chunk *ck,
 	int *first_seq_ret, int *nrows_ret,
 	const struct trcache_candle **row_base_ret);
 
