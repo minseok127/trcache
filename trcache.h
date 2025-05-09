@@ -48,19 +48,19 @@ typedef struct trcache_trade_data {
  * Identifiers used by the user and trcache to recognize candle types.
  */
 typedef enum {
-	TRCACHE_MONTH_CANDLE	= 1 << 0,
-	TRCACHE_WEEK_CANDLE		= 1 << 1,
-	TRCACHE_DAY_CANDLE		= 1 << 2,
-	TRCACHE_1H_CANDLE		= 1 << 3,
-	TRCACHE_30MIN_CANDLE	= 1 << 4,
-	TRCACHE_15MIN_CANDLE	= 1 << 5,
-	TRCACHE_5MIN_CANDLE		= 1 << 6,
-	TRCACHE_1MIN_CANDLE		= 1 << 7,
-	TRCACHE_1S_CANDLE		= 1 << 8,
-	TRCACHE_100TICK_CANDLE	= 1 << 9,
-	TRCACHE_50TICK_CANDLE	= 1 << 10,
-	TRCACHE_10TICK_CANDLE	= 1 << 11,
-	TRCACHE_5TICK_CANDLE	= 1 << 12,
+	TRCACHE_MONTH_CANDLE    = 1 << 0,
+	TRCACHE_WEEK_CANDLE     = 1 << 1,
+	TRCACHE_DAY_CANDLE      = 1 << 2,
+	TRCACHE_1H_CANDLE       = 1 << 3,
+	TRCACHE_30MIN_CANDLE    = 1 << 4,
+	TRCACHE_15MIN_CANDLE    = 1 << 5,
+	TRCACHE_5MIN_CANDLE     = 1 << 6,
+	TRCACHE_1MIN_CANDLE     = 1 << 7,
+	TRCACHE_1SEC_CANDLE     = 1 << 8,
+	TRCACHE_100TICK_CANDLE  = 1 << 9,
+	TRCACHE_50TICK_CANDLE   = 1 << 10,
+	TRCACHE_10TICK_CANDLE   = 1 << 11,
+	TRCACHE_5TICK_CANDLE    = 1 << 12,
 } trcache_candle_type;
 
 #define TRCACHE_NUM_CANDLE_TYPE	(13)
@@ -72,15 +72,15 @@ typedef uint32_t trcache_candle_type_flags;
  * fields, so the values should be a power of two.
  */
 typedef enum {
-	TRCACHE_FIRST_TIMESTAMP		= 1 << 0,
-	TRCACHE_FIRST_TRADE_ID		= 1 << 1,
-	TRCACHE_TIMESTAMP_INTERVAL	= 1 << 2,
-	TRCACHE_TRADE_ID_INTERVAL	= 1 << 3,
-	TRCACHE_OPEN				= 1 << 4,
-	TRCACHE_HIGH				= 1 << 5,
-	TRCACHE_LOW					= 1 << 6,
-	TRCACHE_CLOSE				= 1 << 7,
-	TRCACHE_VOLUME				= 1 << 8,
+	TRCACHE_FIRST_TIMESTAMP     = 1 << 0,
+	TRCACHE_FIRST_TRADE_ID      = 1 << 1,
+	TRCACHE_TIMESTAMP_INTERVAL  = 1 << 2,
+	TRCACHE_TRADE_ID_INTERVAL   = 1 << 3,
+	TRCACHE_OPEN                = 1 << 4,
+	TRCACHE_HIGH                = 1 << 5,
+	TRCACHE_LOW                 = 1 << 6,
+	TRCACHE_CLOSE               = 1 << 7,
+	TRCACHE_VOLUME              = 1 << 8,
 } trcache_candle_field_type;
 
 typedef uint32_t trcache_candle_field_flags;
@@ -104,6 +104,7 @@ typedef struct trcache_candle {
  * A collection of multiple candles structured in column-oriented format.
  */
 typedef struct trcache_candle_batch {
+	void *base;
 	uint64_t *first_timestamp_array;
 	uint64_t *first_trade_id_array;
 	uint32_t *timestamp_interval_array;
@@ -114,6 +115,7 @@ typedef struct trcache_candle_batch {
 	double *close_array;
 	double *volume_array;
 	int num_candles;
+	int capacity;
 	int candle_type;
 	int symbol_id;
 } trcache_candle_batch;
