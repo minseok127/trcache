@@ -79,6 +79,7 @@ struct candle_column_batch {
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots
  * @column_batch:         Pre-allocated SoA buffer (NULL until first need)
  * @last_row_completed:   Highest sequence no. whose row is finished
+ * @last_row_copied:      Highest seq already copied to COLUMN
  */
 struct candle_chunk {
 	uint64_t seq_begin;
@@ -86,6 +87,7 @@ struct candle_chunk {
 	struct atomsnap_gate *row_gate;
 	struct candle_column_batch *column_batch;
 	_Atomic uint64_t last_row_completed;
+	_Atomic uint64_t last_row_copied;
 } __cacheline_aligned;
 
 /**
@@ -133,41 +135,44 @@ void candle_chunk_mark_row_complete(struct candle_chunk *ck, int seq_complete);
 
 
 /**
- * @brief   Acquire the next contiguous range of *completed-but-not-yet-copied*
- *          rows.
+ * @brief        Get the next contiguous range of *completed-but-uncopied*
+ *               rows that still reside in row pages.
  *
- * @param   ck               Candle-chunk pointer.
- * @param   first_seq_ret    [out] First sequence number in the range.
- * @param   nrows_ret        [out] Number of rows in the range (0 ⇒ nothing).
- * @param   row_base_ret     [out] Base address of the first row.
- * @param   page_slot_ret    [out] Slot index of the page’s atomsnap gate
- *                                 (−1 ⇒ the range spans multiple pages or
- *                                 page not yet full).
+ * The range is **always confined to a single row-page**; caller repeats
+ * until this function returns `false`.
  *
- * Internal: performs atomsnap_acquire_version() on any page gates that cover
- * the returned rows, ensuring the memory stays valid until the matching
- * commit call.
+ * Internally the routine acquires the page’s atomsnap version so the
+ * memory stays valid until the matching commit.
+ *
+ * @param ck               Candle-chunk handle.
+ * @param first_seq_ret    [out] absolute sequence number of the first row
+ *                                  in the returned range.
+ * @param nrows_ret        [out] number of rows in the range  
+ *                                  (0 ⇒ no more work).
+ * @param row_base_ret     [out] pointer to the first row of the range.
+ *
+ * @return 'true'  if there are remained rows in a next page.
+ *         'false' if nothing is left to copy.
  */
 void candle_chunk_acquire_completed_rows(struct candle_chunk *ck,
 	int *first_seq_ret, int *nrows_ret,
-	const struct trcache_candle **row_base_ret, int *page_slot_ret);
+	const struct trcache_candle **row_base_ret);
 
 /**
- * @brief   Commit that the range [first_seq, first_seq + nrows) has been
- *          copied into the column batch.
+ * @brief        Commit that every row up-to @p last_seq_copied (inclusive)
+ *               has been transferred into the column batch buffer.
  *
- * @param   ck             Candle-chunk pointer.
- * @param   first_seq      First sequence of the copied range.
- * @param   nrows          Number of rows copied.
- * @param   page_slot_ret  The same value returned by _acquire_
- *                         (−1 ⇒ partial page copy, keep gate held;
- *                          ≥0 ⇒ full page copied, gate is nulled & released).
+ * The function:
+ *   - advances `ck->last_row_copied`  
+ *   - releases (and, if fully migrated, NULL-ifies) the row-page’s
+ *     atomsnap version that was held by the preceding *acquire*.
  *
- * Handles atomsnap_release_version() and (optionally) gate nullification
- * when the page becomes fully migrated to SoA.
+ * @param ck                Candle-chunk handle.
+ * @param last_seq_copied   highest sequence number just copied to SoA.
  */
-void candle_chunk_commit_copied_rows(struct candle_chunk *ck, int first_seq,
-	int nrows, int page_slot_ret);
+void candle_chunk_commit_copied_rows(struct candle_chunk *ck,
+	int last_seq_copied);
+
 
 #endif /* CANDLE_CHUNK_H */
 
