@@ -45,7 +45,7 @@
  */
 struct candle_row_page {
 	struct trcache_candle rows[TRCACHE_ROWS_PER_PAGE];
-	_Atomic int           num_filled;
+	_Atomic int num_filled;
 } __cacheline_aligned;
 
 /*
@@ -83,7 +83,7 @@ struct candle_column_batch {
 struct candle_chunk {
 	uint64_t seq_begin;
 	uint64_t seq_end;
-	struct atomsnap_gate       *row_gate;
+	struct atomsnap_gate *row_gate;
 	struct candle_column_batch *column_batch;
 	_Atomic uint64_t last_row_completed;
 } __cacheline_aligned;
