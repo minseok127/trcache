@@ -135,8 +135,8 @@ typedef struct trcache_candle_batch {
 	int symbol_id;
 } trcache_candle_batch;
 
-/* 
- * trcache_init - Allocate and initialize the top-level trcache.
+/**
+ * @brief Allocate and initialize the top-level trcache.
  *
  * @param num_worker_threads: number of threads that will feed data
  * @param flush_threshold:    how many items to buffer before flush
@@ -147,16 +147,17 @@ typedef struct trcache_candle_batch {
 struct trcache *trcache_init(int num_worker_threads, int flush_threshold_candles,
 	trcache_candle_type_flags candle_type_flags);
 
-/*
- * trcache_destroy - Destroy all trcache state, including per-thread caches.
+/**
+ * @brief Destroy all trcache state, including per-thread caches.
+ *
  * Safe to call after all worker threads have exited.
+ *
+ * @param cache: Handle from trcache_init().
  */
 void trcache_destroy(struct trcache *cache);
 
 /**
- * trcache_register_symbol()
- *
- * Register a new symbol string or return the existing ID.
+ * @brief   Register a new symbol string or return the existing ID.
  *
  * Thread-safe: uses internal hash map + mutex once per new symbol.
  *
@@ -168,9 +169,7 @@ void trcache_destroy(struct trcache *cache);
 int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 
 /**
- * trcache_feed_trade_data()
- *
- * Push a single trade into the internal pipeline.
+ * @brief   Push a single trade into the internal pipeline.
  *
  * @param	cache:			Handle from trcache_init().
  * @param	trade_data:		User-filled struct (copied internally).
