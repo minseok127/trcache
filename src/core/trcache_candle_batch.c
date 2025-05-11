@@ -85,7 +85,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 	off_vol = align_up(off_close + dblb, a);
 	total_sz = align_up(off_vol + dblb, a);
 
-    /* Single aligned block for struct + all arrays. */
+	/* Single aligned block for struct + all arrays. */
 	base = simd_aligned_alloc(a, total_sz);
 
 	if (base == NULL) {
@@ -93,7 +93,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 		return NULL;
 	}
 
-    /* Wire up internal pointers. */
+	/* Wire up internal pointers. */
 	b = (struct trcache_candle_batch *)base;
 	memset(b, 0, sizeof *b);
 	b->num_candles = n;
