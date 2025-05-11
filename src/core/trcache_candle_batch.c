@@ -117,7 +117,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
  */
 void trcache_batch_free(struct trcache_candle_batch *b)
 {
-    if (b != NULL) {
+	if (b != NULL) {
 		simd_aligned_free((void *)b); /* Struct address == block base */
 	}
 }
