@@ -14,9 +14,14 @@ extern "C" {
  * stated.
  */
 
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#ifndef TRCACHE_SIMD_ALIGN
+#define TRCACHE_SIMD_ALIGN (64)
+#endif /* TRCACHE_SIMD_ALIGN */
 
 typedef struct trcache trcache;
 
@@ -104,7 +109,6 @@ typedef struct trcache_candle {
  * A collection of multiple candles structured in column-oriented format.
  */
 typedef struct trcache_candle_batch {
-	void *base;
 	uint64_t *first_timestamp_array;
 	uint64_t *first_trade_id_array;
 	uint32_t *timestamp_interval_array;
@@ -115,7 +119,6 @@ typedef struct trcache_candle_batch {
 	double *close_array;
 	double *volume_array;
 	int num_candles;
-	int capacity;
 	int candle_type;
 	int symbol_id;
 } trcache_candle_batch;
@@ -163,6 +166,44 @@ int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
  */
 void trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
+
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(int num_candles);
+
+void trcache_batch_free(struct trcache_candle_batch *batch);
+
+static inline void *trcache_align_up_ptr(void *p, size_t a)
+{
+	return (void *)(((uintptr_t)p + a - 1) & ~(uintptr_t)(a - 1));
+}
+
+static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst,
+	int num_candles)
+{
+	const size_t a = TRCACHE_SIMD_ALIGN;
+	size_t u64b = (size_t)n * sizeof(uint64_t);
+	size_t dblb = (size_t)n * sizeof(double);
+
+	uint8_t *buf_ft  = alloca(u64b + a - 1);
+	uint8_t *buf_lt  = alloca(u64b + a - 1);
+	uint8_t *buf_op  = alloca(dblb + a - 1);
+	uint8_t *buf_hi  = alloca(dblb + a - 1);
+	uint8_t *buf_lo  = alloca(dblb + a - 1);
+	uint8_t *buf_cl  = alloca(dblb + a - 1);
+	uint8_t *buf_vol = alloca(dblb + a - 1);
+
+	dst->num_candles = num_candles;
+	dst->first_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ft,  a);
+	dst->last_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_lt,  a);
+	dst->open_array = (double *)trc_align_up_ptr(buf_op, a);
+	dst->high_array = (double *)trc_align_up_ptr(buf_hi, a);
+	dst->low_array = (double *)trc_align_up_ptr(buf_lo, a);
+	dst->close_array = (double *)trc_align_up_ptr(buf_cl, a);
+	dst->volume_array = (double *)trc_align_up_ptr(buf_vol, a);
+}
+
+#define TRCACHE_DEFINE_BATCH_ON_STACK(var, num) \
+	trcache_candle_batch var; \
+	trcache_batch_alloc_on_stack(&(var), (num))
 
 #ifdef __cplusplus
 }
