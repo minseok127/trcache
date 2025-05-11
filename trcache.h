@@ -19,6 +19,13 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+/*
+ * @def   TRCACHE_SIMD_ALIGN
+ * @brief Alignment (in bytes) of every vector array.
+ *
+ * 64 is enough for AVX-512 and current ARM SVE256. Increase if a wider
+ * vector ISA comes along.
+ */
 #ifndef TRCACHE_SIMD_ALIGN
 #define TRCACHE_SIMD_ALIGN (64)
 #endif /* TRCACHE_SIMD_ALIGN */
@@ -107,8 +114,11 @@ typedef struct trcache_candle {
 
 /*
  * A collection of multiple candles structured in column-oriented format.
+ * All array pointers refer into the **same contiguous block**,
+ * whether it was allocated on the stack (via 'alloca') or on the heap.
  */
 typedef struct trcache_candle_batch {
+	/* Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned) */
 	uint64_t *first_timestamp_array;
 	uint64_t *first_trade_id_array;
 	uint32_t *timestamp_interval_array;
@@ -118,6 +128,8 @@ typedef struct trcache_candle_batch {
 	double *low_array;
 	double *close_array;
 	double *volume_array;
+
+	/* Meta fields */
 	int num_candles;
 	int candle_type;
 	int symbol_id;
@@ -167,15 +179,55 @@ int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 void trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
+/**
+ * @brief  Allocate a contiguous, SIMD-aligned candle batch on the heap.
+ *
+ * @param num_candles: Number of OHLCV rows to allocate (must be > 0).
+ *
+ * @return Pointer to a fully-initialised #trcache_candle_batch on success,  
+ *         'NULL' on allocation failure or invalid *num_candles*.
+ *
+ * @note The returned pointer must be released via trcache_batch_free().
+ */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(int num_candles);
 
+/**
+ * @brief  Release a heap-allocated candle batch.
+ *
+ * Safe to pass 'NULL'; the function becomes a no-op.
+ *
+ * @param batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ */
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
+/**
+ * @brief  Align a pointer upward to the next @p a-byte boundary.
+ *
+ * @param p: Raw pointer to be aligned.
+ * @param a: Alignment in bytes (power-of-two, e.g. 64).
+ *
+ * @return Pointer guaranteed to satisfy ((uintptr_t)ret % a) == 0.
+ *
+ * @warning Macro clients must ensure @p p lies in a buffer of
+ *          at least (a-1) extra bytes to avoid overflow.
+ */
 static inline void *trcache_align_up_ptr(void *p, size_t a)
 {
 	return (void *)(((uintptr_t)p + a - 1) & ~(uintptr_t)(a - 1));
 }
 
+/**
+ * @brief  Build a fully-aligned candle batch on the *caller's stack*.
+ *
+ * Uses alloca() to reserve raw space for each array, then fixes
+ * alignment via #trc_align_up_ptr.  The stack memory lives as long as the
+ * caller's frame is active—no explicit free is required.
+ *
+ * @param dst [out]: Pre-declared #trcache_candle_batch object to populate.
+ * @param n:         Number of candle rows to allocate (must be > 0).
+ *
+ * @note All pointers inside @p dst point into the caller's stack frame.
+ */
 static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst,
 	int num_candles)
 {
@@ -183,12 +235,12 @@ static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst
 	size_t u64b = (size_t)n * sizeof(uint64_t);
 	size_t dblb = (size_t)n * sizeof(double);
 
-	uint8_t *buf_ft  = alloca(u64b + a - 1);
-	uint8_t *buf_lt  = alloca(u64b + a - 1);
-	uint8_t *buf_op  = alloca(dblb + a - 1);
-	uint8_t *buf_hi  = alloca(dblb + a - 1);
-	uint8_t *buf_lo  = alloca(dblb + a - 1);
-	uint8_t *buf_cl  = alloca(dblb + a - 1);
+	uint8_t *buf_ft = alloca(u64b + a - 1);
+	uint8_t *buf_lt = alloca(u64b + a - 1);
+	uint8_t *buf_op = alloca(dblb + a - 1);
+	uint8_t *buf_hi = alloca(dblb + a - 1);
+	uint8_t *buf_lo = alloca(dblb + a - 1);
+	uint8_t *buf_cl = alloca(dblb + a - 1);
 	uint8_t *buf_vol = alloca(dblb + a - 1);
 
 	dst->num_candles = num_candles;
@@ -201,6 +253,20 @@ static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst
 	dst->volume_array = (double *)trc_align_up_ptr(buf_vol, a);
 }
 
+/**
+ * @brief  Declare and initialise a stack-resident candle batch in one line.
+ *
+ * Example:
+ * 
+ * func() {
+ *     TRCACHE_DEFINE_BATCH_ON_STACK(batch, 1024);
+ *     // batch.open_array … 1024 aligned doubles
+ *     ...
+ * }
+ *
+ * @param var: User-chosen variable name of type #trcache_candle_batch.
+ * @param num: Number of candles to allocate (runtime value allowed).
+ */
 #define TRCACHE_DEFINE_BATCH_ON_STACK(var, num) \
 	trcache_candle_batch var; \
 	trcache_batch_alloc_on_stack(&(var), (num))
