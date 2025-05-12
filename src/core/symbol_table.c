@@ -137,7 +137,7 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 		free(symbol_array[i]);
 	}
 
-	free(symbol_array);
+	symbol_array_version_free(version);
 	atomsnap_destroy_gate(table->symbol_array_gate);
 	free(table);
 }
@@ -346,8 +346,14 @@ static struct public_symbol_entry *init_public_symbol_entry(int id,
 	}
 
 	entry->id = id;
+
 	entry->symbol_str = duplicate_symbol_str(symbol_str,
 		strlen(symbol_str) + 1);
+
+	if (entry->symbol_str == NULL) {
+		fprintf(stderr, "init_public_symbol_entry: symbol_str alloc failed\n");
+		return NULL;
+	}
 
 	return entry;
 }

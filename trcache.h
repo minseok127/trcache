@@ -169,14 +169,14 @@ void trcache_destroy(struct trcache *cache);
 int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 
 /**
- * @brief Lookup symbol string by its symbol id.
+ * @brief   Lookup symbol string by its symbol id.
  *
  * @param   cache:      Handle from trcache_init().
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  *
- * @return  NULL_terminated symbol string.
+ * @return  NULL-terminated symbol string.
  */
-int trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
+const char *trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
 
 /**
  * @brief   Push a single trade into the internal pipeline.
