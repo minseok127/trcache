@@ -56,12 +56,14 @@ int compare_symbol_str(const void *k1, size_t l1,
  * @param key: Pointer returned by duplicate_symbol_str.
  * @param len: Unused length parameter.
  */
-void free_symbol_str(const void *key, size_t len)
+void free_symbol_str(void *key, size_t len)
 {
 	(void)len;
 	free((void *)key);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
 /**
  * @brief 64-bit MurmurHash implementation.
  *
@@ -114,3 +116,4 @@ uint64_t murmur_hash(const void *key, size_t len, uint64_t seed)
 
 	return h;
 }
+#pragma GCC diagnostic pop

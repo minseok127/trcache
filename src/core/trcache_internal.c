@@ -238,7 +238,8 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 	}
 
 	/* First, find it from the thread local cache */
-	symbol_id = (int) ht_find(tls_data_ptr->local_symbol_id_map, symbol_str,
+	symbol_id = (int)(intptr_t) ht_find(tls_data_ptr->local_symbol_id_map,
+		symbol_str,
 		strlen(symbol_str) + 1, /* string + NULL */
 		&found);
 
@@ -358,7 +359,7 @@ void trcache_feed_trade_data(struct trcache *tc,
 	 */
 	if (trd_databuf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
 		list_empty(&tls_data_ptr->local_free_list)) {
-		for (int i = 0; i < tls_data_ptr->local_trd_databuf_vec->size; i++) {
+		for (size_t i = 0; i < tls_data_ptr->local_trd_databuf_vec->size; i++) {
 			buf = (struct trade_data_buffer *) vector_at(
 				tls_data_ptr->local_trd_databuf_vec, i);
 

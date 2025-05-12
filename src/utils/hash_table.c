@@ -65,7 +65,8 @@ struct ht_hash_table {
  *
  * @return Index in [0, capacity).
  */
-static size_t ht_index(const struct ht_hash_table *t, void *key, size_t len)
+static size_t ht_index(const struct ht_hash_table *t, const void *key,
+	size_t len)
 {
 	uint32_t h = t->hash_func(key, len, t->seed);
 	return (size_t)(h & (t->capacity - 1)); /* capacity always power of two */
@@ -132,9 +133,10 @@ static int default_cmp_func(const void *key1,
 static void *default_dup_func(const void *key,
 	size_t len __attribute__((unused)))
 {
-	return key;
+	return (void *)key;
 }
-static void default_free_func(void *key, size_t len)
+static void default_free_func(void *key __attribute__((unused)), 
+	size_t len __attribute__((unused)))
 {
 }
 

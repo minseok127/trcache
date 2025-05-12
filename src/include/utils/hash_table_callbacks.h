@@ -37,7 +37,7 @@ int compare_symbol_str(const void *symbol_str_1,
  * @param symbol_str: Pointer returned by duplicate_symbol_str.
  * @param len:        Length of string in bytes (unused).
  */
-void free_symbol_str(const void *symbol_str, size_t len);
+void free_symbol_str(void *symbol_str, size_t len);
 
 /**
  * @brief 64-bit MurmurHash implementation.
