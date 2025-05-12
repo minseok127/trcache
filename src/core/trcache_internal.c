@@ -94,7 +94,7 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	}
 
 	if (tls_data->local_trd_databuf_vec != NULL) {
-		for (int i = 0; i < tls_data->local_trd_databuf_vec->size; i++) {
+		for (size_t i = 0; i < tls_data->local_trd_databuf_vec->size; i++) {
 			buf = (struct trade_data_buffer *) vector_at(
 				tls_data->local_trd_databuf_vec, i);
 			trade_data_buffer_destroy(buf);

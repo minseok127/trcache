@@ -14,6 +14,7 @@ extern "C" {
  * stated.
  */
 
+#include <alloca.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>

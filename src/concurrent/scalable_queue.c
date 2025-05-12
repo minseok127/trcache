@@ -10,7 +10,7 @@
 #include "concurrent/scalable_queue.h"
 
 #define MAX_SCQ_NUM (1024)
-#define MAX_THREAD_NUM (TRCACHE_MAX_WORKER_THREAD_NUM)
+#define MAX_THREAD_NUM (1024)
 
 /*
  * scq_node - Linked list node

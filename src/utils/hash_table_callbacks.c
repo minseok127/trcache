@@ -71,7 +71,7 @@ void free_symbol_str(const void *key, size_t len)
  *
  * @return 64-bit hash value.
  */
-uint64_t murmur_hash(const void *key, size_t len, uint32_t seed)
+uint64_t murmur_hash(const void *key, size_t len, uint64_t seed)
 {
 	const uint64_t m = 0xc6a4a7935bd1e995ULL;
 	const int r = 47;

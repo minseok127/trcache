@@ -16,9 +16,9 @@ endif
 
 PROJECT_ROOT := $(realpath .)
 SRC_DIR := src
-SUBDIRS := concurrent
+SUBDIRS := concurrent core utils
 
-OBJS := $(foreach dir, $(SUBDIRS), $(wildcard $(SRC_DIR)/$(dir)/*.o))
+OBJS = $(foreach dir,$(SUBDIRS),$(wildcard $(SRC_DIR)/$(dir)/*.o))
 
 INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 
@@ -31,7 +31,7 @@ all:
 	@for dir in $(SUBDIRS); do \
 		$(MAKE) -C $(SRC_DIR)/$$dir CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)"; \
 	done
-	$(AR) src $(STATIC_LIB) $(OBJS)
+	$(AR) rcs $(STATIC_LIB) $(OBJS)
 	$(CC) -shared -o $(SHARED_LIB) $(OBJS)
 
 clean:

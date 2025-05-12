@@ -50,7 +50,7 @@
 
 #include <assert.h>
 
-#include "atomsnap.h"
+#include "concurrent/atomsnap.h"
 
 #define OUTER_REF_CNT	(0x0001000000000000ULL)
 #define OUTER_REF_MASK	(0xffff000000000000ULL)

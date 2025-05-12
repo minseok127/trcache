@@ -41,7 +41,7 @@ struct trcache_tls_data {
  * @pthread_trcache_key:     Key for pthread_get/setspecific
  * @tls_id_mutex:            Protects allocation/release of thread IDs
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use
- * @tls_data_ptr_arr:        _Atomic pointers to each thread’s tls_data
+ * @tls_data_ptr_arr:        Pointers to each thread’s tls_data
  * @symbol_table:            Abstracted symbol table (public + admin)
  * @candle_type_flags:       Candle type configuration flags
  * @num_candle_types:        Number of candle types
@@ -53,7 +53,7 @@ struct trcache {
 	pthread_key_t pthread_trcache_key;
 	pthread_mutex_t tls_id_mutex;
 	_Atomic int tls_id_assigned_flag[MAX_NUM_THREADS];
-	_Atomic struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
+	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 	struct symbol_table *symbol_table;
 	trcache_candle_type_flags candle_type_flags;
 	int num_candle_types;

@@ -3,6 +3,7 @@
  * @brief  Heap-side implementation of contiguous, SIMD-aligned batches.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "trcache.h"
