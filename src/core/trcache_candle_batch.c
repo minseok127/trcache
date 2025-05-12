@@ -82,7 +82,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 	off_first_tid = align_up(off_first_ts + u64b, a);
 	off_ts_interval = align_up(off_first_tid + u64b, a);
 	off_tid_interval = align_up(off_ts_interval + u32b, a);
-	off_open = align_up(off_last + u32b, a);
+	off_open = align_up(off_tid_interval + u32b, a);
 	off_high = align_up(off_open + dblb, a);
 	off_low = align_up(off_high + dblb, a);
 	off_close = align_up(off_low + dblb, a);
