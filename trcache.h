@@ -180,7 +180,7 @@ typedef struct trcache_candle_batch {
  *      NULL) to free any resources associated with the handle.
  */
 typedef struct trcache_flush_ops {
-	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *ctx);
+	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
 	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
 	void (*destroy_handle)(void *handle, void *destroy_handle_ctx);
 	void *flush_ctx;
