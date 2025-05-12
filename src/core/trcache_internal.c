@@ -238,7 +238,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 	}
 
 	/* First, find it from the thread local cache */
-	symbol_id = (int)(intptr_t) ht_find(tls_data_ptr->local_symbol_id_map,
+	symbol_id = (int)(uintptr_t) ht_find(tls_data_ptr->local_symbol_id_map,
 		symbol_str,
 		strlen(symbol_str) + 1, /* string + NULL */
 		&found);

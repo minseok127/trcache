@@ -101,7 +101,7 @@ init_public_symbol_table(int initial_capacity)
 
 	/* Install initial empty version */
 	symbol_array_version = atomsnap_make_version(table->symbol_array_gate,
-		(void *)(intptr_t)initial_capacity);
+		(void *)(uintptr_t)initial_capacity);
 	if (symbol_array_version == NULL) {
 		fprintf(stderr, "init_public_symbol_tabe: atomsnap_make_version failed\n");
 		atomsnap_destroy_gate(table->symbol_array_gate);
@@ -317,7 +317,7 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 
 	pthread_mutex_lock(&table->ht_hash_table_mutex);
 
-	symbol_id = (int)(intptr_t) ht_find(table->symbol_id_map, symbol_str,
+	symbol_id = (int)(uintptr_t) ht_find(table->symbol_id_map, symbol_str,
 		strlen(symbol_str) + 1, /* string + NULL */
 		&found);
 
@@ -395,7 +395,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 		newcap = oldcap * 2;
 
 		new_version = atomsnap_make_version(pub_symbol_table->symbol_array_gate,
-			(void *)(intptr_t) newcap);
+			(void *)(uintptr_t) newcap);
 
 		if (new_version == NULL) {
 			fprintf(stderr, "symbol_table_register: new_version alloc failed\n");
