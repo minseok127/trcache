@@ -78,7 +78,7 @@ init_public_symbol_table(int initial_capacity)
 		.atomsnap_free_impl = symbol_array_version_free
 	};
 
-	struct atomsnap_version *symbol_array_version = NULL;
+	struct atomsnap_version *symbol_ptr_array_version = NULL;
 
 	struct public_symbol_table *table
 		= malloc(sizeof(struct public_symbol_table));
@@ -92,24 +92,25 @@ init_public_symbol_table(int initial_capacity)
 	table->capacity = initial_capacity;
 
 	/* Create gate for version management */
-	table->symbol_array_gate = atomsnap_init_gate(&ctx);
-	if (table->symbol_array_gate == NULL) {
+	table->symbol_ptr_array_gate = atomsnap_init_gate(&ctx);
+	if (table->symbol_ptr_array_gate == NULL) {
 		fprintf(stderr, "init_public_symbol_table: atomsnap_init_gate failed\n");
 		free(table);
 		return NULL;
 	}
 
 	/* Install initial empty version */
-	symbol_array_version = atomsnap_make_version(table->symbol_array_gate,
-		(void *)(uintptr_t)initial_capacity);
-	if (symbol_array_version == NULL) {
+	symbol_ptr_array_version = atomsnap_make_version(
+		table->symbol_ptr_array_gate, (void *)(uintptr_t)initial_capacity);
+	if (symbol_ptr_array_version == NULL) {
 		fprintf(stderr, "init_public_symbol_tabe: atomsnap_make_version failed\n");
-		atomsnap_destroy_gate(table->symbol_array_gate);
+		atomsnap_destroy_gate(table->symbol_ptr_array_gate);
 		free(table);
 		return NULL;
 	}
 
-	atomsnap_exchange_version(table->symbol_array_gate, symbol_array_version);
+	atomsnap_exchange_version(table->symbol_ptr_array_gate,
+		symbol_ptr_array_version);
 
 	return table;
 }
@@ -122,23 +123,23 @@ init_public_symbol_table(int initial_capacity)
 static void
 destroy_public_symbol_table(struct public_symbol_table *table)
 {
-	struct public_symbol_entry **symbol_array = NULL;
+	struct public_symbol_entry **symbol_ptr_array = NULL;
 	struct atomsnap_version *version = NULL;
 
 	if (table == NULL) {
 		return;
 	}
 
-	version = atomsnap_acquire_version(table->symbol_array_gate);
-	symbol_array = (struct public_symbol_entry **) version->object;
+	version = atomsnap_acquire_version(table->symbol_ptr_array_gate);
+	symbol_ptr_array = (struct public_symbol_entry **) version->object;
 
 	for (int i = 0; i < table->num_symbols; i++) {
-		free(symbol_array[i]->symbol_str);
-		free(symbol_array[i]);
+		free(symbol_ptr_array[i]->symbol_str);
+		free(symbol_ptr_array[i]);
 	}
 
 	symbol_array_version_free(version);
-	atomsnap_destroy_gate(table->symbol_array_gate);
+	atomsnap_destroy_gate(table->symbol_ptr_array_gate);
 	free(table);
 }
 
@@ -163,9 +164,9 @@ init_admin_symbol_table(int initial_capacity)
 
 	table->num_symbols = 0;
 	table->capacity = initial_capacity;
-	table->symbol_array = calloc(1, initial_capacity * sizeof(void *));
+	table->symbol_ptr_array = calloc(1, initial_capacity * sizeof(void *));
 
-	if (table->symbol_array == NULL) {
+	if (table->symbol_ptr_array == NULL) {
 		fprintf(stderr, "init_admin_symbol_table: calloc failed\n");
 		free(table);
 		return NULL;
@@ -187,10 +188,10 @@ destroy_admin_symbol_table(struct admin_symbol_table *table)
 	}
 
 	for (int i = 0; i < table->num_symbols; i++) {
-		free(table->symbol_array[i]);
+		free(table->symbol_ptr_array[i]);
 	}
 
-	free(table->symbol_array);
+	free(table->symbol_ptr_array);
 	free(table);
 }
 
@@ -287,13 +288,13 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 {
 	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
 	struct atomsnap_version *version =
-		atomsnap_acquire_version(pub_symbol_table->symbol_array_gate);
-	struct public_symbol_entry **array =
+		atomsnap_acquire_version(pub_symbol_table->symbol_ptr_array_gate);
+	struct public_symbol_entry **ptr_array =
 		(struct public_symbol_entry **) version->object;
 	struct public_symbol_entry *result = NULL;
 
 	if (symbol_id >= 0 && symbol_id < pub_symbol_table->num_symbols) {
-		result = array[symbol_id];
+		result = ptr_array[symbol_id];
 	}
 
 	atomsnap_release_version(version);
@@ -386,7 +387,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 		return -1;
 	}
 
-	version = atomsnap_acquire_version(pub_symbol_table->symbol_array_gate);
+	version = atomsnap_acquire_version(pub_symbol_table->symbol_ptr_array_gate);
 	symbol_array = (struct public_symbol_entry **) version->object;
 	oldcap = pub_symbol_table->capacity;
 
@@ -394,8 +395,8 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 	if (id >= oldcap) {
 		newcap = oldcap * 2;
 
-		new_version = atomsnap_make_version(pub_symbol_table->symbol_array_gate,
-			(void *)(uintptr_t) newcap);
+		new_version = atomsnap_make_version(
+			pub_symbol_table->symbol_ptr_array_gate, (void *)(uintptr_t)newcap);
 
 		if (new_version == NULL) {
 			fprintf(stderr, "symbol_table_register: new_version alloc failed\n");
@@ -411,8 +412,8 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 
 		symbol_array = (struct public_symbol_entry **) new_version->object;
 
-		atomsnap_exchange_version(pub_symbol_table->symbol_array_gate,
-			new_version);
+		atomsnap_exchange_version(
+			pub_symbol_table->symbol_ptr_array_gate, new_version);
 	}
 
 	symbol_array[id] = init_public_symbol_entry(id, symbol_str);

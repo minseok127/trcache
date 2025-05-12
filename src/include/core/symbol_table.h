@@ -16,15 +16,15 @@ struct public_symbol_entry {
 /*
  * public_symbol_table - Lock-free table of public symbols.
  *
- * @symbol_array_gate: Gate for snapshot versioning
- * @num_symbols:       Number of registered symbols
- * @capacity:          Allocated array capacity
+ * @symbol_ptr_array_gate: Gate for snapshot versioning
+ * @num_symbols:           Number of registered symbols
+ * @capacity:              Allocated array capacity
  *
  * This table holds the symbol entries accessed by both user and system threads.
  * Synchronization for table expansion is handled through atomsnap.
  */
 struct public_symbol_table {
-	struct atomsnap_gate *symbol_array_gate;
+	struct atomsnap_gate *symbol_ptr_array_gate;
 	int num_symbols;
 	int capacity;
 };
@@ -47,9 +47,9 @@ struct admin_symbol_entry {
 /*
  * admin_symbol_table - Admin-only symbol table.
  *
- * @symbol_array: Array of admin entries
- * @num_symbols:  Number of entries
- * @capacity:     Allocated array capacity
+ * @symbol_ptr_array: Array of admin entries
+ * @num_symbols:      Number of entries
+ * @capacity:         Allocated array capacity
  *
  * This is a symbol table accessed only by the admin thread. The admin thread
  * continuously monitors the number of symbols in the public symbol table and
@@ -57,7 +57,7 @@ struct admin_symbol_entry {
  * synchronization is needed during expansion.
  */
 struct admin_symbol_table {
-	struct admin_symbol_entry **symbol_array;
+	struct admin_symbol_entry **symbol_ptr_array;
 	int num_symbols;
 	int capacity;
 };
