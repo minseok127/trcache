@@ -302,20 +302,23 @@ static inline void *trcache_align_up_ptr(void *p, size_t a)
  * alignment via #trc_align_up_ptr.  The stack memory lives as long as the
  * caller's frame is active—no explicit free is required.
  *
- * @param dst [out]: Pre-declared #trcache_candle_batch object to populate.
- * @param n:         Number of candle rows to allocate (must be > 0).
+ * @param dst [out]:   Pre-declared #trcache_candle_batch object to populate.
+ * @param num_candles: Number of candle rows to allocate (must be > 0).
  *
  * @note All pointers inside @p dst point into the caller's stack frame.
  */
-static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst,
-	int num_candles)
+static inline void trcache_batch_alloc_on_stack(
+	struct trcache_candle_batch *dst, int num_candles)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
-	size_t u64b = (size_t)n * sizeof(uint64_t);
-	size_t dblb = (size_t)n * sizeof(double);
+	size_t u64b = (size_t)num_candles * sizeof(uint64_t);
+	size_t u32b = (size_t)num_candles * sizeof(uint32_t);
+	size_t dblb = (size_t)num_candles * sizeof(double);
 
-	uint8_t *buf_ft = alloca(u64b + a - 1);
-	uint8_t *buf_lt = alloca(u64b + a - 1);
+	uint8_t *buf_fts = alloca(u64b + a - 1);
+	uint8_t *buf_ftid = alloca(u64b + a - 1);
+	uint8_t *buf_ts_itv = alloca(u32b + a - 1);
+	uint8_t *buf_tid_itv = alloca(u32b + a - 1);
 	uint8_t *buf_op = alloca(dblb + a - 1);
 	uint8_t *buf_hi = alloca(dblb + a - 1);
 	uint8_t *buf_lo = alloca(dblb + a - 1);
@@ -323,13 +326,17 @@ static inline void trcache_batch_alloc_on_stack(struct trcache_candle_batch *dst
 	uint8_t *buf_vol = alloca(dblb + a - 1);
 
 	dst->num_candles = num_candles;
-	dst->first_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ft,  a);
-	dst->last_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_lt,  a);
-	dst->open_array = (double *)trc_align_up_ptr(buf_op, a);
-	dst->high_array = (double *)trc_align_up_ptr(buf_hi, a);
-	dst->low_array = (double *)trc_align_up_ptr(buf_lo, a);
-	dst->close_array = (double *)trc_align_up_ptr(buf_cl, a);
-	dst->volume_array = (double *)trc_align_up_ptr(buf_vol, a);
+	dst->first_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_fts, a);
+	dst->first_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_ftid, a);
+	dst->timestamp_interval_array
+		= (uint32_t *)trcache_align_up_ptr(buf_ts_itv, a);
+	dst->trade_id_interval_array
+		= (uint32_t *)trcache_align_up_ptr(buf_tid_itv, a);
+	dst->open_array = (double *)trcache_align_up_ptr(buf_op, a);
+	dst->high_array = (double *)trcache_align_up_ptr(buf_hi, a);
+	dst->low_array = (double *)trcache_align_up_ptr(buf_lo, a);
+	dst->close_array = (double *)trcache_align_up_ptr(buf_cl, a);
+	dst->volume_array = (double *)trcache_align_up_ptr(buf_vol, a);
 }
 
 /**
