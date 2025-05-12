@@ -140,14 +140,11 @@ static void trcache_per_thread_destructor(void *value)
 /**
  * @brief Initialize trcache, set up TLS key and symbol table.
  *
- * @param num_worker_threads: Expected number of threads.
- * @param flush_threshold:    Flush threshold value.
- * @param candle_type_flags:  Data type flags.
+ * @param  ctx: Pointer to a fully-initialised #trcache_init_ctx.
  *
  * @return Pointer to new trcache, or NULL on failure.
  */
-struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
-	trcache_candle_type_flags candle_type_flags)
+struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
 	struct trcache *tc = calloc(1, sizeof(struct trcache));
 	int ret;
@@ -176,10 +173,12 @@ struct trcache *trcache_init(int num_worker_threads, int flush_threshold,
 		return NULL;
 	}
 
-	tc->num_candle_types = trcache_candle_type_count(candle_type_flags);
-	tc->num_workers = num_worker_threads;
-	tc->candle_type_flags = candle_type_flags;
-	tc->flush_threshold = flush_threshold;
+	tc->num_candle_types = trcache_candle_type_count(ctx->candle_type_flags);
+	tc->num_workers = ctx->num_worker_threads;
+	tc->candle_type_flags = ctx->candle_type_flags;
+	tc->flush_threshold_batches = ctx->flush_threshold_batches;
+	tc->batch_candle_count = ctx->batch_candle_count;
+	tc->flush_ops = ctx->flush_ops;
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 

@@ -38,15 +38,16 @@ struct trcache_tls_data {
 /*
  * trcache - trcache internal state.
  *
- * @pthread_trcache_key:   Key for pthread_get/setspecific
- * @tls_id_mutex:          Protects allocation/release of thread IDs
- * @tls_id_assigned_flag:  _Atomic flags, which slots are in use
- * @tls_data_ptr_arr:      _Atomic pointers to each thread’s tls_data
- * @symbol_table:          Abstracted symbol table (public + admin)
- * @candle_type_flags:     Candle type configuration flags
- * @num_candle_types:      Number of candle types
- * @num_workers:           Number of worker threads
- * @flush_threshold:       Buffer flush threshold
+ * @pthread_trcache_key:     Key for pthread_get/setspecific
+ * @tls_id_mutex:            Protects allocation/release of thread IDs
+ * @tls_id_assigned_flag:    _Atomic flags, which slots are in use
+ * @tls_data_ptr_arr:        _Atomic pointers to each thread’s tls_data
+ * @symbol_table:            Abstracted symbol table (public + admin)
+ * @candle_type_flags:       Candle type configuration flags
+ * @num_candle_types:        Number of candle types
+ * @num_workers:             Number of worker threads
+ * @flush_threshold_batches: How many candle batches to buffer before flush
+ * @flush_ops:               User-supplied callbacks used for flush.
  */
 struct trcache {
 	pthread_key_t pthread_trcache_key;
@@ -57,7 +58,9 @@ struct trcache {
 	trcache_candle_type_flags candle_type_flags;
 	int num_candle_types;
 	int num_workers;
-	int flush_threshold;
+	int batch_candle_count;
+	int flush_threshold_batches;
+	struct trcache_flush_ops flush_ops;
 };
 
 /**
