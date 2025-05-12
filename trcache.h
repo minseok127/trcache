@@ -181,8 +181,8 @@ typedef struct trcache_candle_batch {
  */
 typedef struct trcache_flush_ops {
 	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *ctx);
-	bool  (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
-	void  (*destroy_handle)(void *handle, void *destroy_handle_ctx);
+	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
+	void (*destroy_handle)(void *handle, void *destroy_handle_ctx);
 	void *flush_ctx;
 	void *destroy_handle_ctx;
 } trcache_flush_ops;
