@@ -352,6 +352,7 @@ static struct public_symbol_entry *init_public_symbol_entry(int id,
 
 	if (entry->symbol_str == NULL) {
 		fprintf(stderr, "init_public_symbol_entry: symbol_str alloc failed\n");
+		free(entry);
 		return NULL;
 	}
 
