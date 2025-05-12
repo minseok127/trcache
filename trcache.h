@@ -157,10 +157,11 @@ typedef struct trcache_candle_batch {
 /*
  * trcache_flush_ops - User-defined batch flush operation callbacks
  *
- * @ctx:             User‑supplied opaque pointer, forwarded to every call.
- * @flush:           User-defined batch flush function.
- * @is_done:         Checks whether the asynchronous flush has completed.
- * @destroy_handle:  Cleans up resources associated with the async handle.
+ * @flush:              User-defined batch flush function.
+ * @is_done:            Checks whether the asynchronous flush has completed.
+ * @destroy_handle:     Cleans up resources associated with the async handle.
+ * @flush_ctx:          User‑supplied pointer, passed into @flush()
+ * @destroy_handle_ctx: User-supplied pointer, passed into @destroy_handle().
  *
  * This structure lets applications plug in either synchronous or asynchronous
  * flush logic without changing the core engine.
@@ -177,15 +178,13 @@ typedef struct trcache_candle_batch {
  *      keep that handle and periodically call @is_done until it returns true.
  *      After completion the worker will call @destroy_handle (if it is not
  *      NULL) to free any resources associated with the handle.
- *
- * All callbacks receive the @ctx value unchanged so you can carry arbitrary
- * per‑application state.
  */
 typedef struct trcache_flush_ops {
-	void  *ctx;
-	void *(*flush)(struct trcache_candle_batch *batch, void *ctx);
-	bool  (*is_done)(void *handle, void *ctx);
-	void  (*destroy_handle)(void *handle, void *ctx);
+	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *ctx);
+	bool  (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
+	void  (*destroy_handle)(void *handle, void *destroy_handle_ctx);
+	void *flush_ctx;
+	void *destroy_handle_ctx;
 } trcache_flush_ops;
 
 /**
