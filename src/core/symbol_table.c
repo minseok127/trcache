@@ -122,10 +122,22 @@ init_public_symbol_table(int initial_capacity)
 static void
 destroy_public_symbol_table(struct public_symbol_table *table)
 {
+	struct public_symbol_entry **symbol_array = NULL;
+	struct atomsnap_version *version = NULL;
+
 	if (table == NULL) {
 		return;
 	}
 
+	version = atomsnap_acquire_version(table->symbol_array_gate);
+	symbol_array = (struct public_symbol_entry **) version->object;
+
+	for (int i = 0; i < table->num_symbols; i++) {
+		free(symbol_array[i]->symbol_str);
+		free(symbol_array[i]);
+	}
+
+	free(symbol_array);
 	atomsnap_destroy_gate(table->symbol_array_gate);
 	free(table);
 }
@@ -172,6 +184,10 @@ destroy_admin_symbol_table(struct admin_symbol_table *table)
 {
 	if (table == NULL) {
 		return;
+	}
+
+	for (int i = 0; i < table->num_symbols; i++) {
+		free(table->symbol_array[i]);
 	}
 
 	free(table->symbol_array);
@@ -313,11 +329,13 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 /**
  * @brief Allocate a new public symbol entry.
  *
- * @param id: Symbol ID to assign.
+ * @param id:         Symbol ID to assign.
+ * @param symbol_str: Symbol string to assign.
  *
  * @return Pointer to entry, or NULL on failure.
  */
-static struct public_symbol_entry *init_public_symbol_entry(int id)
+static struct public_symbol_entry *init_public_symbol_entry(int id, 
+	const char *symbol_str)
 {
 	struct public_symbol_entry *entry = malloc(
 		sizeof(struct public_symbol_entry));
@@ -328,6 +346,8 @@ static struct public_symbol_entry *init_public_symbol_entry(int id)
 	}
 
 	entry->id = id;
+	entry->symbol_str = duplicate_symbol_str(symbol_str,
+		strlen(symbol_str) + 1);
 
 	return entry;
 }
@@ -388,7 +408,13 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 			new_version);
 	}
 
-	symbol_array[id] = init_public_symbol_entry(id);
+	symbol_array[id] = init_public_symbol_entry(id, symbol_str);
+
+	if (symbol_array[id] == NULL) {
+		atomsnap_release_version(version);
+		pthread_mutex_unlock(&table->ht_hash_table_mutex);
+		return -1;
+	}
 
 	pub_symbol_table->num_symbols++;
 

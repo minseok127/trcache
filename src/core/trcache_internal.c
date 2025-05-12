@@ -267,6 +267,26 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 }
 
 /**
+ * @brief Lookup symbol string by its symbol id.
+ *
+ * @param   tc:         Handle from trcache_init().
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ *
+ * @return  NULL_terminated symbol string.
+ */
+const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
+{
+	struct public_symbol_entry *pub_symbol_entry
+		= symbol_table_lookup_public_entry(tc->symbol_table, symbol_id);
+
+	if (pub_symbol_entry == NULL) {
+		return NULL;
+	}
+
+	return pub_symbol_entry->symbol_str;
+}
+
+/**
  * @brief Stub for feeding trade data.
  *
  * @param tc:        Pointer to trcache instance.

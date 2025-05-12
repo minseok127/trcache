@@ -1,29 +1,12 @@
-#ifndef CANDLE_CHUNK_H
-#define CANDLE_CHUNK_H
-
-/*
- * candle_chunk.h - Row-to-column staging unit for a single candle sequence range.
- *
- * A *candle-chunk* owns:
- *   • TRCACHE_NUM_ROW_PAGES lazily-allocated row pages
- *   • one column (SoA) buffer that a copier thread fills
- *   • an atomsnap_gate whose *slot 0 … N-1* hold versioned pointers
- *     to the row pages (NULL ⇒ not yet allocated or already copied)
- *
- * SoA (Structure-of-Arrays) layout bundles each candle field into a
- * separate aligned array, enabling wide SIMD loads / stores.
- */
+#ifndef CANDLE_CHUNK_LIST_H
+#define CANDLE_CHUNK_LIST_H
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
 
 #include "concurrent/atomsnap.h"
-#include "trcache.h"            /* struct trcache_candle */
-
-#ifndef __cacheline_aligned
-#define __cacheline_aligned __attribute__((aligned(64)))
-#endif /* __cacheline_aligned */
+#include "trcache.h"
 
 /* ---- Tunables -------------------------------------------------------- */
 
@@ -41,12 +24,10 @@
  * candle_row_page - 4 KiB array of row-oriented candles.
  *
  * @rows:        Fixed AoS storage for TRCACHE_ROWS_PER_PAGE candles
- * @num_filled:  How many rows the producer has written so far
  */
 struct candle_row_page {
 	struct trcache_candle rows[TRCACHE_ROWS_PER_PAGE];
-	_Atomic int num_filled;
-} __cacheline_aligned;
+};
 
 /*
  * candle_chunk - Owns a sequence window of candles.
@@ -65,7 +46,57 @@ struct candle_chunk {
 	struct trcache_candle_batch *column_batch;
 	_Atomic uint64_t last_row_completed;
 	_Atomic uint64_t last_row_copied;
-} __cacheline_aligned;
+};
+
+/*
+ * candle_chunk_mutate_handle - Writer handle for a single mutable row.
+ *
+ * @page_version:   Atomsnap version held
+ * @row_ptr:        Pointer to mutable row
+ * @seq:            Sequence number of the row
+ * @num_mutated:    How many mutation applied
+ */
+struct candle_chunk_mutate_handle {
+	struct atomsnap_version *page_version;
+	struct trcache_candle *row_ptr;
+	uint64_t seq;
+	int num_mutated;
+};
+
+/*
+ * candle_chunk_copy_handle - Converter handle for row -> column batch copy.
+ *
+ * @page_version: Atomsnap version held
+ * @row_base:     Pointer to first row
+ * @start_seq:    First sequence copied
+ * @row_count:    Number of rows
+ * @num_copied:   How many rows are copied
+ *
+ * This is filled by candle_chunk_acquire_completed_rows() and must be passed
+ * unchanged to candle_chunk_commit_copied_rows().
+ */
+struct candle_chunk_copy_handle {
+	struct atomsnap_version *page_version;
+	const struct trcache_candle *row_base;
+	uint64_t start_seq;
+	int row_count;
+	int num_copied;
+};
+
+/*
+ * candle_chunk_flush_handle - Flush‑worker handle.
+ *
+ * @chunk: chunkt to flush
+ */
+struct candle_chunk_flush_handle {
+	struct candle_chunk *chunk;
+};
+
+struct candle_chunk_list {
+	struct candle_chunk_mutate_handle mutate_handle;
+	struct candle_chunk_copy_handle copy_handle;
+	struct candle_chunk_flush_handle flush_handle;
+};
 
 /**
  * @brief   Translate @seq into a row-page slot index.
@@ -78,38 +109,49 @@ static inline int candle_chunk_page_idx(const struct candle_chunk *chunk,
 	return (int)((seq - chunk->seq_begin) / TRCACHE_ROWS_PER_PAGE);
 }
 
+/**
+ * @brief Allocate and initialize a candle chunk.
+ *
+ * @param seq_begin: first sequence number contained in this chunk (inclusive).
+ *
+ * The function sets up an atomsnap gate with one slot per row page.
+ * Each slot lazily materializes its row page through row_page_version_alloc().
+ *
+ * @return Pointer to the new chunk, or NULL on failure.
+ */
 struct candle_chunk *candle_chunk_create(uint64_t seq_begin);
 
+/**
+ * @brief Release all resources of a candle chunk.
+ *
+ * @param chunk: Candle-chunk pointer.
+ */
 void candle_chunk_destroy(struct candle_chunk *chunk);
 
 /**
  * @brief   Obtain (and possibly lazily allocate) the mutable row that must
  *          receive the next trade-data update.
  *
- * @param   ck          Candle-chunk pointer.
- * @param   row_out     [out]  Pointer that will receive the trcache_candle row.
- * @param   out_seq     [out]  Absolute sequence number of that row.
+ * @param   chunk:         Candle-chunk pointer.
+ * @param   handle [out]:  Output handle filled with mutable candle.
  *
- * @return  0 on success, −1 on error (e.g. chunk full / NULL arg).
- *
- * The producer writes trade fields directly into *row_out.  Internal
- * allocation of a fresh page (and its atomsnap gate registration) is done
- * transparently if the row lives on a not-yet-materialised page.
+ * Internal allocation of a fresh page (and its atomsnap gate registration) is
+ * done transparently if the row lives on a not-yet-materialised page.
  */
-int candle_chunk_get_mutable_row(struct candle_chunk *ck,
-	struct trcache_candle **row_out, int *out_seq);
+void candle_chunk_get_mutable_row(struct candle_chunk *chunk,
+	struct candle_chunk_mutate_handle *handle);
 
 /**
  * @brief   Declare that the row @seq_complete has met the "candle-completed"
  *          condition (OHLCV closed).
  *
- * @param   ck              Candle-chunk pointer.
- * @param   seq_complete    Sequence number of the finished row.
+ * @param   chunk:        Candle-chunk pointer.
+ * @param   handle:       Handle filled with mutated candle.
  *
  * Side-effect: updates the chunk’s @last_row_completed.
  */
-void candle_chunk_mark_row_complete(struct candle_chunk *ck, int seq_complete);
-
+void candle_chunk_commit_immutable_row(struct candle_chunk *chunk,
+	const struct candle_chunk_mutate_handle *handle);
 
 /**
  * @brief        Get the next contiguous range of *completed-but-uncopied*
@@ -121,19 +163,14 @@ void candle_chunk_mark_row_complete(struct candle_chunk *ck, int seq_complete);
  * Internally the routine acquires the page’s atomsnap version so the
  * memory stays valid until the matching commit.
  *
- * @param ck               Candle-chunk handle.
- * @param first_seq_ret    [out] absolute sequence number of the first row
- *                                  in the returned range.
- * @param nrows_ret        [out] number of rows in the range  
- *                                  (0 ⇒ no more work).
- * @param row_base_ret     [out] pointer to the first row of the range.
+ * @param chunk:         Candle-chunk pointer.
+ * @param handle [out]:  Output handle filled with completed candles.
  *
  * @return 'true'  if there are remained rows in a next page.
  *         'false' if nothing is left to copy.
  */
-bool candle_chunk_acquire_completed_rows(struct candle_chunk *ck,
-	int *first_seq_ret, int *nrows_ret,
-	const struct trcache_candle **row_base_ret);
+bool candle_chunk_acquire_completed_rows(struct candle_chunk *chunk,
+	struct candle_chunk_copy_handle *handle);
 
 /**
  * @brief        Commit that every row up-to @p last_seq_copied (inclusive)
@@ -144,12 +181,12 @@ bool candle_chunk_acquire_completed_rows(struct candle_chunk *ck,
  *   - releases (and, if fully migrated, NULL-ifies) the row-page’s
  *     atomsnap version that was held by the preceding *acquire*.
  *
- * @param ck                Candle-chunk handle.
- * @param last_seq_copied   highest sequence number just copied to SoA.
+ * @param chunk:  Candle-chunk pointer.
+ * @param handle: Handle filled with copied candles. 
  */
 void candle_chunk_commit_copied_rows(struct candle_chunk *ck,
-	int last_seq_copied);
+	const struct candle_chunk_copy_handle *handle);
 
 
-#endif /* CANDLE_CHUNK_H */
+#endif /* CANDLE_CHUNK_LIST_H */
 

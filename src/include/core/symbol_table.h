@@ -9,6 +9,7 @@
 
 /* Publicly visible symbol entry. */
 struct public_symbol_entry {
+	char *symbol_str;
 	int id;
 };
 
