@@ -98,7 +98,17 @@ typedef enum {
 typedef uint32_t trcache_candle_field_flags;
 
 /*
- * A single candle data structured in row-oriented format.
+ * trcache_candle - Single candle data structured in row-oriented format.
+ *
+ * @first_timestamp:    Unix epoch in milliseconds of the first trade.
+ * @first_trade_id:     Trade-ID of the first trade in the candle.
+ * @timestamp_interval: Time interval of the candle in milliseconds.
+ * @trade_id_interval:  Number of trades that make up the candle.
+ * @open:               Price of the very first trade.
+ * @high:               Highest traded price inside the candle.
+ * @low:                Lowest traded price inside the candle.
+ * @close:              Price of the very last trade.
+ * @volume:             Sum of traded volume.
  */
 typedef struct trcache_candle {
 	uint64_t first_timestamp;
@@ -113,12 +123,23 @@ typedef struct trcache_candle {
 } trcache_candle;
 
 /*
- * A collection of multiple candles structured in column-oriented format.
- * All array pointers refer into the **same contiguous block**,
- * whether it was allocated on the stack (via 'alloca') or on the heap.
+ * trcache_candle_batch - Vectorised batch of candles in column-oriented layout.
+ *
+ * @{field}_array: Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned).
+ * @num_candles:   Number of candles stored in every array.
+ * @candle_type:   Engine-defined enum identifying timeframe / n-tick size.
+ * @symbol_id:     Integer symbol ID resolved via the symbol table.
+ *
+ * All array members point into **one contiguous, SIMD-aligned block** so the
+ * whole batch can be freed with a single 'free()' (or just unwound from the
+ * stack if allocated by 'alloca').  Every array has exactly @num_candles
+ * elements and shares the same element order.
+ *
+ * **Alignment note** – The engine guarantees that the starting address of the
+ * block and each array pointer is aligned to 'TRCACHE_SIMD_ALIGN' bytes to
+ * maximise SIMD load/store efficiency.
  */
 typedef struct trcache_candle_batch {
-	/* Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned) */
 	uint64_t *first_timestamp_array;
 	uint64_t *first_trade_id_array;
 	uint32_t *timestamp_interval_array;
@@ -128,12 +149,44 @@ typedef struct trcache_candle_batch {
 	double *low_array;
 	double *close_array;
 	double *volume_array;
-
-	/* Meta fields */
 	int num_candles;
 	int candle_type;
 	int symbol_id;
 } trcache_candle_batch;
+
+/*
+ * trcache_flush_ops - User-defined batch flush operation callbacks
+ *
+ * @ctx:             User‑supplied opaque pointer, forwarded to every call.
+ * @flush:           User-defined batch flush function.
+ * @is_done:         Checks whether the asynchronous flush has completed.
+ * @destroy_handle:  Cleans up resources associated with the async handle.
+ *
+ * This structure lets applications plug in either synchronous or asynchronous
+ * flush logic without changing the core engine.
+ *
+ * The flush worker calls @flush exactly once for every batch that reaches the
+ * fully converted state. User's implementation has two options:
+ *
+ *   1. **Synchronous flush** – Perform the entire operation inside @flush and
+ *      return **NULL**. The engine will treat the batch as flushed
+ *      immediately and will not call @is_done or @destroy_handle.
+ *
+ *   2. **Asynchronous flush** – Initiate the operation inside @flush and return
+ *      **a non‑NULL handle** (any unique pointer or token). The worker will
+ *      keep that handle and periodically call @is_done until it returns true.
+ *      After completion the worker will call @destroy_handle (if it is not
+ *      NULL) to free any resources associated with the handle.
+ *
+ * All callbacks receive the @ctx value unchanged so you can carry arbitrary
+ * per‑application state.
+ */
+typedef struct trcache_flush_ops {
+	void  *ctx;
+	void *(*flush)(struct trcache_candle_batch *batch, void *ctx);
+	bool  (*is_done)(void *handle, void *ctx);
+	void  (*destroy_handle)(void *handle, void *ctx);
+} trcache_flush_ops;
 
 /**
  * @brief Allocate and initialize the top-level trcache.
