@@ -85,8 +85,8 @@ typedef uint32_t trcache_candle_type_flags;
  * fields, so the values should be a power of two.
  */
 typedef enum {
-	TRCACHE_FIRST_TIMESTAMP     = 1 << 0,
-	TRCACHE_FIRST_TRADE_ID      = 1 << 1,
+	TRCACHE_START_TIMESTAMP     = 1 << 0,
+	TRCACHE_START_TRADE_ID      = 1 << 1,
 	TRCACHE_TIMESTAMP_INTERVAL  = 1 << 2,
 	TRCACHE_TRADE_ID_INTERVAL   = 1 << 3,
 	TRCACHE_OPEN                = 1 << 4,
@@ -101,7 +101,8 @@ typedef uint32_t trcache_candle_field_flags;
 /*
  * trcache_candle - Single candle data structured in row-oriented format.
  *
- * @start_timestamp:    Unix epoch in milliseconds of the first trade.
+ * @start_timestamp:    Start timestamp covered by the candle
+ *                      (unix epoch in milliseconds).
  * @start_trade_id:     Trade-ID of the first trade in the candle.
  * @timestamp_interval: Time interval of the candle in milliseconds.
  * @trade_id_interval:  Number of trades that make up the candle.
