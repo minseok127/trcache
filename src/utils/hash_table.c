@@ -21,10 +21,10 @@
 /*
  * ht_item - Single bucket item holding a key, length, value, and next pointer.
  *
- * @key:	Pointer to key data (or 8-byte scalar)
- * @len:	Length of key in bytes
- * @value:	Associated value pointer (or 8-byte scalar)
- * @next:	Next item in bucket chain
+ * @key:	Pointer to key data (or 8-byte scalar).
+ * @len:	Length of key in bytes.
+ * @value:	Associated value pointer (or 8-byte scalar).
+ * @next:	Next item in bucket chain.
  */
 struct ht_item {
 	void *key;
@@ -36,14 +36,14 @@ struct ht_item {
 /*
  * ht_hash_table - Hash table structure.
  *
- * @buckets:	Array of bucket heads (size = capacity)
- * @hash_func:	User-provided hash function
- * @cmp_func:	User-provided key comparison function
- * @dup_func:	User-provided key duplication function
- * @free_func:	User-provided key free function
- * @capacity:	Number of buckets (power of two)
- * @size:       Number of stored key–value pairs
- * @seed:       Hash seed for randomized hashing
+ * @buckets:	Array of bucket heads (size = capacity).
+ * @hash_func:	User-provided hash function.
+ * @cmp_func:	User-provided key comparison function.
+ * @dup_func:	User-provided key duplication function.
+ * @free_func:	User-provided key free function.
+ * @capacity:	Number of buckets (power of two).
+ * @size:       Number of stored key–value pairs.
+ * @seed:       Hash seed for randomized hashing.
  */
 struct ht_hash_table {
 	struct ht_item **buckets;

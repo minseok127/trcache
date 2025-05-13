@@ -20,7 +20,7 @@
 /**
  * @brief   Create and initialize a trade_data_buffer.
  *
- * @param num_cursor:     Number of cursors (candle types) to track
+ * @param num_cursor: Number of cursors (candle types) to track.
  *
  * @return pointer to buffer, or NULL on failure.
  */

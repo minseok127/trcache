@@ -16,9 +16,9 @@ struct public_symbol_entry {
 /*
  * public_symbol_table - Lock-free table of public symbols.
  *
- * @symbol_ptr_array_gate: Gate for snapshot versioning
- * @num_symbols:           Number of registered symbols
- * @capacity:              Allocated array capacity
+ * @symbol_ptr_array_gate: Gate for snapshot versioning.
+ * @num_symbols:           Number of registered symbols.
+ * @capacity:              Allocated array capacity.
  *
  * This table holds the symbol entries accessed by both user and system threads.
  * Synchronization for table expansion is handled through atomsnap.
@@ -32,7 +32,7 @@ struct public_symbol_table {
 /*
  * admin_symbol_entry - Admin-only symbol entry.
  *
- * @pub_symbol_entry_ptr: Corresponding public_symbol_entry
+ * @pub_symbol_entry_ptr: Corresponding public_symbol_entry.
  *
  * This is a data structure accessed only by the admin thread. It holds
  * statistics and pointers associated with a single symbol. It also contains a
@@ -47,9 +47,9 @@ struct admin_symbol_entry {
 /*
  * admin_symbol_table - Admin-only symbol table.
  *
- * @symbol_ptr_array: Array of admin entries
- * @num_symbols:      Number of entries
- * @capacity:         Allocated array capacity
+ * @symbol_ptr_array: Array of admin entries.
+ * @num_symbols:      Number of entries.
+ * @capacity:         Allocated array capacity.
  *
  * This is a symbol table accessed only by the admin thread. The admin thread
  * continuously monitors the number of symbols in the public symbol table and
@@ -65,11 +65,11 @@ struct admin_symbol_table {
 /*
  * symbol_table - Combined public/admin symbol table abstraction.
  *
- * @ht_hash_table_mutex: Protects registration path
- * @symbol_id_map:       Hash table that maps from string to ID
- * @pub_symbol_table:    Lock-free reader table
- * @admin_symbol_table:  Admin-thread-only table
- * @next_symbol_id:      Next ID to assign
+ * @ht_hash_table_mutex: Protects registration path.
+ * @symbol_id_map:       Hash table that maps from string to ID.
+ * @pub_symbol_table:    Lock-free reader table.
+ * @admin_symbol_table:  Admin-thread-only table.
+ * @next_symbol_id:      Next ID to assign.
  *
  * This is an abstracted table that combines the public and admin symbol tables.
  * It manages symbol IDs issued during user symbol registration using a hash

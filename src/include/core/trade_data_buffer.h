@@ -24,10 +24,10 @@
 /*
  * trade_data_chunk - Single chunk storing multiple trade entries.
  *
- * @list_node:           Linked list node
- * @write_idx:           Next write index [0..NUM_TRADE_CHUNK_CAP)
- * @num_consumed_cursor: Atomic count of totally consumed cursor
- * @entries:             Fixed array of data
+ * @list_node:           Linked list node.
+ * @write_idx:           Next write index [0..NUM_TRADE_CHUNK_CAP).
+ * @num_consumed_cursor: Atomic count of totally consumed cursor.
+ * @entries:             Fixed array of data.
  *
  * @note Entries are copied into the chunk; pointer ownership remains with
  *       the caller.
@@ -48,9 +48,9 @@ struct trade_data_chunk {
 /*
  * trade_data_buffer_cursor - Cursor for iterating and consuming a buffer.
  *
- * @peek_chunk:    Chunk for next peek
- * @consume_chunk: Chunk for next consume
- * @peek_idx:      Index in the peek_chunk for next peek
+ * @peek_chunk:    Chunk for next peek.
+ * @consume_chunk: Chunk for next consume.
+ * @peek_idx:      Index in the peek_chunk for next peek.
  *
  * Caller allocates this and passes to peek/consume.
  */
@@ -63,10 +63,10 @@ struct trade_data_buffer_cursor {
 /*
  * trade_data_buffer - Buffer managing a linked list of trade_data_chunk.
  *
- * @chunk_list:          Linked list for chunks
- * @cursor_arr:          Cursor array
- * @num_cursor:          Number of cursors
- * @next_tail_write_idx: Next write_idx of the tail chunk
+ * @chunk_list:          Linked list for chunks.
+ * @cursor_arr:          Cursor array.
+ * @num_cursor:          Number of cursors.
+ * @next_tail_write_idx: Next write_idx of the tail chunk.
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -136,7 +136,7 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor);
 
 /**
- * @brief   Move free chunks into the free list
+ * @brief   Move free chunks into the free list.
  *
  * @param buf:       Buffer to reap the free chunks.
  * @param free_list: Linked list pointer holding recycled chunks.

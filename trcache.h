@@ -42,7 +42,7 @@ typedef struct trcache trcache;
  * @volume:    Traded volume of a single trade.
  *
  * The address of this data structure is passed by the user as an argument to
- * the trcache_feed_trade_data(). Since the function does not deallocate this
+ * the trcache_feed_trade_data(). Since the function copies this trade data
  * structure internally, the user can declare it on their own stack before
  * calling the function.
  *
@@ -129,7 +129,7 @@ typedef struct trcache_candle {
  * @{field}_array: Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned).
  * @num_candles:   Number of candles stored in every array.
  * @candle_type:   Engine-defined enum identifying timeframe / n-tick size.
- * @symbol_id:     Integer symbol ID resolved via the symbol table.
+ * @symbol_id:     Integer symbol ID resolved via symbol table.
  *
  * All array members point into **one contiguous, SIMD-aligned block** so the
  * whole batch can be freed with a single 'free()' (or just unwound from the
@@ -161,7 +161,7 @@ typedef struct trcache_candle_batch {
  * @flush:              User-defined batch flush function.
  * @is_done:            Checks whether the asynchronous flush has completed.
  * @destroy_handle:     Cleans up resources associated with the async handle.
- * @flush_ctx:          User‑supplied pointer, passed into @flush()
+ * @flush_ctx:          User‑supplied pointer, passed into @flush().
  * @destroy_handle_ctx: User-supplied pointer, passed into @destroy_handle().
  *
  * This structure lets applications plug in either synchronous or asynchronous
@@ -192,19 +192,19 @@ typedef struct trcache_flush_ops {
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
  * @num_worker_threads:       Number of worker threads.
- * @batch_candle_count:       Fixed number of candles per column batch
+ * @batch_candle_count:       Fixed number of candles per column batch.
  * @flush_threshold_batches:  How many candle batches to buffer before flush.
  * @candle_type_flags:        OR-ed set of #trcache_candle_type values.
  * @flush_ops:                User-supplied callbacks used for flush.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
- * `trcache_init()` signature).
+ * 'trcache_init()' signature).
  */
 typedef struct trcache_init_ctx {
-	int num_worker_threads;
-	int batch_candle_count;
-	int flush_threshold_batches;
+	uint32_t num_worker_threads;
+	uint32_t batch_candle_count;
+	uint32_t flush_threshold_batches;
 	trcache_candle_type_flags candle_type_flags;
 	struct trcache_flush_ops flush_ops;
 } trcache_init_ctx;
