@@ -24,23 +24,15 @@ static void *simd_aligned_alloc(size_t align, size_t bytes)
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
 	size_t sz = (bytes + align - 1) & ~(align - 1);
 	return aligned_alloc(align, sz);
-#elif defined(_POSIX_VERSION)
+#else
 	void *p = NULL;
 	return (posix_memalign(&p, align, bytes) == 0) ? p : NULL;
-#elif defined(_WIN32)
-	return _aligned_malloc(bytes, align);
-#else
-#error "No aligned allocation routine available for this platform."
 #endif
 }
 
 static void simd_aligned_free(void *p)
 {
-#if defined(_WIN32)
-	_aligned_free(p);
-#else
 	free(p);
-#endif
 }
 
 static size_t align_up(size_t x, size_t a)
