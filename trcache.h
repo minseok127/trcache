@@ -101,8 +101,8 @@ typedef uint32_t trcache_candle_field_flags;
 /*
  * trcache_candle - Single candle data structured in row-oriented format.
  *
- * @first_timestamp:    Unix epoch in milliseconds of the first trade.
- * @first_trade_id:     Trade-ID of the first trade in the candle.
+ * @start_timestamp:    Unix epoch in milliseconds of the first trade.
+ * @start_trade_id:     Trade-ID of the first trade in the candle.
  * @timestamp_interval: Time interval of the candle in milliseconds.
  * @trade_id_interval:  Number of trades that make up the candle.
  * @open:               Price of the very first trade.
@@ -112,8 +112,8 @@ typedef uint32_t trcache_candle_field_flags;
  * @volume:             Sum of traded volume.
  */
 typedef struct trcache_candle {
-	uint64_t first_timestamp;
-	uint64_t first_trade_id;
+	uint64_t start_timestamp;
+	uint64_t start_trade_id;
 	uint32_t timestamp_interval;
 	uint32_t trade_id_interval;
 	double open;
@@ -141,8 +141,8 @@ typedef struct trcache_candle {
  * maximise SIMD load/store efficiency.
  */
 typedef struct trcache_candle_batch {
-	uint64_t *first_timestamp_array;
-	uint64_t *first_trade_id_array;
+	uint64_t *start_timestamp_array;
+	uint64_t *start_trade_id_array;
 	uint32_t *timestamp_interval_array;
 	uint32_t *trade_id_interval_array;
 	double *open_array;
@@ -316,10 +316,10 @@ static inline void trcache_batch_alloc_on_stack(
 	size_t u32b = (size_t)num_candles * sizeof(uint32_t);
 	size_t dblb = (size_t)num_candles * sizeof(double);
 
-	uint8_t *buf_fts = alloca(u64b + a - 1);
-	uint8_t *buf_ftid = alloca(u64b + a - 1);
-	uint8_t *buf_ts_itv = alloca(u32b + a - 1);
-	uint8_t *buf_tid_itv = alloca(u32b + a - 1);
+	uint8_t *buf_ts = alloca(u64b + a - 1);
+	uint8_t *buf_tid = alloca(u64b + a - 1);
+	uint8_t *buf_ts_inter = alloca(u32b + a - 1);
+	uint8_t *buf_tid_inter = alloca(u32b + a - 1);
 	uint8_t *buf_op = alloca(dblb + a - 1);
 	uint8_t *buf_hi = alloca(dblb + a - 1);
 	uint8_t *buf_lo = alloca(dblb + a - 1);
@@ -327,12 +327,12 @@ static inline void trcache_batch_alloc_on_stack(
 	uint8_t *buf_vol = alloca(dblb + a - 1);
 
 	dst->num_candles = num_candles;
-	dst->first_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_fts, a);
-	dst->first_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_ftid, a);
+	dst->start_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ts, a);
+	dst->start_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_tid, a);
 	dst->timestamp_interval_array
-		= (uint32_t *)trcache_align_up_ptr(buf_ts_itv, a);
+		= (uint32_t *)trcache_align_up_ptr(buf_ts_inter, a);
 	dst->trade_id_interval_array
-		= (uint32_t *)trcache_align_up_ptr(buf_tid_itv, a);
+		= (uint32_t *)trcache_align_up_ptr(buf_tid_inter, a);
 	dst->open_array = (double *)trcache_align_up_ptr(buf_op, a);
 	dst->high_array = (double *)trcache_align_up_ptr(buf_hi, a);
 	dst->low_array = (double *)trcache_align_up_ptr(buf_lo, a);
