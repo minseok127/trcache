@@ -4,8 +4,7 @@
  *
  * This module manages one candle chunk, which buffers real‑time trades into
  * row‑form pages, converts them to column batches, and finally flushes the
- * result. All shared structures are protected by atomsnap gates to offer
- * lock‑free readers with minimal CAS on writers.
+ * result. All shared structures are protected by atomsnap gates.
  */
 
 #include <stdio.h>
