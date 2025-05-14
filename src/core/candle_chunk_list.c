@@ -39,6 +39,7 @@ static struct atomsnap_version *row_page_version_alloc(
 	posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN,
 			sizeof(struct candle_row_page));
 #endif
+
 	if (!row_page) {
 		fprintf(stderr, "row_page_version_alloc: page alloc failed\n");
 		return NULL;
@@ -57,13 +58,20 @@ static struct atomsnap_version *row_page_version_alloc(
 	return version;
 }
 
+/**
+ * @brief   Final cleanup for a row page version.
+ *
+ * @param   version: Pointer to the atomsnap_version
+ *
+ * Called by the last thread to release its reference to the version.
+ */
 static void row_page_version_free(struct atomsnap_version *version)
 {
 	if (version == NULL) {
         return;
 	}
 
-	free(version->object);
+	free(version->object); /* #candle_row_page */
 	free(version);
 }
 
@@ -77,7 +85,7 @@ static void row_page_version_free(struct atomsnap_version *version)
  *
  * @return Pointer to the new chunk, or NULL on failure.
  */
-struct candle_chunk *candle_chunk_create(uint64_t seq_begin)
+static struct candle_chunk *candle_chunk_create(uint64_t seq_begin)
 {
 	struct candle_chunk *chunk = malloc(sizeof(struct candle_chunk));
     struct atomsnap_init_context ctx = {
@@ -119,7 +127,7 @@ struct candle_chunk *candle_chunk_create(uint64_t seq_begin)
  *
  * @param chunk: Candle-chunk pointer.
  */
-void candle_chunk_destroy(struct candle_chunk *chunk)
+static void candle_chunk_destroy(struct candle_chunk *chunk)
 {
 	if (chunk == NULL) {
 		return;
@@ -133,67 +141,3 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 	trcache_batch_free(chunk->column_batch);
 	free(chunk);
 }
-
-/**
- * @brief   Obtain (and possibly lazily allocate) the mutable row that must
- *          receive the next trade-data update.
- *
- * @param   chunk:         Candle-chunk pointer.
- * @param   handle [out]:  Output handle filled with mutable candle.
- *
- * Internal allocation of a fresh page (and its atomsnap gate registration) is
- * done transparently if the row lives on a not-yet-materialised page.
- */
-void candle_chunk_get_mutable_row(struct candle_chunk *chunk,
-	struct candle_chunk_mutate_handle *handle)
-{
-	uint64_t seq_next = chunk->last_row_completed + 1;
-	int page_idx = candle_chunk_page_idx(chunk, seq_next);
-	struct atomsnap_version *page_ver = NULL;
-	struct candle_row_page *page = NULL;
-	uint64_t page_first_seq
-
-	if (handle == NULL) {
-		fprintf(stderr, "candle_chunk_get_mutable_row: invalid handle\n");
-		return;
-	}
-
-	/* chunk->seq_end is exclusive */
-	if (seq_next >= chunk->seq_end) {
-		handle->page_version = NULL;
-		handle->row_ptr = NULL;
-		handle->seq = -1;
-		handle->page_slot = -1;
-		handle->num_mutated = -1;
-		return;
-	}
-
-	page_ver = atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
-
-	/*
-	 * Page allocation being performed by a single thread is guaranteed by
-	 * the admin thread.
-	 */
-	if (page_ver == NULL) {
-		page_ver = atomsnap_make_version(chunk->row_gate, NULL);
-		atomsnap_exchange_version_slot(chunk->row_gate, page_idx, page_ver);
-		atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
-	}
-
-	page = (struct candle_row_page *)page_ver->object;
-}
-
-/**
- * @brief   Declare that the row @seq_complete has met the "candle-completed"
- *          condition (OHLCV closed).
- *
- * @param   chunk:        Candle-chunk pointer.
- * @param   seq_complete: Sequence number of the finished row.
- *
- * Side-effect: updates the chunk’s @last_row_completed.
- */
-void candle_chunk_mark_row_complete(struct candle_chunk *chunk,
-	int seq_complete);
-
-/**
- * @brief        Get the next contiguous range of *completed-but-uncopied*

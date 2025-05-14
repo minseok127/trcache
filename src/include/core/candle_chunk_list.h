@@ -9,17 +9,9 @@
 #include "concurrent/atomsnap.h"
 #include "trcache.h"
 
-/* ---- Tunables -------------------------------------------------------- */
-
 #ifndef TRCACHE_ROWS_PER_PAGE
 #define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page       */
 #endif
-
-#ifndef TRCACHE_CHUNK_CAP
-#define TRCACHE_CHUNK_CAP (4096)    /* total rows per chunk */
-#endif
-
-#define TRCACHE_NUM_ROW_PAGES (TRCACHE_CHUNK_CAP / TRCACHE_ROWS_PER_PAGE)
 
 /*
  * candle_row_page - 4 KiB array of row-oriented candles.
@@ -151,17 +143,6 @@ struct candle_chunk_list {
 	_Atomic uint32_t unflushed_batch_count;
 	pthread_spinlock_t spinlock;
 };
-
-/**
- * @brief   Translate @seq into a row-page slot index.
- *
- * @return  0 ... TRCACHE_NUM_ROW_PAGES-1
- */
-static inline int candle_chunk_page_idx(const struct candle_chunk *chunk,
-	uint64_t seq)
-{
-	return (int)((seq - chunk->seq_begin) / TRCACHE_ROWS_PER_PAGE);
-}
 
 /**
  * @brief   Allocate and initialize the #candle_chunk_list.
