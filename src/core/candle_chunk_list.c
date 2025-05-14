@@ -317,12 +317,14 @@ struct candle_chunk_list *create_candle_chunk_list(
 	head->tail_node = NULL;  /* Node range is not yet closed */
 	head->head_node = chunk; /* First node of the range */
 
-	list->last_row_completed = -1;
-	list->last_row_converted = -1;
-	list->unflushed_batch_count = 0;
+	atomic_store(&list->last_seq_completed, -1);
+	atomic_store(&list->last_seq_converted, -1);
+	atomic_store(list->unflushed_batch_count, 0);
+
 	list->tail = chunk;
 	list->candle_mutable_chunk = chunk;
 	list->converting_chunk = chunk;
+
 	list->update_ops = ctx->update_ops;
 	list->flush_ops = ctx->flush_ops;
 	list->flush_threshold_batches = ctx->flush_threadhold_batches;
@@ -382,11 +384,15 @@ static int candle_page_init(struct candle_chunk *chunk, int page_idx,
 		return -1;
 	}
 
+	/*
+	 * Since the completion count has not been incremented yet, the candle
+	 * initialization process is not visible to readers. Therefore, no locking
+	 * is required.
+	 */
 	row_page = (struct candle_row_page *)row_page_version->object;
 	ops->init(&(row_page->rows[0]), trade);
 
 	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
-
 	return 0;
 }
 
@@ -448,7 +454,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	}
 
 	/* Move to the next candle */
-	if (chunk->num_completed + 1 == list->batch_candle_count) {
+	if ((chunk->num_completed + 1) == list->batch_candle_count) {
 		/* If we should move to the new chunk */
 		atomsnap_release_version(row_page_version);
 
@@ -458,23 +464,23 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		if (new_chunk == NULL) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: invalid new chunk\n");
-			return -1;
+			return -1; /* not applied */
 		}
 
 		if (candle_page_init(new_chunk, 0, ops, trade) == -1) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: new chunk init failed\n");
 			candle_chunk_destroy(new_chunk);
-			return -1;
+			return -1; /* not applied */
 		}
 
 		new_chunk->mutable_page_idx = 0;
 		new_chunk->mutable_row_idx = 0;
 
 		/* Add the new chunk into tail of the linked list */
-		chunk->next = new_chunk;
-		list->tail = new_chunk;
-		list->candle_mutable_chunk = new_chunk;
+		atomic_store(&chunk->next, new_chunk);
+		atomic_store(&list->tail, new_chunk);
+		atomic_store(&list->candle_mutable_chunk, new_chunk);
 	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1) {
 		/* If we should move to the next page */
 		atomsnap_release_version(row_page_version);
@@ -486,7 +492,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: new page init failed\n");
 			chunk->mutable_page_idx -= 1; /* rollback */
-			return -1;
+			return -1; /* not applied */
 		}
 
 		chunk->mutable_row_idx = 0;
@@ -508,7 +514,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * candle can be observed outside the module.
 	 */
 	atomic_store(&chunk->num_completed, chunk->num_completed + 1);
-	atomic_store(&list->last_row_completed, list->last_row_completed + 1);
+	atomic_store(&list->last_seq_completed, list->last_seq_completed + 1);
 
 	return 0;
 }
