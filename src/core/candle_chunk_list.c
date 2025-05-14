@@ -363,14 +363,14 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 }
 
 /**
- * @brief
+ * @brief   Initialize a row page within a candle chunk.
  *
- * @param
- * @param
- * @param
- * @param
+ * @param   chunk:     Pointer to the candle chunk.
+ * @param   page_idx:  Index of the page to initialize.
+ * @param   ops:       Callback operations for candle initialization.
+ * @param   trade:     First trade data used to initialize the first candle.
  *
- * @return
+ * @return  0 on success, -1 on failure.
  */
 static int candle_page_init(struct candle_chunk *chunk, int page_idx,
 	struct candle_update_ops *ops, struct trcache_trade_data *trade)
