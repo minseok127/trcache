@@ -470,7 +470,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * (C) Move to the first page of a new chunk.
 	 */
 	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
-		expected_num_completed != list->batch_candle_count) {
+			expected_num_completed != list->batch_candle_count) {
 		chunk->mutable_row_idx += 1;
 		candle = &(row_page->rows[chunk->mutable_row_idx]);
 
