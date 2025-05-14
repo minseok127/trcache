@@ -428,7 +428,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	if (chunk->mutable_page_idx == -1) {
 		if (candle_page_init(chunk, 0, ops, trade) == -1) {
 			fprintf(stderr, "candle_chunk_list_apply_trade: init page failed\n");
-			return -1;
+			return -1; /* not applied */
 		}
 
 		chunk->mutable_page_idx = 0;
