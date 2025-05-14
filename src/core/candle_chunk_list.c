@@ -463,7 +463,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	}
 
 	/* 
-	 * Move to the next candle.
+	 * Move to the next candle and initialize it.
 	 * (A) Move to the first page of a new chunk.
 	 * (B) Move to the next page within the same chunk.
 	 * (C) Move the row index within the same page (same chunk).
