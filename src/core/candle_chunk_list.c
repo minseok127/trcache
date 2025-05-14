@@ -500,9 +500,12 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		chunk->mutable_row_idx += 1;
 		candle = &(row_page->rows[chunk->mutable_row_idx]);
 
-		pthread_spin_lock(&chunk->spinlock);
-		ops->update(candle, trade);
-		pthread_spin_unlock(&chunk->spinlock);
+		/*
+	 	 * Since the completion count has not been incremented yet, the candle
+	 	 * initialization process is not visible to readers. So no locking is
+	 	 * required.
+	 	 */
+		ops->init(candle, trade);
 		atomsnap_release_version(row_page_version);
 	}
 
