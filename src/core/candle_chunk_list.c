@@ -76,13 +76,11 @@ static void row_page_version_free(struct atomsnap_version *version)
 /**
  * @brief   Allocate and initialize #candle_chunk.
  *
- * @param   batch_candle_count: Number of candles per column batch (chunk).
  * @param   row_page_count:     Number of row pages per chunk.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-static struct candle_chunk *create_candle_chunk(uint32_t batch_candle_count,
-	uint32_t row_page_count)
+static struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
 {
 	struct candle_chunk *chunk = NULL;
     struct atomsnap_init_context ctx = {
@@ -271,7 +269,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 		= (list->batch_candle_count + TRCACHE_ROWS_PER_PAGE - 1)
 			/ TRCACHE_ROWS_PER_PAGE;
 
-	chunk = create_candle_chunk(list->batch_candle_count, list->row_page_count);
+	chunk = create_candle_chunk(list->row_page_count);
 	if (chunk == NULL) {
 		fprintf(stderr, "create_candle_chunk_list: create chunk failed\n");
 		free(list);
@@ -301,8 +299,8 @@ struct candle_chunk_list *create_candle_chunk_list(
 	head->tail_node = NULL;  /* Node range is not yet closed */
 	head->head_node = chunk; /* First node of the range */
 
-	atomic_store(&list->mutable_seq, -1);
-	atomic_store(&list->last_seq_converted, -1);
+	atomic_store(&list->mutable_seq, UINT64_MAX);
+	atomic_store(&list->last_seq_converted, UINT64_MAX);
 	atomic_store(&list->unflushed_batch_count, 0);
 
 	list->update_ops = ctx->update_ops;
@@ -486,8 +484,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
-		new_chunk = create_candle_chunk(
-			list->batch_candle_count, list->row_page_count);
+		new_chunk = create_candle_chunk(list->row_page_count);
 		if (new_chunk == NULL) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: invalid new chunk\n");
@@ -523,7 +520,70 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 }
 
 /**
- * @brief    Convert all mutable row candles into a column batch.
+ * @brief   Convert all immutable row candles within the given chunk.
+ *
+ * @param   chunk: Target chunk to convert.
+ *
+ * @return  Number of converted candles.
+ */
+static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
+{
+	struct trcache_candle_batch *batch = chunk->column_batch;
+	uint32_t completed = atomic_load(&chunk->num_completed);
+	int start_idx = -1, end_idx = -1, cur_page_idx = -1, next_page_idx = -1;
+	struct atomsnap_version *page_version = NULL;
+	struct candle_row_page *page = NULL;
+	struct trcache_candle *candle = NULL;
+	uint64_t n = 0;
+
+	start_idx = candle_chunk_calc_record_index(
+		chunk->converting_page_idx, chunk->converting_row_idx);
+	end_idx = completed - 1;
+	n = end_idx - start_idx + 1;
+
+	cur_page_idx = chunk->converting_page_idx;
+	page_version = atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
+	page = (struct candle_row_page *)page_version->object;
+
+	for (int idx = start_idx; idx <= end_idx; idx++) {
+		next_page_idx = candle_chunk_calc_page_idx(idx);
+		if (next_page_idx != cur_page_idx) {
+			/* Page is fully converted. Trigger grace period */
+			atomsnap_exchange_version_slot(
+				chunk->row_gate, cur_page_idx, NULL);
+			atomsnap_release_version(page_version);
+
+			cur_page_idx = next_page_idx;
+			page_version = atomsnap_acquire_version_slot(
+				chunk->row_gate, cur_page_idx);
+			page = (struct candle_row_page *)page_version->object;
+		}
+
+		candle = &(page->rows[candle_chunk_calc_row_idx(idx)]);
+
+		*(batch->start_timestamp_array + idx) = candle->start_timestamp;
+		*(batch->start_trade_id_array + idx) = candle->start_trade_id;
+		*(batch->timestamp_interval_array + idx) = candle->timestamp_interval;
+		*(batch->trade_id_interval_array + idx) = candle->trade_id_interval;
+		*(batch->open_array + idx) = candle->open;
+		*(batch->high_array + idx) = candle->high;
+		*(batch->low_array + idx) = candle->low;
+		*(batch->close_array + idx) = candle->close;
+		*(batch->volume_array + idx) = candle->volume;
+	}
+	atomsnap_release_version(page_version);
+
+	/* Remember converting context for this chunk */
+	end_idx += 1;
+	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
+	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
+
+	atomic_store(&chunk->num_converted, chunk->num_converted + n);
+	return n;
+}
+
+/**
+ * @brief    Convert all immutable row candles into a column batch.
  *
  * @param    list: Pointer to the candle chunk list.
  *
@@ -532,57 +592,37 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
 	struct candle_chunk *chunk = list->converting_chunk;
-	struct trcache_candle_batch *batch = chunk->column_batch;
-	int last_page_idx = -1, last_row_idx = -1;
-	int start_page_idx = -1, start_row_idx = -1;
+	struct trcache_candle_batch *batch = NULL;
+	uint64_t n = 0;
 
 	/* No more candles to convert */
-	if (list->mutable_seq == -1 ||
+	if (list->mutable_seq == UINT64_MAX ||
 		list->mutable_seq - 1 == list->last_seq_converted) {
 		return;
 	}
 
-	/* If conversion is being started for the first time in this chunk */
-	if (batch == NULL) {
-		batch = trcache_batch_alloc_on_heap(list->batch_candle_count);
-		if (batch == NULL) {
-			fprintf(stderr,
-				"candle_chunk_list_convert_to_column_batch: alloc failed\n");
-			return;
-		}
-
-		chunk->column_batch = batch;
-		batch->symbol_id = list->symbol_id;
-		batch->candle_type = list->candle_type;
-
-		chunk->converting_page_idx = 0;
-		chunk->converting_row_idx = 0;
-	}
-
-	candle_chunk_calc_page_and_row(atomic_load(&chunk->num_completed),
-		&last_page_idx, &last_row_idx);
-
-	start_page_idx = chunk->converting_page_idx;
-	start_row_idx = chunk->converting_row_idx;
-
-	if (start_page_idx == last_page_idx) {
-		for (int r = start_row_idx; r < last_row_idx; r++) {
-
-		}
-	} else {
-		for (int r = start_row_idx; r < TRCACHE_ROWS_PER_PAGE; r++) {
-
-		}
-
-		for (int pg = start_page_idx + 1; pg < last_page_idx; pg++) {
-			for (int r = 0; r < TRCACHE_ROWS_PER_PAGE; r++) {
-
+	while (chunk != NULL) {
+		/* If conversion is being started for the first time in this chunk */
+		if (chunk->column_batch == NULL) {
+			batch = trcache_batch_alloc_on_heap(list->batch_candle_count);
+			if (batch == NULL) {
+				fprintf(stderr,
+					"candle_chunk_list_convert_to_column_batch: batch err\n");
+				return;
 			}
+
+			chunk->column_batch = batch;
+			batch->symbol_id = list->symbol_id;
+			batch->candle_type = list->candle_type;
+			chunk->converting_page_idx = 0;
+			chunk->converting_row_idx = 0;
 		}
 
-		for (int r = 0; r < last_row_idx; r++) {
+		n = candle_chunk_convert_to_batch(chunk);
 
-		}
+		atomic_store(&list->last_seq_converted, list->last_seq_converted + n);
+
+		chunk = chunk->next;
 	}
 }
 

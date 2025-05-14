@@ -171,17 +171,27 @@ static inline int candle_chunk_calc_record_index(int page_index, int row_index)
 }
 
 /**
- * @brief   Compute page and row index from a linear record index.
+ * @brief   Compute page index from a linear record index.
  *
- * @param   record_index:     Linear index of the record in the chunk.
- * @param   page_index [out]: Page index result.
- * @param   row_index [out]:  Row index within the page.
+ * @param   record_index: Linear index of the record in the chunk.
+ *
+ * @return  The page index in the chunk.
  */
-static inline void candle_chunk_calc_page_and_row(uint32_t record_index,
-	int *page_index, int *row_index)
+static inline int candle_chunk_calc_page_idx(int record_index)
 {
-	*page_index = ((int)record_index) >> TRCACHE_ROWS_PER_PAGE_SHIFT;
-	*row_index = ((int)record_index) & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
+	return record_index >> TRCACHE_ROWS_PER_PAGE_SHIFT;
+}
+
+/**
+ * @brief   Compute page index from a linear record index.
+ *
+ * @param   record_index: Linear index of the record in the chunk.
+ *
+ * @return  The row index in the page.
+ */
+static inline int candle_chunk_calc_row_idx(int record_index)
+{
+	return record_index & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
 }
 
 /**
@@ -219,7 +229,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade);
 
 /**
- * @brief    Convert all mutable row candles into a column batch.
+ * @brief    Convert all immutable row candles into a column batch.
  *
  * @param    list: Pointer to the candle chunk list.
  *
