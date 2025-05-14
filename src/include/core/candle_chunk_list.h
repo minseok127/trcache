@@ -10,7 +10,7 @@
 #include "trcache.h"
 
 #ifndef TRCACHE_ROWS_PER_PAGE
-#define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page       */
+#define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page */
 #endif
 
 /*
@@ -25,9 +25,8 @@ struct candle_row_page {
 /*
  * candle_chunk - Owns a sequence window of candles.
  *
+ * @spinlock:             Lock used to protect the candle being updated.
  * @next:                 Linked list pointer.
- * @seq_begin:            First sequence number (inclusive).
- * @seq_end:              Last  +1  (exclusive).
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
  * @column_batch:         SoA buffer (NULL until first need).
  * @mutable_page_index:   Page index of the candle being updated.
@@ -35,12 +34,13 @@ struct candle_row_page {
  * @converting_page_idx:  Index of the page being converted to a column batch.
  * @converting_row_idx:   Index of the row being converted to a column batch.
  *
- * This structure is a linked list node of #candle_chunk_list.
+ * This structure is a linked list node of #candle_chunk_list. A Chunk holds
+ * row-based candles initially, then converts them into columnar format for
+ * efficient processing.
  */
 struct candle_chunk {
+	pthread_spinlock_t spinlock;
 	struct candle_chunk *next;
-	uint64_t seq_begin; /* inclusive */
-	uint64_t seq_end;   /* exclusive */
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	int mutable_page_index;
@@ -110,8 +110,11 @@ struct candle_chunk_list_init_ctx {
 };
 
 /*
- * candle_chunk_list -
+ * candle_chunk_list - List of chunks containing candles (row and column batch).
  *
+ * @last_row_completed:      Highest seqnum whose row is finished (immutable).
+ * @last_row_converted:      Highest seqnum already converted to COLUMN batch.
+ * @unflushed_batch_count:   Number of batches not yet flushed.
  * @tail:                    Tail of the linked list where new chunks are added.
  * @head_gate:               Gate managing head versions.
  * @candle_mutable_chunk:    Chunk containing mutable candle.
@@ -120,14 +123,13 @@ struct candle_chunk_list_init_ctx {
  * @flush_ops:               User-supplied callbacks used for flush.
  * @flush_threshold_batches: How many batches to buffer before flush.
  * @batch_candle_count:      Number of candles per column batch (chunk).
- * @symbol_id:               Integer symbol ID resolved via symbol table.
  * @candle_type:             Enum trcache_candle_type.
- * @last_row_completed:      Highest seqnum whose row is finished (immutable).
- * @last_row_converted:      Highest seqnum already converted to COLUMN batch.
- * @unflushed_batch_count:   Number of batches not yet flushed.
- * @spinlock:                Lock used to protect the candle being updated.
+ * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list {
+	_Atomic uint64_t last_row_completed;
+	_Atomic uint64_t last_row_converted;
+	_Atomic uint32_t unflushed_batch_count;
 	struct candle_chunk *tail;
 	struct atomsnap_gate *head_gate;
 	struct candle_chunk *candle_mutable_chunk;
@@ -136,12 +138,8 @@ struct candle_chunk_list {
 	struct trcache_flush_ops flush_ops;
 	uint32_t flush_threshold_batches;
 	uint32_t batch_candle_count;
-	int symbol_id;
 	trcache_candle_type candle_type;
-	_Atomic uint64_t last_row_completed;
-	_Atomic uint64_t last_row_converted;
-	_Atomic uint32_t unflushed_batch_count;
-	pthread_spinlock_t spinlock;
+	int symbol_id;
 };
 
 /**

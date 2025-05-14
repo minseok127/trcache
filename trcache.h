@@ -128,6 +128,7 @@ typedef struct trcache_candle {
  * trcache_candle_batch - Vectorised batch of candles in column-oriented layout.
  *
  * @{field}_array: Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned).
+ * @capacity:      Capacity of vector arrays.
  * @num_candles:   Number of candles stored in every array.
  * @candle_type:   Engine-defined enum identifying timeframe / n-tick size.
  * @symbol_id:     Integer symbol ID resolved via symbol table.
@@ -151,6 +152,7 @@ typedef struct trcache_candle_batch {
 	double *low_array;
 	double *close_array;
 	double *volume_array;
+	int capacity;
 	int num_candles;
 	int candle_type;
 	int symbol_id;
@@ -263,14 +265,14 @@ void trcache_feed_trade_data(struct trcache *cache,
 /**
  * @brief  Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param num_candles: Number of OHLCV rows to allocate (must be > 0).
+ * @param  capacity: Number of OHLCV rows to allocate (must be > 0).
  *
  * @return Pointer to a fully-initialised #trcache_candle_batch on success,  
- *         'NULL' on allocation failure or invalid *num_candles*.
+ *         'NULL' on allocation failure or invalid *capacity*.
  *
  * @note The returned pointer must be released via trcache_batch_free().
  */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int num_candles);
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
 
 /**
  * @brief  Release a heap-allocated candle batch.
@@ -304,18 +306,18 @@ static inline void *trcache_align_up_ptr(void *p, size_t a)
  * alignment via #trc_align_up_ptr.  The stack memory lives as long as the
  * caller's frame is active—no explicit free is required.
  *
- * @param dst [out]:   Pre-declared #trcache_candle_batch object to populate.
- * @param num_candles: Number of candle rows to allocate (must be > 0).
+ * @param dst [out]:  Pre-declared #trcache_candle_batch object to populate.
+ * @param capacity:   Number of candle rows to allocate (must be > 0).
  *
  * @note All pointers inside @p dst point into the caller's stack frame.
  */
 static inline void trcache_batch_alloc_on_stack(
-	struct trcache_candle_batch *dst, int num_candles)
+	struct trcache_candle_batch *dst, int capacity)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
-	size_t u64b = (size_t)num_candles * sizeof(uint64_t);
-	size_t u32b = (size_t)num_candles * sizeof(uint32_t);
-	size_t dblb = (size_t)num_candles * sizeof(double);
+	size_t u64b = (size_t)capacity * sizeof(uint64_t);
+	size_t u32b = (size_t)capacity * sizeof(uint32_t);
+	size_t dblb = (size_t)capacity * sizeof(double);
 
 	uint8_t *buf_ts = alloca(u64b + a - 1);
 	uint8_t *buf_tid = alloca(u64b + a - 1);
@@ -327,7 +329,11 @@ static inline void trcache_batch_alloc_on_stack(
 	uint8_t *buf_cl = alloca(dblb + a - 1);
 	uint8_t *buf_vol = alloca(dblb + a - 1);
 
-	dst->num_candles = num_candles;
+	dst->capacity = capacity;
+	dst->num_candles = 0;
+	dst->candle_type = -1;
+	dst->symbol_id = -1;
+
 	dst->start_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ts, a);
 	dst->start_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_tid, a);
 	dst->timestamp_interval_array
@@ -353,11 +359,11 @@ static inline void trcache_batch_alloc_on_stack(
  * }
  *
  * @param var: User-chosen variable name of type #trcache_candle_batch.
- * @param num: Number of candles to allocate (runtime value allowed).
+ * @param cap: Number of candles to allocate (runtime value allowed).
  */
-#define TRCACHE_DEFINE_BATCH_ON_STACK(var, num) \
+#define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap) \
 	trcache_candle_batch var; \
-	trcache_batch_alloc_on_stack(&(var), (num))
+	trcache_batch_alloc_on_stack(&(var), (cap))
 
 #ifdef __cplusplus
 }

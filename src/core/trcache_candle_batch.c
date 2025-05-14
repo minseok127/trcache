@@ -43,14 +43,14 @@ static size_t align_up(size_t x, size_t a)
 /**
  * @brief  Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param n: Number of OHLCV rows to allocate (must be > 0).
+ * @param  capacity: Number of OHLCV rows to allocate (must be > 0).
  *
  * @return Pointer to a fully-initialised #trcache_candle_batch on success,  
- *         'NULL' on allocation failure or invalid *num_candles*.
+ *         'NULL' on allocation failure or invalid *capacity*.
  *
  * @note The returned pointer must be released via trcache_batch_free().
  */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
 	size_t off_start_ts, off_start_tid, off_ts_interval, off_tid_interval;
@@ -59,16 +59,16 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 	struct trcache_candle_batch *b;
 	void *base;
 
-	if (n <= 0) {
-		fprintf(stderr, "trcache_batch_alloc_on_heap: invalid n\n");
+	if (capacity <= 0) {
+		fprintf(stderr, "trcache_batch_alloc_on_heap: invalid capacity\n");
 		return NULL;
 	}
 
 	off_struct = align_up(sizeof(struct trcache_candle_batch), a);
 
-	u64b = (size_t)n * sizeof(uint64_t);
-	u32b = (size_t)n * sizeof(uint32_t);
-	dblb = (size_t)n * sizeof(double);
+	u64b = (size_t)capacity * sizeof(uint64_t);
+	u32b = (size_t)capacity * sizeof(uint32_t);
+	dblb = (size_t)capacity * sizeof(double);
 
 	/* Compute offsets for each array, respecting alignment padding. */
 	off_start_ts = off_struct;
@@ -92,8 +92,12 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 
 	/* Wire up internal pointers. */
 	b = (struct trcache_candle_batch *)base;
-	memset(b, 0, sizeof *b);
-	b->num_candles = n;
+
+	b->num_candles = 0;
+	b->capacity = capacity;
+	b->symbol_id = -1;
+	b->candle_type = -1;
+
 	b->start_timestamp_array = (uint64_t *)((uint8_t *)base + off_start_ts);
 	b->start_trade_id_array = (uint64_t *)((uint8_t *)base + off_start_tid);
 	b->timestamp_interval_array
@@ -106,7 +110,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int n)
 	b->close_array = (double *)((uint8_t *)base + off_close);
 	b->volume_array = (double *)((uint8_t *)base + off_vol);
 
-	return b; /* Arrays are uninitialised; memset if zeroing is needed. */
+	return b;
 }
 
 /**
