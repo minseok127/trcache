@@ -428,7 +428,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	if (chunk->mutable_page_idx == -1) {
 		if (candle_page_init(chunk, 0, ops, trade) == -1) {
 			fprintf(stderr, "candle_chunk_list_apply_trade: init page failed\n");
-			return -1; /* not applied */
+			return -1; /* trade data is not applied */
 		}
 
 		chunk->mutable_page_idx = 0;
@@ -443,10 +443,17 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 	row_page_version = atomsnap_acquire_version_slot(chunk->row_gate,
 		chunk->mutable_page_idx);
+
 	row_page = (struct candle_row_page *)row_page_version->object;
 
-	/* Update candle if it is not closed */
 	candle = &(row_page->rows[chunk->mutable_row_idx]);
+
+	/*
+	 * For time-based candles, their completion cannot be determined by the
+	 * candle alone. Instead, completion is determined only when a new trade
+	 * data arrives by checking whether the new data falls within the time range
+	 * of the current candle.
+	 */
 	if (!ops->is_closed(candle, trade)) {
 		pthread_spin_lock(&chunk->spinlock);
 		ops->update(candle, trade);
@@ -455,9 +462,14 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		return 0;
 	}
 
-	/* Move to the next candle */
+	/* 
+	 * Move to the next candle.
+	 * (A) Move to the first page of a new chunk.
+	 * (B) Move to the next page within the same chunk.
+	 * (C) Move the row index within the same page (same chunk).
+	 */
 	if ((chunk->num_completed + 1) == list->batch_candle_count) {
-		/* If we should move to the new chunk */
+		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
 		new_chunk = create_candle_chunk(list->batch_candle_count,
@@ -466,14 +478,14 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		if (new_chunk == NULL) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: invalid new chunk\n");
-			return -1; /* not applied */
+			return -1; /* trade data is not applied */
 		}
 
 		if (candle_page_init(new_chunk, 0, ops, trade) == -1) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: new chunk init failed\n");
 			candle_chunk_destroy(new_chunk);
-			return -1; /* not applied */
+			return -1; /* trade data is not applied */
 		}
 
 		new_chunk->mutable_page_idx = 0;
@@ -484,21 +496,20 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomic_store(&list->tail, new_chunk);
 		atomic_store(&list->candle_mutable_chunk, new_chunk);
 	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1) {
-		/* If we should move to the next page */
+		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
 		chunk->mutable_page_idx += 1;
-		if (candle_page_init(chunk, chunk->mutable_page_idx, ops, trade)
-				== -1) {
+		if (candle_page_init(
+				chunk, chunk->mutable_page_idx, ops, trade) == -1) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: new page init failed\n");
 			chunk->mutable_page_idx -= 1; /* rollback */
-			return -1; /* not applied */
+			return -1; /* trade data is not applied */
 		}
 
 		chunk->mutable_row_idx = 0;
 	} else {
-		/* If we can use the same page */
 		chunk->mutable_row_idx += 1;
 		candle = &(row_page->rows[chunk->mutable_row_idx]);
 
