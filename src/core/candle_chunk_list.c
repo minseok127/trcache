@@ -162,7 +162,7 @@ static void candle_chunk_destroy(struct candle_chunk *chunk)
  * @return  Pointer to #atomsnap_version, or NULL on failure.
  */
 static struct atomsnap_version *candle_chunk_list_head_alloc(
-	void *arg __attribute__((unused)))
+	void *unused __attribute__((unused)))
 {
 	struct atomsnap_version *version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
@@ -284,7 +284,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->row_page_count
 		= (list->batch_candle_count + TRCACHE_ROWS_PER_PAGE - 1)
 			/ TRCACHE_ROWS_PER_PAGE;
-
 	list->update_ops = ctx->update_ops;
 	list->flush_ops = ctx->flush_ops;
 	list->flush_threshold_batches = ctx->flush_threshold_batches;
@@ -417,6 +416,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
+	uint32_t expected_num_completed = -1;
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -461,13 +461,42 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		return 0;
 	}
 
+	expected_num_completed = chunk->num_completed + 1;
+
 	/* 
 	 * Move to the next candle and initialize it.
-	 * (A) Move to the first page of a new chunk.
+	 * (A) Move the row index within the same page (same chunk).
 	 * (B) Move to the next page within the same chunk.
-	 * (C) Move the row index within the same page (same chunk).
+	 * (C) Move to the first page of a new chunk.
 	 */
-	if ((chunk->num_completed + 1) == list->batch_candle_count) {
+	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
+		expected_num_completed != list->batch_candle_count) {
+		chunk->mutable_row_idx += 1;
+		candle = &(row_page->rows[chunk->mutable_row_idx]);
+
+		/*
+	 	 * Since the completion count has not been incremented yet, the candle
+	 	 * initialization process is not visible to readers. So no locking is
+	 	 * required.
+	 	 */
+		ops->init(candle, trade);
+		atomsnap_release_version(row_page_version);
+	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1 &&
+			expected_num_completed != list->batch_candle_count) {
+		/* Release old page */
+		atomsnap_release_version(row_page_version);
+
+		chunk->mutable_page_idx += 1;
+		if (candle_page_init(
+				chunk, chunk->mutable_page_idx, ops, trade) == -1) {
+			fprintf(stderr,
+				"candle_chunk_list_apply_trade: new page init failed\n");
+			chunk->mutable_page_idx -= 1; /* rollback */
+			return -1; /* trade data is not applied */
+		}
+
+		chunk->mutable_row_idx = 0;
+	} else {
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
@@ -494,31 +523,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomic_store(&chunk->next, new_chunk);
 		atomic_store(&list->tail, new_chunk);
 		atomic_store(&list->candle_mutable_chunk, new_chunk);
-	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1) {
-		/* Release old page */
-		atomsnap_release_version(row_page_version);
-
-		chunk->mutable_page_idx += 1;
-		if (candle_page_init(
-				chunk, chunk->mutable_page_idx, ops, trade) == -1) {
-			fprintf(stderr,
-				"candle_chunk_list_apply_trade: new page init failed\n");
-			chunk->mutable_page_idx -= 1; /* rollback */
-			return -1; /* trade data is not applied */
-		}
-
-		chunk->mutable_row_idx = 0;
-	} else {
-		chunk->mutable_row_idx += 1;
-		candle = &(row_page->rows[chunk->mutable_row_idx]);
-
-		/*
-	 	 * Since the completion count has not been incremented yet, the candle
-	 	 * initialization process is not visible to readers. So no locking is
-	 	 * required.
-	 	 */
-		ops->init(candle, trade);
-		atomsnap_release_version(row_page_version);
 	}
 
 	/* XXX candle map insert => user can see this candle */
@@ -527,7 +531,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * Ensure that the previous mutable candle is completed, and a new mutable
 	 * candle can be observed outside the module.
 	 */
-	atomic_store(&chunk->num_completed, chunk->num_completed + 1);
+	atomic_store(&chunk->num_completed, expected_num_completed);
 	atomic_store(&list->mutable_seq, list->mutable_seq + 1);
 
 	return 0;
