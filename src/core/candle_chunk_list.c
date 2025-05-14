@@ -552,6 +552,8 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 	double *c_ptr = batch->close_array + start_idx;
 	double *v_ptr = batch->volume_array + start_idx;
 
+	assert(end_idx < TRCACHE_ROWS_PER_PAGE);
+
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
 		if (next_page_idx != cur_page_idx) {
