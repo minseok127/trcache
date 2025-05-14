@@ -37,7 +37,7 @@ static struct atomsnap_version *row_page_version_alloc(
 		sizeof(struct candle_row_page));
 #else
 	posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN,
-			sizeof(struct candle_row_page));
+		sizeof(struct candle_row_page));
 #endif
 
 	if (!row_page) {
@@ -133,8 +133,10 @@ static struct candle_chunk *craete_candle_chunk(int symbol_id,
 	chunk->mutable_row_idx = -1;
 	chunk->converting_page_idx = -1;
 	chunk->converting_row_idx = -1;
-	chunk->num_records = 0;
-	chunk->num_converted = 0;
+
+	atomic_store(&chunk->num_completed, 0);
+	atomic_store(&chunk->num_converted, 0);
+
 	chunk->next = NULL;
 
 	return chunk;
@@ -319,10 +321,9 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->last_row_completed = -1;
 	list->last_row_converted = -1;
 	list->unflushed_batch_count = 0;
-
+	list->tail = chunk;
 	list->candle_mutable_chunk = chunk;
 	list->converting_chunk = chunk;
-
 	list->update_ops = ctx->update_ops;
 	list->flush_ops = ctx->flush_ops;
 	list->flush_threshold_batches = ctx->flush_threadhold_batches;
@@ -361,24 +362,162 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 }
 
 /**
+ * @brief
+ *
+ * @param
+ * @param
+ * @param
+ * @param
+ *
+ * @return
+ */
+static int candle_page_init(struct candle_chunk *chunk, int page_idx,
+	struct candle_update_ops *ops, struct trcache_trade_data *trade)
+{
+	struct candle_row_page *row_page = NULL;
+	struct atomsnap_version *row_page_version
+		= atomsnap_make_version(chunk->row_gate, NULL);
+
+	if (row_page_version == NULL) {
+		fprintf(stderr, "candle_page_init: version alloc failed\n");
+		return -1;
+	}
+
+	row_page = (struct candle_row_page *)row_page_version->object;
+	ops->init(&(row_page->rows[0]), trade);
+
+	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
+
+	return 0;
+}
+
+/**
  * @brief    Apply trade data to the appropriate candle.
  *
- * @param    list:  Pointer to the candle chunk list
- * @param    trade: Trade data to apply
+ * @param    list:  Pointer to the candle chunk list.
+ * @param    trade: Trade data to apply.
+ *
+ * @return   0 on success, or -1 if the trade data is not applied.
  *
  * Finds the corresponding candle in the chunk list and updates it with the
  * trade. Creates a new chunk if necessary.
+ *
+ * The admin thread must ensure that the apply function for a single chunk list
+ * is executed by only one worker thread at a time.
  */
-void candle_chunk_list_apply_trade(struct candle_chunk_list *list,
+int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
+	struct candle_chunk *chunk = list->candle_mutable_chunk, *new_chunk = NULL;
+	struct candle_update_ops *ops = &list->update_ops;
+	struct atomsnap_version *row_page_version = NULL;
+	struct candle_row_page *row_page = NULL;
+	struct trcache_candle *candle = NULL;
 
+	/*
+	 * This path occurs only once, right after the chunk list is created.
+	 * During page initialization, the first candle is also initialized, 
+	 * which requires trade data. However, since trade data is not available 
+	 * at the time the chunk list is created, this separate path was introduced.
+	 */
+	if (chunk->mutable_page_idx == -1) {
+		if (candle_page_init(chunk, 0, ops, trade) == -1) {
+			fprintf(stderr, "candle_chunk_list_apply_trade: init page failed\n");
+			return -1;
+		}
+
+		chunk->mutable_page_idx = 0;
+		chunk->mutable_row_idx = 0;
+
+		/* XXX candle map insert => user can see this candle */
+
+		return 0;
+	}
+
+	row_page_version = atomsnap_acquire_version_slot(chunk->row_gate,
+		chunk->mutable_page_idx);
+	row_page = (struct candle_row_page *)row_page_version->object;
+
+	/* Update candle if it is not closed */
+	candle = &(row_page->rows[chunk->mutable_row_idx]);
+	if (!ops->is_closed(candle, trade)) {
+		pthread_spin_lock(&chunk->spinlock);
+		ops->update(candle, trade);
+		pthread_spin_unlock(&chunk->spinlock);
+		atomsnap_release_version(row_page_version);
+		return 0;
+	}
+
+	/* Move to the next candle */
+	if (chunk->num_completed + 1 == list->batch_candle_count) {
+		/* If we should move to the new chunk */
+		atomsnap_release_version(row_page_version);
+
+		new_chunk = create_candle_chunk(list->batch_candle_count,
+			list->row_page_count);
+
+		if (new_chunk == NULL) {
+			fprintf(stderr,
+				"candle_chunk_list_apply_trade: invalid new chunk\n");
+			return -1;
+		}
+
+		if (candle_page_init(new_chunk, 0, ops, trade) == -1) {
+			fprintf(stderr,
+				"candle_chunk_list_apply_trade: new chunk init failed\n");
+			candle_chunk_destroy(new_chunk);
+			return -1;
+		}
+
+		new_chunk->mutable_page_idx = 0;
+		new_chunk->mutable_row_idx = 0;
+
+		/* Add the new chunk into tail of the linked list */
+		chunk->next = new_chunk;
+		list->tail = new_chunk;
+		list->candle_mutable_chunk = new_chunk;
+	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1) {
+		/* If we should move to the next page */
+		atomsnap_release_version(row_page_version);
+
+		chunk->mutable_page_idx += 1;
+
+		if (candle_page_init(
+				chunk, chunk->mutable_page_idx + 1, ops, trade) == -1) {
+			fprintf(stderr,
+				"candle_chunk_list_apply_trade: new page init failed\n");
+			chunk->mutable_page_idx -= 1; /* rollback */
+			return -1;
+		}
+
+		chunk->mutable_row_idx = 0;
+	} else {
+		/* If we can use the same page */
+		chunk->mutable_row_idx += 1;
+		candle = &(row_page->rows[chunk->mutable_row_idx]);
+
+		pthread_spin_lock(&chunk->spinlock);
+		ops->update(candle, trade);
+		pthread_spin_unlock(&chunk->spinlock);
+		atomsnap_release_version(row_page_version);
+	}
+
+	/* XXX candle map insert => user can see this candle */
+
+	/*
+	 * Ensure that the previous mutable candle is completed, and a new mutable
+	 * candle can be observed outside the module.
+	 */
+	atomic_store(&chunk->num_completed, chunk->num_completed + 1);
+	atomic_store(&list->last_row_completed, list->last_row_completed + 1);
+
+	return 0;
 }
 
 /**
  * @brief    Convert all mutable row candles into a column batch.
  *
- * @param    list: Pointer to the candle chunk list
+ * @param    list: Pointer to the candle chunk list.
  *
  * Transforms finalized row-based candles into columnar format.
  */
@@ -390,7 +529,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    list: Pointer to the candle chunk list
+ * @param    list: Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
  */

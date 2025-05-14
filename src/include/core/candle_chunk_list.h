@@ -38,7 +38,7 @@ struct candle_row_page {
  * @mutable_row_idx:      Index of the row being updated within the page.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
- * @num_records:          Number of records (candles) currently exists.
+ * @num_completed:        Number of records (candles) immutable.
  * @num_converted:        Number of records (candles) converted to column batch.
  * @next:                 Linked list pointer.
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
@@ -50,12 +50,12 @@ struct candle_row_page {
  */
 struct candle_chunk {
 	pthread_spinlock_t spinlock;
-	int mutable_page_index;
-	int mutable_row_index;
+	int mutable_page_idx;
+	int mutable_row_idx;
 	int converting_page_idx;
 	int converting_row_idx;
-	uint32_t num_records;
-	uint32_t num_converted;
+	_Atomic uint32_t num_completed;
+	_Atomic uint32_t num_converted;
 	struct candle_chunk *next;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
@@ -204,19 +204,24 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list);
 /**
  * @brief    Apply trade data to the appropriate candle.
  *
- * @param    list:  Pointer to the candle chunk list
- * @param    trade: Trade data to apply
+ * @param    list:  Pointer to the candle chunk list.
+ * @param    trade: Trade data to apply.
+ *
+ * @return   0 on success, or -1 if the trade data is not applied.
  *
  * Finds the corresponding candle in the chunk list and updates it with the
  * trade. Creates a new chunk if necessary.
+ *
+ * The admin thread must ensure that the apply function for a single chunk list
+ * is executed by only one worker thread at a time.
  */
-void candle_chunk_list_apply_trade(struct candle_chunk_list *list,
+int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade);
 
 /**
  * @brief    Convert all mutable row candles into a column batch.
  *
- * @param    list: Pointer to the candle chunk list
+ * @param    list: Pointer to the candle chunk list.
  *
  * Transforms finalized row-based candles into columnar format.
  */
@@ -225,7 +230,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    list: Pointer to the candle chunk list
+ * @param    list: Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
  */
