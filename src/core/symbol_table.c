@@ -132,13 +132,13 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 
 	version = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	symbol_ptr_array = (struct public_symbol_entry **) version->object;
-
 	for (int i = 0; i < table->num_symbols; i++) {
 		free(symbol_ptr_array[i]->symbol_str);
 		free(symbol_ptr_array[i]);
 	}
+	atomsnap_release_version(version);
 
-	symbol_array_version_free(version);
+	/* This will call symbol_array_version_free() */
 	atomsnap_destroy_gate(table->symbol_ptr_array_gate);
 	free(table);
 }

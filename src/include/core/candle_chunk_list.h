@@ -13,6 +13,14 @@
 #define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page */
 #endif
 
+#ifndef TRCACHE_ROWS_PER_PAGE_SHIFT
+#define TRCACHE_ROWS_PER_PAGE_SHIFT (6)
+#endif
+
+#ifndef TRCACHE_ROWS_PER_PAGE_MODULAR_MASK
+#define TRCACHE_ROWS_PER_PAGE_MODULAR_MASK (TRCACHE_ROWS_PER_PAGE - 1)
+#endif
+
 /*
  * candle_row_page - 4 KiB array of row-oriented candles.
  *
@@ -26,13 +34,15 @@ struct candle_row_page {
  * candle_chunk - Owns a sequence window of candles.
  *
  * @spinlock:             Lock used to protect the candle being updated.
+ * @mutable_page_idx:     Page index of the candle being updated.
+ * @mutable_row_idx:      Index of the row being updated within the page.
+ * @converting_page_idx:  Index of the page being converted to column batch.
+ * @converting_row_idx:   Index of the row being converted to column batch.
+ * @num_records:          Number of records (candles) currently exists.
+ * @num_converted:        Number of records (candles) converted to column batch.
  * @next:                 Linked list pointer.
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
  * @column_batch:         SoA buffer (NULL until first need).
- * @mutable_page_index:   Page index of the candle being updated.
- * @mutable_row_index:    Index of the row being updated within the page.
- * @converting_page_idx:  Index of the page being converted to a column batch.
- * @converting_row_idx:   Index of the row being converted to a column batch.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -40,13 +50,15 @@ struct candle_row_page {
  */
 struct candle_chunk {
 	pthread_spinlock_t spinlock;
-	struct candle_chunk *next;
-	struct atomsnap_gate *row_gate;
-	struct trcache_candle_batch *column_batch;
 	int mutable_page_index;
 	int mutable_row_index;
 	int converting_page_idx;
 	int converting_row_idx;
+	uint32_t num_records;
+	uint32_t num_converted;
+	struct candle_chunk *next;
+	struct atomsnap_gate *row_gate;
+	struct trcache_candle_batch *column_batch;
 };
 
 /*
@@ -71,6 +83,7 @@ struct candle_chunk {
  * range of the linked list.
  */
 struct candle_chunk_list_head_version {
+	struct atomsnap_version *snap_version;
 	struct candle_chunk_list_head_version *head_version_prev;
 	struct candle_chunk_list_head_version *head_version_next;
 	struct candle_chunk *tail_node;
@@ -97,16 +110,16 @@ struct candle_update_ops {
  * @flush_ops:               User-supplied callbacks used for flush.
  * @flush_threshold_batches: How many batches to buffer before flush.
  * @batch_candle_count:      Number of candles per column batch (chunk).
- * @symbol_id:               Integer symbol ID resolved via symbol table.
  * @candle_type:             Enum trcache_candle_type.
+ * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list_init_ctx {
 	struct candle_update_ops update_ops;
 	struct trcache_flush_ops flush_ops;
 	uint32_t flush_threshold_batches;
 	uint32_t batch_candle_count;
-	int symbol_id;
 	trcache_candle_type candle_type;
+	int symbol_id;
 };
 
 /*
@@ -123,6 +136,7 @@ struct candle_chunk_list_init_ctx {
  * @flush_ops:               User-supplied callbacks used for flush.
  * @flush_threshold_batches: How many batches to buffer before flush.
  * @batch_candle_count:      Number of candles per column batch (chunk).
+ * @row_page_count:          Number of row pages per chunk.
  * @candle_type:             Enum trcache_candle_type.
  * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
@@ -138,16 +152,44 @@ struct candle_chunk_list {
 	struct trcache_flush_ops flush_ops;
 	uint32_t flush_threshold_batches;
 	uint32_t batch_candle_count;
+	uint32_t row_page_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
+
+/**
+ * @brief   Compute the linear index of a record in the chunk.
+ *
+ * @param   page_index: Index of the page.
+ * @param   row_index:  Index of the row within the page.
+ *
+ * @return  The linear record index in the chunk assuming fixed rows per page.
+ */
+static inline int candle_chunk_calc_record_index(int page_index, int row_index)
+{
+	return (page_index << TRCACHE_ROWS_PER_PAGE_SHIFT) + row_index;
+}
+
+/**
+ * @brief   Compute page and row index from a linear record index.
+ *
+ * @param   record_index:     Linear index of the record in the chunk.
+ * @param   page_index [out]: Page index result.
+ * @param   row_index [out]:  Row index within the page.
+ */
+static inline void candle_chunk_calc_page_and_row(int record_index,
+	int *page_index, int *row_index)
+{
+	*page_index = record_index >> TRCACHE_ROWS_PER_PAGE_SHIFT;
+	*row_index = record_index & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
+}
 
 /**
  * @brief   Allocate and initialize the #candle_chunk_list.
  *
  * @param   ctx: Init context that contains parameters.
  *
- * @return  Pointer to candle_chunk_list or NULL on failure.
+ * @return  Pointer to #candle_chunk_list or NULL on failure.
  */
 struct candle_chunk_list *create_candle_chunk_list(
 	struct candle_chunk_list_init_ctx *ctx);
