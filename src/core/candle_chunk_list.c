@@ -6,15 +6,14 @@
  * row‑form pages, converts them to column batches, and finally flushes the
  * result. All shared structures are protected by atomsnap gates.
  */
-
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <stdatomic.h>
 
-#include "core/candle_chunk.h"
-
+#include "core/candle_chunk_list.h"
 #include "trcache.h"
 
 /**
@@ -84,7 +83,7 @@ static void row_page_version_free(struct atomsnap_version *version)
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-static struct candle_chunk *craete_candle_chunk(int symbol_id,
+static struct candle_chunk *create_candle_chunk(int symbol_id,
 	trcache_candle_type candle_type, uint32_t batch_candle_count,
 	uint32_t row_page_count)
 {
@@ -118,7 +117,6 @@ static struct candle_chunk *craete_candle_chunk(int symbol_id,
 	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count);
 	if (chunk->column_batch == NULL) {
 		fprintf(stderr, "create_candle_chunk: batch alloc failed\n");
-		row_page_version_free(row_page_version);
 		atomsnap_destroy_gate(chunk->row_gate);
 		pthread_spin_destroy(&chunk->spinlock);
 		free(chunk);
@@ -231,8 +229,8 @@ free_head_version:
 
 	next_head_version = head_version->head_version_next;
 
-	free(head_version); /* #candle_chunk_list_head_version */
 	free(head_version->snap_version); /* #atomsnap_version */
+	free(head_version); /* #candle_chunk_list_head_version */
 
 	/*
 	 * Normally not NULL, but may be NULL if the chunk list is being destroyed.
@@ -272,7 +270,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context atomsnap_ctx = {
 		.atomsnap_alloc_impl = candle_chunk_list_head_alloc,
-		.aotmsnap_free_impl = candle_chunk_list_head_free,
+		.atomsnap_free_impl = candle_chunk_list_head_free,
 		.num_extra_control_blocks = 0
 	};
 
@@ -287,7 +285,14 @@ struct candle_chunk_list *create_candle_chunk_list(
 		= (list->batch_candle_count + TRCACHE_ROWS_PER_PAGE - 1)
 			/ TRCACHE_ROWS_PER_PAGE;
 
-	chunk = create_candle_chunk(list->batch_candle_count, list->row_page_count);
+	list->update_ops = ctx->update_ops;
+	list->flush_ops = ctx->flush_ops;
+	list->flush_threshold_batches = ctx->flush_threshold_batches;
+	list->candle_type = ctx->candle_type;
+	list->symbol_id = ctx->symbol_id;
+
+	chunk = create_candle_chunk(list->symbol_id, list->candle_type,
+		list->batch_candle_count, list->row_page_count);
 	if (chunk == NULL) {
 		fprintf(stderr, "create_candle_chunk_list: create chunk failed\n");
 		free(list);
@@ -319,17 +324,11 @@ struct candle_chunk_list *create_candle_chunk_list(
 
 	atomic_store(&list->mutable_seq, -1);
 	atomic_store(&list->last_seq_converted, -1);
-	atomic_store(list->unflushed_batch_count, 0);
+	atomic_store(&list->unflushed_batch_count, 0);
 
 	list->tail = chunk;
 	list->candle_mutable_chunk = chunk;
 	list->converting_chunk = chunk;
-
-	list->update_ops = ctx->update_ops;
-	list->flush_ops = ctx->flush_ops;
-	list->flush_threshold_batches = ctx->flush_threadhold_batches;
-	list->candle_type = ctx->candle_type;
-	list->symbol_id = ctx->symbol_id;
 
 	return list;
 }
@@ -472,8 +471,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
-		new_chunk = create_candle_chunk(list->batch_candle_count,
-			list->row_page_count);
+		new_chunk = create_candle_chunk(list->symbol_id, list->candle_type,
+			list->batch_candle_count, list->row_page_count);
 
 		if (new_chunk == NULL) {
 			fprintf(stderr,
@@ -543,7 +542,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
  */
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
-
+	
 }
 
 /**
