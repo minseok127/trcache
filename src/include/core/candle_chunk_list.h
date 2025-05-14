@@ -177,11 +177,11 @@ static inline int candle_chunk_calc_record_index(int page_index, int row_index)
  * @param   page_index [out]: Page index result.
  * @param   row_index [out]:  Row index within the page.
  */
-static inline void candle_chunk_calc_page_and_row(int record_index,
+static inline void candle_chunk_calc_page_and_row(uint32_t record_index,
 	int *page_index, int *row_index)
 {
-	*page_index = record_index >> TRCACHE_ROWS_PER_PAGE_SHIFT;
-	*row_index = record_index & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
+	*page_index = ((int)record_index) >> TRCACHE_ROWS_PER_PAGE_SHIFT;
+	*row_index = ((int)record_index) & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
 }
 
 /**
