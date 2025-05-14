@@ -529,21 +529,28 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 {
 	struct trcache_candle_batch *batch = chunk->column_batch;
-	uint32_t completed = atomic_load(&chunk->num_completed);
-	int start_idx = -1, end_idx = -1, cur_page_idx = -1, next_page_idx = -1;
-	struct atomsnap_version *page_version = NULL;
-	struct candle_row_page *page = NULL;
-	struct trcache_candle *candle = NULL;
-	uint64_t n = 0;
-
-	start_idx = candle_chunk_calc_record_index(
+	int start_idx = candle_chunk_calc_record_index(
 		chunk->converting_page_idx, chunk->converting_row_idx);
-	end_idx = completed - 1;
-	n = end_idx - start_idx + 1;
+	int end_idx = atomic_load(&chunk->num_completed) - 1;
+	int cur_page_idx = chunk->converting_page_idx;
+	int next_page_idx = -1;
+	struct atomsnap_version *page_version
+		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
+	struct candle_row_page *page
+		= (struct candle_row_page *)page_version->object;
+	uint64_t ret = end_idx - start_idx + 1;
+	struct trcache_candle *c = NULL;
 
-	cur_page_idx = chunk->converting_page_idx;
-	page_version = atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
-	page = (struct candle_row_page *)page_version->object;
+	/* Vector pointers */
+	uint64_t *ts_ptr = batch->start_timestamp_array + start_idx;
+	uint64_t *id_ptr = batch->start_trade_id_array + start_idx;
+	uint32_t *ti_ptr = batch->timestamp_interval_array + start_idx;
+	uint32_t *ii_ptr = batch->trade_id_interval_array + start_idx;
+	double *o_ptr = batch->open_array + start_idx;
+	double *h_ptr = batch->high_array + start_idx;
+	double *l_ptr = batch->low_array + start_idx;
+	double *c_ptr = batch->close_array + start_idx;
+	double *v_ptr = batch->volume_array + start_idx;
 
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
@@ -559,17 +566,17 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 			page = (struct candle_row_page *)page_version->object;
 		}
 
-		candle = &(page->rows[candle_chunk_calc_row_idx(idx)]);
+		c = &(page->rows[candle_chunk_calc_row_idx(idx)]);
 
-		*(batch->start_timestamp_array + idx) = candle->start_timestamp;
-		*(batch->start_trade_id_array + idx) = candle->start_trade_id;
-		*(batch->timestamp_interval_array + idx) = candle->timestamp_interval;
-		*(batch->trade_id_interval_array + idx) = candle->trade_id_interval;
-		*(batch->open_array + idx) = candle->open;
-		*(batch->high_array + idx) = candle->high;
-		*(batch->low_array + idx) = candle->low;
-		*(batch->close_array + idx) = candle->close;
-		*(batch->volume_array + idx) = candle->volume;
+		*ts_ptr++ = c->start_timestamp;
+		*id_ptr++ = c->start_trade_id;
+		*ti_ptr++ = c->timestamp_interval;
+		*ii_ptr++ = c->trade_id_interval;
+		*o_ptr++ = c->open;
+		*h_ptr++ = c->high;
+		*l_ptr++ = c->low;
+		*c_ptr++ = c->close;
+		*v_ptr++ = c->volume;
 	}
 	atomsnap_release_version(page_version);
 
@@ -578,8 +585,8 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
 	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
 
-	atomic_store(&chunk->num_converted, chunk->num_converted + n);
-	return n;
+	atomic_store(&chunk->num_converted, chunk->num_converted + ret);
+	return ret;
 }
 
 /**
