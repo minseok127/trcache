@@ -486,9 +486,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 
 		chunk->mutable_page_idx += 1;
-
-		if (candle_page_init(
-				chunk, chunk->mutable_page_idx + 1, ops, trade) == -1) {
+		if (candle_page_init(chunk, chunk->mutable_page_idx, ops, trade)
+				== -1) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: new page init failed\n");
 			chunk->mutable_page_idx -= 1; /* rollback */
