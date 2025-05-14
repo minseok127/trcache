@@ -317,7 +317,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	head->tail_node = NULL;  /* Node range is not yet closed */
 	head->head_node = chunk; /* First node of the range */
 
-	atomic_store(&list->last_seq_completed, -1);
+	atomic_store(&list->mutable_seq, -1);
 	atomic_store(&list->last_seq_converted, -1);
 	atomic_store(list->unflushed_batch_count, 0);
 
@@ -436,6 +436,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		/* XXX candle map insert => user can see this candle */
 
+		/* Now the new candle visible to readers */
+		atomic_store(&list->mutable_seq, 0);
 		return 0;
 	}
 
@@ -516,7 +518,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * candle can be observed outside the module.
 	 */
 	atomic_store(&chunk->num_completed, chunk->num_completed + 1);
-	atomic_store(&list->last_seq_completed, list->last_seq_completed + 1);
+	atomic_store(&list->mutable_seq, list->mutable_seq + 1);
 
 	return 0;
 }

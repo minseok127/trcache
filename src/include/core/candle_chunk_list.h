@@ -125,7 +125,7 @@ struct candle_chunk_list_init_ctx {
 /*
  * candle_chunk_list - List of chunks containing candles (row and column batch).
  *
- * @last_seq_completed:      Highest seqnum whose row is finished (immutable).
+ * @mutable_seq:             Sequence number of mutable candle.
  * @last_seq_converted:      Highest seqnum already converted to COLUMN batch.
  * @unflushed_batch_count:   Number of batches not yet flushed.
  * @tail:                    Tail of the linked list where new chunks are added.
@@ -141,7 +141,7 @@ struct candle_chunk_list_init_ctx {
  * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list {
-	_Atomic uint64_t last_seq_completed;
+	_Atomic uint64_t mutable_seq;
 	_Atomic uint64_t last_seq_converted;
 	_Atomic uint32_t unflushed_batch_count;
 	struct candle_chunk *tail;
