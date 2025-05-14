@@ -83,7 +83,7 @@ static void row_page_version_free(struct atomsnap_version *version)
 static struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
 {
 	struct candle_chunk *chunk = NULL;
-    struct atomsnap_init_context ctx = {
+	struct atomsnap_init_context ctx = {
 		.atomsnap_alloc_impl = row_page_version_alloc,
 		.atomsnap_free_impl = row_page_version_free,
 		.num_extra_control_blocks = row_page_count - 1
@@ -102,7 +102,7 @@ static struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
 	}
 
 	chunk->row_gate = atomsnap_init_gate(&ctx);
-    if (chunk->row_gate == NULL) {
+	if (chunk->row_gate == NULL) {
 		fprintf(stderr, "create_candle_chunk: atomsnap_init failed\n");
 		pthread_spin_destroy(&chunk->spinlock);
 		free(chunk);
