@@ -501,8 +501,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		list->candle_mutable_chunk = new_chunk;
 
 		/* Add the new chunk into tail of the linked list */
-		atomic_store(&chunk->next, new_chunk);
-		atomic_store(&list->tail, new_chunk);
+		chunk->next = new_chunk;
+		list->tail = new_chunk;
 	}
 
 	/* XXX candle map insert => user can see this candle */
