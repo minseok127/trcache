@@ -549,7 +549,9 @@ static void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
 		if (next_page_idx != cur_page_idx) {
-			/* Page is fully converted. Trigger grace period */
+			/*
+			 * Page is fully converted. Tigger the grace period.
+			 */
 			atomsnap_exchange_version_slot(
 				chunk->row_gate, cur_page_idx, NULL);
 			atomsnap_release_version(page_version);
@@ -578,6 +580,7 @@ static void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	end_idx += 1;
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
 	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
+	atomic_store(&chunk->num_converted, end_idx);
 }
 
 /**
@@ -594,7 +597,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 	uint64_t mutable_seq = atomic_load(&list->mutable_seq);
 	uint64_t last_seq_converted = atomic_load(&list->last_seq_converted);
 	struct atomsnap_version *head_snap = NULL;
-	int n, num_completed, num_converted, start_idx, end_idx;
+	int num_completed, num_converted, start_idx, end_idx;
 
 	/* No more candles to convert */
 	if (mutable_seq == UINT64_MAX || mutable_seq - 1 == last_seq_converted) {
@@ -637,14 +640,10 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 			chunk->converting_page_idx, chunk->converting_row_idx);
 		end_idx = num_completed - 1;
 		candle_chunk_convert_to_batch(chunk, start_idx, end_idx);
-
-		n = end_idx - start_idx + 1;
-		last_seq_converted += n;
-		num_converted += n;
-		atomic_store(&chunk->num_converted, num_converted);
+		last_seq_converted += (end_idx - start_idx + 1);
 
 		/* The chunk is not fully converted, try it again in later */
-		if (num_converted != list->batch_candle_count) {
+		if (end_idx != list->batch_candle_count - 1) {
 			list->converting_chunk = chunk;
 			break;
 		}
