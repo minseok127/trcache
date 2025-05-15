@@ -1,5 +1,5 @@
-/**
- * @file   candle_chunk.c
+/* 
+ * @file   candle_chunk_list.c
  * @brief  Implementation of row -> column staging chunk for trcache.
  *
  * This module manages one candle chunk, which buffers real‑time trades into
@@ -400,7 +400,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
-	uint32_t expected_num_completed = -1;
+	int expected_num_completed = atomic_load(&chunk->num_completed) + 1;
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -444,8 +444,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 		return 0;
 	}
-
-	expected_num_completed = chunk->num_completed + 1;
 
 	/* 
 	 * Move to the next candle and initialize it.
@@ -500,11 +498,11 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		new_chunk->mutable_page_idx = 0;
 		new_chunk->mutable_row_idx = 0;
+		list->candle_mutable_chunk = new_chunk;
 
 		/* Add the new chunk into tail of the linked list */
 		atomic_store(&chunk->next, new_chunk);
 		atomic_store(&list->tail, new_chunk);
-		atomic_store(&list->candle_mutable_chunk, new_chunk);
 	}
 
 	/* XXX candle map insert => user can see this candle */
@@ -522,23 +520,19 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 /**
  * @brief   Convert all immutable row candles within the given chunk.
  *
- * @param   chunk: Target chunk to convert.
- *
- * @return  Number of converted candles.
+ * @param   chunk:     Target chunk to convert.
+ * @param   start_idx: Start record index to convert.
+ * @param   end_idx:   End record index to convert.
  */
-static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
+static void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
+	int start_idx, int end_idx)
 {
 	struct trcache_candle_batch *batch = chunk->column_batch;
-	int start_idx = candle_chunk_calc_record_index(
-		chunk->converting_page_idx, chunk->converting_row_idx);
-	int end_idx = atomic_load(&chunk->num_completed) - 1;
-	int cur_page_idx = chunk->converting_page_idx;
-	int next_page_idx = -1;
+	int cur_page_idx = chunk->converting_page_idx, next_page_idx = -1;
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *page
 		= (struct candle_row_page *)page_version->object;
-	uint64_t ret = end_idx - start_idx + 1;
 	struct trcache_candle *c = NULL;
 
 	/* Vector pointers */
@@ -551,8 +545,6 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 	double *l_ptr = batch->low_array + start_idx;
 	double *c_ptr = batch->close_array + start_idx;
 	double *v_ptr = batch->volume_array + start_idx;
-
-	assert(end_idx < TRCACHE_ROWS_PER_PAGE);
 
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
@@ -586,9 +578,6 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
 	end_idx += 1;
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
 	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
-
-	atomic_store(&chunk->num_converted, chunk->num_converted + ret);
-	return ret;
 }
 
 /**
@@ -596,43 +585,79 @@ static uint64_t candle_chunk_convert_to_batch(struct candle_chunk *chunk)
  *
  * @param    list: Pointer to the candle chunk list.
  *
- * Transforms finalized row-based candles into columnar format.
+ * The admin thread must ensure that the convert function for a single chunk
+ * list is executed by only one worker thread at a time.
  */
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
 	struct candle_chunk *chunk = list->converting_chunk;
-	struct trcache_candle_batch *batch = NULL;
-	uint64_t n = 0;
+	uint64_t mutable_seq = atomic_load(&list->mutable_seq);
+	uint64_t last_seq_converted = atomic_load(&list->last_seq_converted);
+	struct atomsnap_version *head_snap = NULL;
+	int n, num_completed, num_converted, start_idx, end_idx;
 
 	/* No more candles to convert */
-	if (list->mutable_seq == UINT64_MAX ||
-		list->mutable_seq - 1 == list->last_seq_converted) {
+	if (mutable_seq == UINT64_MAX || mutable_seq - 1 == last_seq_converted) {
 		return;
 	}
 
+	/* Pin the head */
+	head_snap = atomsnap_acquire_version(list->head_gate);
+
 	while (chunk != NULL) {
-		/* If conversion is being started for the first time in this chunk */
+		num_completed = atomic_load(&chunk->num_completed);
+		num_converted = atomic_load(&chunk->num_converted);
+
+		if (num_completed == num_converted) {
+			list->converting_chunk = chunk;
+			break;
+		}
+
+		/*
+		 * If conversion is being started for the first time in this chunk,
+		 * allocate and initialze column-batch.
+		 */
 		if (chunk->column_batch == NULL) {
-			batch = trcache_batch_alloc_on_heap(list->batch_candle_count);
-			if (batch == NULL) {
+			chunk->column_batch
+				= trcache_batch_alloc_on_heap(list->batch_candle_count);
+			if (chunk->column_batch == NULL) {
 				fprintf(stderr,
 					"candle_chunk_list_convert_to_column_batch: batch err\n");
-				return;
+				break;
 			}
 
-			chunk->column_batch = batch;
-			batch->symbol_id = list->symbol_id;
-			batch->candle_type = list->candle_type;
+			chunk->column_batch->symbol_id = list->symbol_id;
+			chunk->column_batch->candle_type = list->candle_type;
 			chunk->converting_page_idx = 0;
 			chunk->converting_row_idx = 0;
 		}
 
-		n = candle_chunk_convert_to_batch(chunk);
+		/* Convert row-format candles into the column batch */
+		start_idx = candle_chunk_calc_record_index(
+			chunk->converting_page_idx, chunk->converting_row_idx);
+		end_idx = num_completed - 1;
+		candle_chunk_convert_to_batch(chunk, start_idx, end_idx);
 
-		atomic_store(&list->last_seq_converted, list->last_seq_converted + n);
+		n = end_idx - start_idx + 1;
+		last_seq_converted += n;
+		num_converted += n;
+		atomic_store(&chunk->num_converted, num_converted);
 
+		/* The chunk is not fully converted, try it again in later */
+		if (num_converted != list->batch_candle_count) {
+			list->converting_chunk = chunk;
+			break;
+		}
+
+		/* If this chunk is fully converted, notice it to the flush worker */
+		atomic_fetch_add(&list->unflushed_batch_count, 1);
 		chunk = chunk->next;
 	}
+
+	/* Unpin head */
+	atomsnap_release_version(head_snap);
+
+	atomic_store(&list->last_seq_converted, last_seq_converted);
 }
 
 /**
@@ -641,8 +666,31 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
  * @param    list: Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
+ *
+ * The admin thread must ensure that the flush function for a single chunk
+ * list is executed by only one worker thread at a time.
  */
 void candle_chunk_list_flush(struct candle_chunk_list *list)
 {
+	int flush_batch_count = list->flush_threshold_batches
+		- atomic_load(&list->unflushed_batch_count);
+	struct atomsnap_version *head_snap = NULL;
+	struct candle_chunk_list_head_version *head_version = NULL;
 
+	if (flush_batch_count < 0) {
+		return;
+	}
+
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	head_version = (struct candle_chunk_list_head_version *)head_snap->object;
+
+	/*
+	 * Modifying the head of the list is restricted to a single thread,
+	 * coordinated by the admin thread. Thus, only this execution path is
+	 * allowed to update the list head, making this head version the latest one.
+	 */
+
+	for (int i = 0; i < flush_batch_count; i++) {
+
+	}
 }

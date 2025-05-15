@@ -34,12 +34,12 @@ struct candle_row_page {
  * candle_chunk - Owns a sequence window of candles.
  *
  * @spinlock:             Lock used to protect the candle being updated.
+ * @num_completed:        Number of records (candles) immutable.
+ * @num_converted:        Number of records (candles) converted to column batch.
  * @mutable_page_idx:     Page index of the candle being updated.
  * @mutable_row_idx:      Index of the row being updated within the page.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
- * @num_completed:        Number of records (candles) immutable.
- * @num_converted:        Number of records (candles) converted to column batch.
  * @next:                 Linked list pointer.
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
  * @column_batch:         SoA buffer (NULL until first need).
@@ -50,12 +50,12 @@ struct candle_row_page {
  */
 struct candle_chunk {
 	pthread_spinlock_t spinlock;
+	_Atomic int num_completed;
+	_Atomic int num_converted;
 	int mutable_page_idx;
 	int mutable_row_idx;
 	int converting_page_idx;
 	int converting_row_idx;
-	_Atomic uint32_t num_completed;
-	_Atomic uint32_t num_converted;
 	struct candle_chunk *next;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
@@ -116,8 +116,8 @@ struct candle_update_ops {
 struct candle_chunk_list_init_ctx {
 	struct candle_update_ops update_ops;
 	struct trcache_flush_ops flush_ops;
-	uint32_t flush_threshold_batches;
-	uint32_t batch_candle_count;
+	int flush_threshold_batches;
+	int batch_candle_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
@@ -129,9 +129,9 @@ struct candle_chunk_list_init_ctx {
  * @last_seq_converted:      Highest seqnum already converted to COLUMN batch.
  * @unflushed_batch_count:   Number of batches not yet flushed.
  * @tail:                    Tail of the linked list where new chunks are added.
- * @head_gate:               Gate managing head versions.
  * @candle_mutable_chunk:    Chunk containing mutable candle.
  * @converting_chunk:        Chunk being converted to a column batch.
+ * @head_gate:               Gate managing head versions.
  * @update_ops:              Candle update callbacks.
  * @flush_ops:               User-supplied callbacks used for flush.
  * @flush_threshold_batches: How many batches to buffer before flush.
@@ -143,16 +143,16 @@ struct candle_chunk_list_init_ctx {
 struct candle_chunk_list {
 	_Atomic uint64_t mutable_seq;
 	_Atomic uint64_t last_seq_converted;
-	_Atomic uint32_t unflushed_batch_count;
+	_Atomic int unflushed_batch_count;
 	struct candle_chunk *tail;
-	struct atomsnap_gate *head_gate;
 	struct candle_chunk *candle_mutable_chunk;
 	struct candle_chunk *converting_chunk;
+	struct atomsnap_gate *head_gate;
 	struct candle_update_ops update_ops;
 	struct trcache_flush_ops flush_ops;
-	uint32_t flush_threshold_batches;
-	uint32_t batch_candle_count;
-	uint32_t row_page_count;
+	int flush_threshold_batches;
+	int batch_candle_count;
+	int row_page_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
@@ -233,7 +233,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
  *
  * @param    list: Pointer to the candle chunk list.
  *
- * Transforms finalized row-based candles into columnar format.
+ * The admin thread must ensure that the convert function for a single chunk
+ * list is executed by only one worker thread at a time.
  */
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 
@@ -243,6 +244,9 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
  * @param    list: Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
+ *
+ * The admin thread must ensure that the flush function for a single chunk
+ * list is executed by only one worker thread at a time.
  */
 void candle_chunk_list_flush(struct candle_chunk_list *list);
 

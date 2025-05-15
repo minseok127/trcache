@@ -56,10 +56,10 @@ struct trcache {
 	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 	struct symbol_table *symbol_table;
 	trcache_candle_type_flags candle_type_flags;
-	uint32_t num_candle_types;
-	uint32_t num_workers;
-	uint32_t batch_candle_count;
-	uint32_t flush_threshold_batches;
+	int num_candle_types;
+	int num_workers;
+	int batch_candle_count;
+	int flush_threshold_batches;
 	struct trcache_flush_ops flush_ops;
 };
 

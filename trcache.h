@@ -205,9 +205,9 @@ typedef struct trcache_flush_ops {
  * 'trcache_init()' signature).
  */
 typedef struct trcache_init_ctx {
-	uint32_t num_worker_threads;
-	uint32_t batch_candle_count;
-	uint32_t flush_threshold_batches;
+	int num_worker_threads;
+	int batch_candle_count;
+	int flush_threshold_batches;
 	trcache_candle_type_flags candle_type_flags;
 	struct trcache_flush_ops flush_ops;
 } trcache_init_ctx;
