@@ -14,7 +14,6 @@
 #include <stdatomic.h>
 
 #include "core/candle_chunk_list.h"
-#include "trcache.h"
 
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
