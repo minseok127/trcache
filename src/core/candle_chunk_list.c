@@ -16,6 +16,78 @@
 #include "core/candle_chunk_list.h"
 
 /**
+ * @brief   Flush a single fully-converted candle chunk.
+ *
+ * Starts a backend-specific flush on @chunk using the callbacks in
+ * @trc->flush_ops. If the backend returns a non-NULL handle, the flush is
+ * assumed to be asynchronous and remains "in-flight"; the caller must poll
+ * it later with flush_ops->is_done(). When the backend performs a
+ * synchronous flush it returns NULL, in which case the chunk is marked
+ * immediately as flushed.
+ *
+ * @param   trc:       Pointer to the parent trcache instance.
+ * @param   chunk:     Pointer to the target candle_chunk.
+ *
+ * @return  1  flush completed synchronously  
+ *          0  flush started asynchronously (still pending)  
+ */
+static int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk)
+{
+	struct trcache_flush_ops *flush_ops = &trc->flush_ops;
+
+	chunk->flush_handle = flush_ops->flush(
+		trc, chunk->column_batch, flush_ops->flush_ctx);
+
+	/* Synchronous flush - the backend finished right away. */
+	if (chunk->flush_handle == NULL) {
+		chunk->is_flushed = 1;
+		return 1;
+	}
+
+	/* Asynchronous flush has begun. Caller must poll later. */
+	chunk->is_flushed = 0;
+	return 0;
+}
+
+/**
+ * @brief   Poll a candle chunk for flush completion.
+ *
+ * If the chunk was flushed synchronously (@chunk->is_flushed == 1) the
+ * function returns immediately. Otherwise it queries the backend via
+ * flush_ops->is_done(). When the backend signals completion, the flush
+ * handle is destroyed and the chunk is marked flushed.
+ *
+ * @param   trc:    Pointer to the parent trcache instance.
+ * @param   chunk:  Pointer to the target candle_chunk.
+ *
+ * @return  1  flush has completed *in this call*.
+ *          0  flush has not completed *in this call*.
+ */
+static int candle_chunk_flush_poll(struct trcache *trc,
+	struct candle_chunk *chunk)
+{
+	struct trcache_flush_ops *flush_ops = &trc->flush_ops;
+
+	/* Synchronous flush already finished earlier. */
+	if (chunk->is_flushed) {
+		return 0;
+	}
+
+	/* Ask the backend whether the I/O has finished. */
+	if (flush_ops->is_done(trc, chunk->column_batch, chunk->flush_handle)) {
+		/* Tear down backend resources and mark completion. */
+		flush_ops->destroy_handle(chunk->flush_handle,
+			flush_ops->destroy_handle_ctx);
+		chunk->flush_handle = NULL;
+		chunk->is_flushed = 1;
+		return 1;
+	}
+
+	/* Still pending. */
+	return 0;
+}
+
+/**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
  *
  * The returned version already contains a zero‑initialized, 64‑byte‑aligned
@@ -65,7 +137,7 @@ static struct atomsnap_version *row_page_version_alloc(
 static void row_page_version_free(struct atomsnap_version *version)
 {
 	if (version == NULL) {
-        return;
+		return;
 	}
 
 	free(version->object); /* #candle_row_page */
@@ -330,6 +402,7 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 {
 	struct atomsnap_version *snap = NULL;
 	struct candle_chunk_list_head_version *head_version = NULL;
+	struct candle_chunk *chunk = NULL;
 
 	if (chunk_list == NULL) {
 		return;
@@ -341,6 +414,20 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	snap = atomsnap_acquire_version(chunk_list->head_gate);
 	head_version = (struct candle_chunk_list_head_version *)snap->object;
 	head_version->tail_node = chunk_list->tail;
+
+	/*
+	 * Flush all chunks.
+	 */
+	chunk = head_version->head_node;
+	do {
+		if (candle_chunk_flush(chunk_list->trc, chunk) == 0) {
+			while (candle_chunk_flush_poll(chunk_list->trc, chunk) != 1) {
+				/* polling */ ;
+			}
+		}
+		chunk = chunk->next;
+	} while (chunk != NULL);
+
 	atomsnap_release_version(snap);
 
 	/* This will call candle_chunk_list_head_free() */
@@ -670,7 +757,6 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    cache: Pointer to the #trcache.
  * @param    list:  Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
@@ -678,10 +764,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct trcache *cache,
-	struct candle_chunk_list *list)
+void candle_chunk_list_flush(struct candle_chunk_list *list)
 {
-	struct trcache_flush_ops *flush_ops = &list->trc->flush_ops;
 	int flush_batch_count = atomic_load(&list->unflushed_batch_count)
 		- list->trc->flush_threshold_batches;
 	int flush_start_count = 0, flush_done_count = 0;
@@ -712,13 +796,9 @@ void candle_chunk_list_flush(struct trcache *cache,
 	while (chunk != NULL) {
 		assert(chunk->num_converted == list->trc->batch_candle_count);
 
-		chunk->flush_handle = flush_ops->flush(cache,
-			chunk->column_batch, flush_ops->flush_ctx);
 		flush_start_count += 1;
 
-		/* This is not an async flush */
-		if (chunk->flush_handle == NULL) {
-			chunk->is_flushed = 1;
+		if (candle_chunk_flush(list->trc, chunk) == 1) {
 			flush_done_count += 1;
 		}
 
@@ -736,14 +816,8 @@ void candle_chunk_list_flush(struct trcache *cache,
 	while (flush_done_count < flush_batch_count) {
 		chunk = head_version->head_node;
 		do {
-			if (!chunk->is_flushed &&
-					flush_ops->is_done(cache, chunk->column_batch,
-						chunk->flush_handle)) {
-				flush_ops->destroy_handle(chunk->flush_handle,
-					flush_ops->destroy_handle_ctx);
+			if (candle_chunk_flush_poll(list->trc, chunk) == 1) {
 				flush_done_count += 1;
-				chunk->is_flushed = 1;
-				chunk->flush_handle = NULL;
 			}
 			chunk = chunk->next;
 		} while (chunk != last_chunk);

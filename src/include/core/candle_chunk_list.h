@@ -239,7 +239,6 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    cache: Pointer to the #trcache.
  * @param    list:  Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
@@ -247,8 +246,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct trcache *cache,
-	struct candle_chunk_list *list);
+void candle_chunk_list_flush(struct candle_chunk_list *list);
 
 #endif /* CANDLE_CHUNK_LIST_H */
 
