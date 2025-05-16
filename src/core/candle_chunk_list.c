@@ -114,6 +114,8 @@ static struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
 	chunk->mutable_row_idx = -1;
 	chunk->converting_page_idx = -1;
 	chunk->converting_row_idx = -1;
+	chunk->is_flushed = 0;
+	chunk->flush_handle = NULL;
 
 	atomic_store(&chunk->num_completed, 0);
 	atomic_store(&chunk->num_converted, 0);
@@ -226,7 +228,8 @@ free_head_version:
 	/*
 	 * Try to set the prev pointer of the next head to NULL, so that it
 	 * recognizes itself as the end of the list. If this fails, we must free the
-	 * nodes of the next head ourselves.
+	 * nodes of the next head ourselves. Because the thread freeing the next
+	 * head might assume it's not the end of the list.
 	 */
 	prev_head_version = atomic_load(&next_head_version->head_version_prev);
 	if (((uint64_t)prev_head_version & HEAD_VERSION_RELEASE_MASK) != 0 ||
@@ -258,16 +261,21 @@ struct candle_chunk_list *create_candle_chunk_list(
 		.num_extra_control_blocks = 0
 	};
 
+	if (ctx == NULL || ctx->trc == NULL) {
+		fprintf(stderr, "create_candle_chunk_list: ctx error\n");
+		return NULL;
+	}
+
 	list = malloc(sizeof(struct candle_chunk_list));
 	if (list == NULL) {
 		fprintf(stderr, "create_candle_chunk_list: list alloc failed\n");
 		return NULL;
 	}
 
-	list->batch_candle_count = ctx->batch_candle_count;
-	list->row_page_count
-		= (list->batch_candle_count + TRCACHE_ROWS_PER_PAGE - 1)
-			/ TRCACHE_ROWS_PER_PAGE;
+	list->trc = ctx->trc;
+
+	list->row_page_count = (ctx->trc->batch_candle_count
+		+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
 
 	chunk = create_candle_chunk(list->row_page_count);
 	if (chunk == NULL) {
@@ -304,8 +312,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 	atomic_store(&list->unflushed_batch_count, 0);
 
 	list->update_ops = ctx->update_ops;
-	list->flush_ops = ctx->flush_ops;
-	list->flush_threshold_batches = ctx->flush_threshold_batches;
 	list->candle_type = ctx->candle_type;
 	list->symbol_id = ctx->symbol_id;
 
@@ -438,6 +444,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * of the current candle.
 	 */
 	if (!ops->is_closed(candle, trade)) {
+		/* Protect from readers */
 		pthread_spin_lock(&chunk->spinlock);
 		ops->update(candle, trade);
 		pthread_spin_unlock(&chunk->spinlock);
@@ -452,7 +459,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * (C) Move to the first page of a new chunk.
 	 */
 	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
-			expected_num_completed != list->batch_candle_count) {
+			expected_num_completed != list->trc->batch_candle_count) {
 		chunk->mutable_row_idx += 1;
 		candle = &(row_page->rows[chunk->mutable_row_idx]);
 
@@ -464,7 +471,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		ops->init(candle, trade);
 		atomsnap_release_version(row_page_version);
 	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1 &&
-			expected_num_completed != list->batch_candle_count) {
+			expected_num_completed != list->trc->batch_candle_count) {
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
@@ -622,7 +629,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		 */
 		if (chunk->column_batch == NULL) {
 			chunk->column_batch
-				= trcache_batch_alloc_on_heap(list->batch_candle_count);
+				= trcache_batch_alloc_on_heap(list->trc->batch_candle_count);
 			if (chunk->column_batch == NULL) {
 				fprintf(stderr,
 					"candle_chunk_list_convert_to_column_batch: batch err\n");
@@ -643,7 +650,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		last_seq_converted += (end_idx - start_idx + 1);
 
 		/* The chunk is not fully converted, try it again in later */
-		if (end_idx != list->batch_candle_count - 1) {
+		if (end_idx != list->trc->batch_candle_count - 1) {
 			list->converting_chunk = chunk;
 			break;
 		}
@@ -652,6 +659,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		atomic_fetch_add(&list->unflushed_batch_count, 1);
 		chunk = chunk->next;
 	}
+
+	assert(chunk != NULL);
 
 	/* Unpin head */
 	atomsnap_release_version(head_snap);
@@ -662,21 +671,32 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    list: Pointer to the candle chunk list.
+ * @param    cache: Pointer to the #trcache.
+ * @param    list:  Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
  *
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct candle_chunk_list *list)
+void candle_chunk_list_flush(struct trcache *cache,
+	struct candle_chunk_list *list)
 {
-	int flush_batch_count = list->flush_threshold_batches
-		- atomic_load(&list->unflushed_batch_count);
-	struct atomsnap_version *head_snap = NULL;
-	struct candle_chunk_list_head_version *head_version = NULL;
+	struct trcache_flush_ops *flush_ops = &list->trc->flush_ops;
+	int flush_batch_count = atomic_load(&list->unflushed_batch_count)
+		- list->trc->flush_threshold_batches;
+	int flush_start_count = 0, flush_done_count = 0;
+	struct atomsnap_version *head_snap, *new_snap;
+	struct candle_chunk_list_head_version *head_version, *new_ver;
+	struct candle_chunk *chunk, *last_chunk = NULL;
 
 	if (flush_batch_count < 0) {
+		return;
+	}
+
+	new_snap = atomsnap_make_version(list->head_gate, NULL);
+	if (new_snap == NULL) {
+		fprintf(stderr, "candle_chunk_list_flush: new_snap err\n");
 		return;
 	}
 
@@ -688,8 +708,71 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	 * coordinated by the admin thread. Thus, only this execution path is
 	 * allowed to update the list head, making this head version the latest one.
 	 */
+	chunk = head_version->head_node;
 
-	for (int i = 0; i < flush_batch_count; i++) {
+	while (chunk != NULL) {
+		assert(chunk->num_converted == list->trc->batch_candle_count);
 
+		chunk->flush_handle = flush_ops->flush(cache,
+			chunk->column_batch, flush_ops->flush_ctx);
+		flush_start_count += 1;
+
+		/* This is not an async flush */
+		if (chunk->flush_handle == NULL) {
+			chunk->is_flushed = 1;
+			flush_done_count += 1;
+		}
+
+		if (flush_start_count == flush_batch_count) {
+			last_chunk = chunk;
+			break;
+		}
+
+		chunk = chunk->next;
 	}
+
+	assert(last_chunk != NULL && last_chunk != list->tail);
+
+	/* If asynchronous flush is used, check whether the flush has completed */
+	while (flush_done_count < flush_batch_count) {
+		chunk = head_version->head_node;
+		do {
+			if (!chunk->is_flushed &&
+					flush_ops->is_done(cache, chunk->column_batch,
+						chunk->flush_handle)) {
+				flush_ops->destroy_handle(chunk->flush_handle,
+					flush_ops->destroy_handle_ctx);
+				flush_done_count += 1;
+				chunk->is_flushed = 1;
+				chunk->flush_handle = NULL;
+			}
+			chunk = chunk->next;
+		} while (chunk != last_chunk);
+	}
+
+	atomic_fetch_sub(&list->unflushed_batch_count, flush_done_count);
+
+	/* Change head version */
+	new_ver = (struct candle_chunk_list_head_version *)new_snap->object;
+
+	new_ver->head_version_prev = head_version;
+	new_ver->head_version_next = NULL;
+
+	new_ver->tail_node = NULL;
+	new_ver->head_node = last_chunk->next;
+	assert(new_ver->head_node != NULL);
+
+	atomic_store(&head_version->head_version_next, new_ver);
+	atomic_store(&head_version->tail_node, last_chunk);	
+
+	/*
+	 * The above contains essential information for both threads starting
+	 * traversal from the head version and for freeing old versions. It must be
+	 * set before registering the new head and releasing the old head version.
+	 */
+	__sync_synchronize();
+
+	atomsnap_exchange_version(list->head_gate, new_snap);
+
+	atomsnap_release_version(head_snap);
 }

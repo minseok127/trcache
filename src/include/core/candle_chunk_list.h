@@ -7,6 +7,8 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
+#include "core/trcache_internal.h"
+
 #include "trcache.h"
 
 #ifndef TRCACHE_ROWS_PER_PAGE
@@ -40,6 +42,8 @@ struct candle_row_page {
  * @mutable_row_idx:      Index of the row being updated within the page.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
+ * @is_flushed:           Flag to indicate flush state.
+ * @flush_handle:         Returned pointer of trcache_flush_ops->flush().
  * @next:                 Linked list pointer.
  * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
  * @column_batch:         SoA buffer (NULL until first need).
@@ -56,6 +60,8 @@ struct candle_chunk {
 	int mutable_row_idx;
 	int converting_page_idx;
 	int converting_row_idx;
+	int is_flushed;
+	void *flush_handle;
 	struct candle_chunk *next;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
@@ -106,18 +112,14 @@ struct candle_update_ops {
 /*
  * candle_chunk_list_init_ctx - All parameters required to create a chunk list.
  *
- * @update_ops:              Candle update callbacks.
- * @flush_ops:               User-supplied callbacks used for flush.
- * @flush_threshold_batches: How many batches to buffer before flush.
- * @batch_candle_count:      Number of candles per column batch (chunk).
- * @candle_type:             Enum trcache_candle_type.
- * @symbol_id:               Integer symbol ID resolved via symbol table.
+ * @trc:          #trcache back-pointer.
+ * @update_ops:   Candle update callbacks.
+ * @candle_type:  Enum trcache_candle_type.
+ * @symbol_id:    Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list_init_ctx {
+	struct trcache *trc;
 	struct candle_update_ops update_ops;
-	struct trcache_flush_ops flush_ops;
-	int flush_threshold_batches;
-	int batch_candle_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
@@ -133,9 +135,7 @@ struct candle_chunk_list_init_ctx {
  * @converting_chunk:        Chunk being converted to a column batch.
  * @head_gate:               Gate managing head versions.
  * @update_ops:              Candle update callbacks.
- * @flush_ops:               User-supplied callbacks used for flush.
- * @flush_threshold_batches: How many batches to buffer before flush.
- * @batch_candle_count:      Number of candles per column batch (chunk).
+ * @trc:                     #trcache back-pointer.
  * @row_page_count:          Number of row pages per chunk.
  * @candle_type:             Enum trcache_candle_type.
  * @symbol_id:               Integer symbol ID resolved via symbol table.
@@ -149,9 +149,7 @@ struct candle_chunk_list {
 	struct candle_chunk *converting_chunk;
 	struct atomsnap_gate *head_gate;
 	struct candle_update_ops update_ops;
-	struct trcache_flush_ops flush_ops;
-	int flush_threshold_batches;
-	int batch_candle_count;
+	struct trcache *trc;
 	int row_page_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
@@ -241,14 +239,16 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 /**
  * @brief    Flush finalized column batches from the chunk list.
  *
- * @param    list: Pointer to the candle chunk list.
+ * @param    cache: Pointer to the #trcache.
+ * @param    list:  Pointer to the candle chunk list.
  *
  * May invoke user-supplied flush callbacks.
  *
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct candle_chunk_list *list);
+void candle_chunk_list_flush(struct trcache *cache,
+	struct candle_chunk_list *list);
 
 #endif /* CANDLE_CHUNK_LIST_H */
 
