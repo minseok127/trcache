@@ -6,66 +6,8 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "concurrent/atomsnap.h"
-#include "core/trcache_internal.h"
-
-#include "trcache.h"
-
-#ifndef TRCACHE_ROWS_PER_PAGE
-#define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page */
-#endif
-
-#ifndef TRCACHE_ROWS_PER_PAGE_SHIFT
-#define TRCACHE_ROWS_PER_PAGE_SHIFT (6)
-#endif
-
-#ifndef TRCACHE_ROWS_PER_PAGE_MODULAR_MASK
-#define TRCACHE_ROWS_PER_PAGE_MODULAR_MASK (TRCACHE_ROWS_PER_PAGE - 1)
-#endif
-
-/*
- * candle_row_page - 4 KiB array of row-oriented candles.
- *
- * @rows: Fixed AoS storage for TRCACHE_ROWS_PER_PAGE candles.
- */
-struct candle_row_page {
-	struct trcache_candle rows[TRCACHE_ROWS_PER_PAGE];
-};
-
-/*
- * candle_chunk - Owns a sequence window of candles.
- *
- * @spinlock:             Lock used to protect the candle being updated.
- * @num_completed:        Number of records (candles) immutable.
- * @num_converted:        Number of records (candles) converted to column batch.
- * @mutable_page_idx:     Page index of the candle being updated.
- * @mutable_row_idx:      Index of the row being updated within the page.
- * @converting_page_idx:  Index of the page being converted to column batch.
- * @converting_row_idx:   Index of the row being converted to column batch.
- * @is_flushed:           Flag to indicate flush state.
- * @flush_handle:         Returned pointer of trcache_flush_ops->flush().
- * @next:                 Linked list pointer.
- * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
- * @column_batch:         SoA buffer (NULL until first need).
- *
- * This structure is a linked list node of #candle_chunk_list. A Chunk holds
- * row-based candles initially, then converts them into columnar format for
- * efficient processing.
- */
-struct candle_chunk {
-	pthread_spinlock_t spinlock;
-	_Atomic int num_completed;
-	_Atomic int num_converted;
-	int mutable_page_idx;
-	int mutable_row_idx;
-	int converting_page_idx;
-	int converting_row_idx;
-	int is_flushed;
-	void *flush_handle;
-	struct candle_chunk *next;
-	struct atomsnap_gate *row_gate;
-	struct trcache_candle_batch *column_batch;
-};
+#include "core/candle_chunk.h"
+#include "core/candle_chunk_index.h"
 
 /*
  * candle_chunk_list_head_version - Covers the lifetime of the chunks.
@@ -94,19 +36,6 @@ struct candle_chunk_list_head_version {
 	struct candle_chunk_list_head_version *head_version_next;
 	struct candle_chunk *tail_node;
 	struct candle_chunk *head_node;
-};
-
-/*
- * candle_update_ops - Callbacks for updating candles.
- *
- * @init:      Init function that sets up the candle with the first trade data.
- * @update:    Update function that reflects trade data.
- * @is_closed: Checks if trade data can be applied to the candle.
- */
-struct candle_update_ops {
-	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
-	void (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
-	bool (*is_closed)(struct trcache_candle *c, struct trcache_trade_data *d);
 };
 
 /*
@@ -154,43 +83,6 @@ struct candle_chunk_list {
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
-
-/**
- * @brief   Compute the linear index of a record in the chunk.
- *
- * @param   page_index: Index of the page.
- * @param   row_index:  Index of the row within the page.
- *
- * @return  The linear record index in the chunk assuming fixed rows per page.
- */
-static inline int candle_chunk_calc_record_index(int page_index, int row_index)
-{
-	return (page_index << TRCACHE_ROWS_PER_PAGE_SHIFT) + row_index;
-}
-
-/**
- * @brief   Compute page index from a linear record index.
- *
- * @param   record_index: Linear index of the record in the chunk.
- *
- * @return  The page index in the chunk.
- */
-static inline int candle_chunk_calc_page_idx(int record_index)
-{
-	return record_index >> TRCACHE_ROWS_PER_PAGE_SHIFT;
-}
-
-/**
- * @brief   Compute page index from a linear record index.
- *
- * @param   record_index: Linear index of the record in the chunk.
- *
- * @return  The row index in the page.
- */
-static inline int candle_chunk_calc_row_idx(int record_index)
-{
-	return record_index & TRCACHE_ROWS_PER_PAGE_MODULAR_MASK;
-}
 
 /**
  * @brief   Allocate and initialize the #candle_chunk_list.
