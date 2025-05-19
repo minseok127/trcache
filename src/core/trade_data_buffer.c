@@ -160,10 +160,12 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			list_add_tail(&new_chunk->list_node, &buf->chunk_list);
 		}
 
-		atomic_store(&new_chunk->write_idx, 0);
-		atomic_store(&new_chunk->num_consumed_cursor, 0);
-
 		buf->next_tail_write_idx = 0;
+
+		atomic_store_explicit(&new_chunk->write_idx, 0,
+			memory_order_release);
+		atomic_store_explicit(&new_chunk->num_consumed_cursor, 0,
+			memory_order_release);
 	} else {
 		buf->next_tail_write_idx += 1;
 	}
@@ -174,9 +176,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 * Consumers must access the last entry only after
 	 * the new chunk has been linked.
 	 */
-	__sync_synchronize();
-
-	atomic_store(&tail->write_idx, tail->write_idx + 1);
+	atomic_store_explicit(&tail->write_idx, tail->write_idx + 1,
+		memory_order_release);
 
 	return 0;
 }
@@ -208,7 +209,8 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 
 	assert(cursor->peek_chunk != NULL);
 	chunk = cursor->peek_chunk;
-	write_idx = atomic_load(&chunk->write_idx);
+	write_idx = atomic_load_explicit(
+		&chunk->write_idx, memory_order_acquire);
 
 	if (cursor->peek_idx == write_idx) {
 		*count = 0;
@@ -266,9 +268,8 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 		 * chunk. Incrementing the counter before dereferencing could result in
 		 * accessing a freed chunk.
 		 */
-		__sync_synchronize();
-
-		atomic_fetch_add(&chunk->num_consumed_cursor, 1);
+		atomic_fetch_add_explicit(&chunk->num_consumed_cursor, 1,
+			memory_order_release);
 
 		chunk = __get_trd_chunk_ptr(c);
 	}
@@ -299,7 +300,8 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	chunk = __get_trd_chunk_ptr(first);
 
 	while (chunk != tail) {
-		if (atomic_load(&chunk->num_consumed_cursor) != buf->num_cursor) {
+		if (atomic_load_acquire(&chunk->num_consumed_cursor,
+				memory_order_acquire) != buf->num_cursor) {
 			break;
 		}
 

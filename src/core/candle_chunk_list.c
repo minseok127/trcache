@@ -74,7 +74,7 @@ static void candle_chunk_list_head_free(struct atomsnap_version *version)
 		return;
 	}
 
-	__sync_synchronize();
+	atomic_thread_fence(memory_order_seq_cst);
 
 free_head_version:
 
