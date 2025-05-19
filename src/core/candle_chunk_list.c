@@ -150,10 +150,11 @@ struct candle_chunk_list *create_candle_chunk_list(
 
 	list->trc = ctx->trc;
 
-	list->row_page_count = (ctx->trc->batch_candle_count
+	list->row_page_count = (list->trc->batch_candle_count
 		+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
 
-	chunk = create_candle_chunk(list->row_page_count);
+	chunk = create_candle_chunk(ctx->candle_type, ctx->symbol_id,
+		list->row_page_count, list->trc->batch_candle_count);
 	if (chunk == NULL) {
 		fprintf(stderr, "create_candle_chunk_list: create chunk failed\n");
 		free(list);
@@ -265,6 +266,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_candle *candle = NULL;
 	int expected_num_completed = 1 + 
 		atomic_load_explicit(&chunk->num_completed, memory_order_acquire);
+	int record_idx;
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -280,11 +282,17 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		chunk->mutable_page_idx = 0;
 		chunk->mutable_row_idx = 0;
+		
+		/* Remember start seqnum and timestamp for searching */
+		chunk->seq_first = 0;
+		chunk->column_batch->start_timestamp_array[0] = trade->timestamp;
 
 		// XXX candle chunk index insert
 
 		/* Now the new candle visible to readers */
-		atomic_store(&list->mutable_seq, 0);
+		atomic_store_explicit(&list->mutable_seq, 0, memory_order_release);
+		atomic_store_explicit(&chunk->num_completed, 0, memory_order_release);
+
 		return 0;
 	}
 
@@ -347,7 +355,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
 
-		new_chunk = create_candle_chunk(list->row_page_count);
+		new_chunk = create_candle_chunk(list->candle_type, list->symbol_id,
+			list->row_page_count, list->trc->batch_candle_count);
 		if (new_chunk == NULL) {
 			fprintf(stderr,
 				"candle_chunk_list_apply_trade: invalid new chunk\n");
@@ -363,15 +372,23 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		new_chunk->mutable_page_idx = 0;
 		new_chunk->mutable_row_idx = 0;
-		list->candle_mutable_chunk = new_chunk;
+		new_chunk->seq_first = chunk->seq_first + list->trc->batch_candle_count;
 
 		/* Add the new chunk into tail of the linked list */
 		chunk->next = new_chunk;
+		new_chunk->prev = chunk;
 		list->tail = new_chunk;
+		list->candle_mutable_chunk = new_chunk;
 
-		// XXX candle chunk index old chunk update
 		// XXX candle chunk index insert
+
+		chunk = new_chunk; /* For recording the start_timestamp below */
 	}
+
+	/* Write start timestamp for searching */
+	record_idx = candle_chunk_calc_record_index(
+		chunk->mutable_page_idx, chunk->mutable_row_idx);
+	chunk->column_batch->start_timestamp_array[record_idx] = trade->timestamp;
 
 	/*
 	 * Ensure that the previous mutable candle is completed, and a new mutable
@@ -421,25 +438,6 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		if (num_completed == num_converted) {
 			list->converting_chunk = chunk;
 			break;
-		}
-
-		/*
-		 * If conversion is being started for the first time in this chunk,
-		 * allocate and initialze column-batch.
-		 */
-		if (chunk->column_batch == NULL) {
-			chunk->column_batch
-				= trcache_batch_alloc_on_heap(list->trc->batch_candle_count);
-			if (chunk->column_batch == NULL) {
-				fprintf(stderr,
-					"candle_chunk_list_convert_to_column_batch: batch err\n");
-				break;
-			}
-
-			chunk->column_batch->symbol_id = list->symbol_id;
-			chunk->column_batch->candle_type = list->candle_type;
-			chunk->converting_page_idx = 0;
-			chunk->converting_row_idx = 0;
 		}
 
 		/* Convert row-format candles into the column batch */

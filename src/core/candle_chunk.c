@@ -76,11 +76,15 @@ static void row_page_version_free(struct atomsnap_version *version)
 /**
  * @brief   Allocate and initialize #candle_chunk.
  *
+ * @param   candle_type:        Candle type of the column-batch.
+ * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
+ * @param   batch_candle_count: Number of candles per chunk.   
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
+struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
+	int symbol_id, int row_page_count, int batch_candle_count)
 {
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context ctx = {
@@ -109,18 +113,31 @@ struct candle_chunk *create_candle_chunk(uint32_t row_page_count)
 		return NULL;
 	}
 
-	chunk->column_batch = NULL; /* lazy allocation */
+	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count);
+	if (chunk->column_batch == NULL) {
+		fprintf(stderr, "create_candle_chunk: batch alloc failed\n");
+		pthread_spin_destroy(&chunk->spinlock);
+		atomsnap_destroy_gate(chunk->row_gate);
+		free(chunk);
+		return NULL;
+	}
+
+	chunk->column_batch->symbol_id = symbol_id;
+	chunk->column_batch->candle_type = candle_type;
+
 	chunk->mutable_page_idx = -1;
 	chunk->mutable_row_idx = -1;
-	chunk->converting_page_idx = -1;
-	chunk->converting_row_idx = -1;
+	chunk->converting_page_idx = 0;
+	chunk->converting_row_idx = 0;
 	chunk->is_flushed = 0;
 	chunk->flush_handle = NULL;
+	chunk->seq_first = UINT64_MAX;
 
 	atomic_store(&chunk->num_completed, 0);
 	atomic_store(&chunk->num_converted, 0);
 
 	chunk->next = NULL;
+	chunk->prev = NULL;
 
 	return chunk;
 }
@@ -171,7 +188,6 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	 */
 	row_page = (struct candle_row_page *)row_page_version->object;
 	ops->init(&(row_page->rows[0]), trade);
-
 	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
 	return 0;
 }

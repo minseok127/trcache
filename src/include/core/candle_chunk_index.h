@@ -12,21 +12,12 @@
  
  * @chunk_ptr:      Pointer to the physical chunk that stores the candles.
  * @seq_first:      Sequence number (inclusive) of the first candle.
- * @seq_last:       Sequence number (inclusive) of the last candle.
- * @timestamp_min:  Minimum timestamp (inclusive).
- * @timestamp_max:  Maximum timestamp (inclusive).
- *
- * Invariant:
- *   - seq_first .. seq_last  and  ts_min .. ts_max  are **both ascending**
- *     in the logical order of the ring (head -> tail).
- *   - seq_last - seq_first + 1 == num_rows_in_chunk (user-defined).
+ * @timestamp_min:  Minimum timestamp (inclusive) of the first candle.
  */
 struct candle_chunk_index_entry {
 	struct candle_chunk *chunk_ptr;
 	uint64_t seq_first;
-	uint64_t seq_last;
 	uint64_t timestamp_min;
-	uint64_t timestamp_max;
 };
 
 /**

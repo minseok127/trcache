@@ -45,8 +45,9 @@ struct candle_row_page {
  * @flush_handle:         Returned pointer of trcache_flush_ops->flush().
  * @next:                 Linked list pointer.
  * @prev:                 Linked list pointer.
- * @row_gate:             atomsnap_gate with TRCACHE_NUM_ROW_PAGES slots.
- * @column_batch:         SoA buffer (NULL until first need).
+ * @row_gate:             atomsnap_gate for managing #candle_row_pages.
+ * @column_batch:         Structure of Arrays (SoA) buffer
+ * @seq_first:            First sequence number of the chunk.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -66,6 +67,7 @@ struct candle_chunk {
 	struct candle_chunk *prev;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
+	uint64_t seq_first;
 };
 
 /*
@@ -121,11 +123,15 @@ static inline int candle_chunk_calc_row_idx(int record_index)
 /**
  * @brief   Allocate and initialize #candle_chunk.
  *
+ * @param   candle_type:        Candle type of the column-batch.
+ * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
+ * @param   batch_candle_count: Number of candles per chunk.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-struct candle_chunk *create_candle_chunk(uint32_t row_page_count);
+struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
+	int symbol_id, int row_page_count, int batch_candle_count);
 
 /**
  * @brief   Release all resources of a candle chunk.

@@ -127,7 +127,7 @@ struct candle_chunk_index *candle_chunk_index_create(unsigned init_cap_pow2)
 	}
 
 	atomsnap_exchange_version(idx->gate, initial_version);
-	atomic_store(&idx->head, UINT64_MAX);
+	atomic_store(&idx->head, 0);
 	atomic_store(&idx->tail, UINT64_MAX);
 
 	return idx;
@@ -168,13 +168,38 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_min)
 {
-	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
-	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
-	uint64_t new_tail = tail + 1;
+	uint64_t head = atomic_load_explicit(&idx->head,
+		memory_order_acquire);
+	uint64_t new_tail = atomic_load_explicit(&idx->tail,
+		memory_order_acquire) + 1;
+	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
+	struct candle_chunk_index_version *idx_ver = 
+		(struct candle_chunk_index_version *)snap_ver->object;
+	uint64_t head_pos = head & idx_ver->mask;
+	uint64_t new_tail_pos = new_tail & idx_ver->mask;
+	struct candle_chunk_index_entry *entry;
 
-	if (head == new_tail) {
-		
+	if (new_tail != 0 && head_pos == new_tail_pos) {
+		if (candle_chunk_index_grow() != 0) {
+			return -1;
+		}
+
+		atomsnap_release_version(snap_ver);
+		snap_ver = atomsnap_acquire_version(idx->gate);
+		idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+		new_tail_pos = new_tail & idx_ver->mask;
 	}
+
+	entry = idx_ver->array + new_tail_pos;
+	entry->chunk_ptr = chunk;
+	entry->seq_first = seq_first;
+	entry->seq_last = UINT64_MAX;
+	entry->timestamp_min = ts_min;
+	entry->timestamp_max = UINT64_MAX;
+	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
+
+	atomsnap_release_version(snap_ver);
+	return 0;
 }
 
 /**
