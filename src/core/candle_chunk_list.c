@@ -269,7 +269,7 @@ static inline int init_first_candle(struct candle_chunk *chunk,
 
 	chunk->seq_first = 0;
 	write_start_timestamp(chunk, 0, 0, trade->timestamp);
-    return 0;
+	return 0;
 }
 
 /**
