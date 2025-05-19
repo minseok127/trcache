@@ -269,6 +269,10 @@ static inline int init_first_candle(struct candle_chunk *chunk,
 
 	chunk->seq_first = 0;
 	write_start_timestamp(chunk, 0, 0, trade->timestamp);
+
+	// XXX candle chunk index insert
+	atomic_thread_fence(memory_order_release);
+
 	return 0;
 }
 
@@ -336,6 +340,11 @@ static inline int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	new_chunk->seq_first = prev_chunk->seq_first + list->trc->batch_candle_count;
 	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
+
+
+	// XXX candle chunk index insert
+	atomic_thread_fence(memory_order_release);
+
 	return 0;
 }
 
@@ -376,8 +385,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		}
 
 		atomic_store_explicit(&list->mutable_seq, 0, memory_order_release);
-
-		// XXX candle chunk index insert
 		return 0;
 	}
 
