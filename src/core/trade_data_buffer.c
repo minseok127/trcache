@@ -300,7 +300,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	chunk = __get_trd_chunk_ptr(first);
 
 	while (chunk != tail) {
-		if (atomic_load_acquire(&chunk->num_consumed_cursor,
+		if (atomic_load_explicit(&chunk->num_consumed_cursor,
 				memory_order_acquire) != buf->num_cursor) {
 			break;
 		}
