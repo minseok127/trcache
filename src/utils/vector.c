@@ -11,20 +11,21 @@
 #include <string.h>
 
 #include "utils/vector.h"
+#include "utils/log.h"
 
 struct vector *vector_init(size_t elem_size)
 {
 	struct vector *v = NULL;
 
 	if (elem_size == 0) {
-		fprintf(stderr, "vector_init: invalid elem_size\n");
+		errmsg(stderr, "Invalid argument (elem_size is 0)\n");
 		return NULL;
 	}
 
 	v = malloc(sizeof(struct vector));
 
 	if (v == NULL) {
-		fprintf(stderr, "vector_init: malloc failed\n");
+		errmsg(stderr, "#vector allocation failed\n");
 		return NULL;
 	}
 
@@ -65,7 +66,7 @@ int vector_reserve(struct vector *v, size_t new_cap)
 	tmp = realloc(v->data, new_cap * v->elem_size);
 
 	if (!tmp) {
-		fprintf(stderr, "vector_reserve realloc failed\n");
+		errmsg(stderr, "Failure on realloc()\n");
 		return -1;
 	}
 

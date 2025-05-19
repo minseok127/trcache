@@ -15,6 +15,7 @@
 
 #include "core/candle_chunk.h"
 #include "core/trcache_internal.h"
+#include "utils/log.h"
 
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
@@ -39,7 +40,7 @@ static struct atomsnap_version *row_page_version_alloc(
 #endif
 
 	if (!row_page) {
-		fprintf(stderr, "row_page_version_alloc: page alloc failed\n");
+		errmsg(stderr, "#candle_row_page allocation failedn\n");
 		return NULL;
 	} else {
 		memset(row_page, 0, sizeof(struct candle_row_page));
@@ -47,7 +48,7 @@ static struct atomsnap_version *row_page_version_alloc(
 
 	version = malloc(sizeof(struct atomsnap_version));
 	if (version == NULL) {
-		fprintf(stderr, "row_page_version_alloc: version alloc failed\n");
+		errmsg(stderr, "#atomsnap_version allocation failed\n");
 		free(row_page);
 		return NULL;
 	}
@@ -95,19 +96,19 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 
 	chunk = malloc(sizeof(struct candle_chunk));
 	if (chunk == NULL) {
-		fprintf(stderr, "create_candle_chunk: chunk alloc failed\n");
+		errmsg(stderr, "#candle_chunk allocation failed\n");
 		return NULL;
 	}
 
 	if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
-		fprintf(stderr, "create_candle_chunk: spinlock init failed\n");
+		errmsg(stderr, "Initialization of spinlock failed\n");
 		free(chunk);
 		return NULL;
 	}
 
 	chunk->row_gate = atomsnap_init_gate(&ctx);
 	if (chunk->row_gate == NULL) {
-		fprintf(stderr, "create_candle_chunk: atomsnap_init failed\n");
+		errmsg(stderr, "Failure on atomsnap_init_gate\n");
 		pthread_spin_destroy(&chunk->spinlock);
 		free(chunk);
 		return NULL;
@@ -115,7 +116,7 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 
 	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count);
 	if (chunk->column_batch == NULL) {
-		fprintf(stderr, "create_candle_chunk: batch alloc failed\n");
+		errmsg(stderr, "Failure on trcache_batch_alloc_on_head()\n");
 		pthread_spin_destroy(&chunk->spinlock);
 		atomsnap_destroy_gate(chunk->row_gate);
 		free(chunk);
@@ -177,7 +178,7 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 		= atomsnap_make_version(chunk->row_gate, NULL);
 
 	if (row_page_version == NULL) {
-		fprintf(stderr, "candle_page_init: version alloc failed\n");
+		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return -1;
 	}
 

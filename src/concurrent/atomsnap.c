@@ -51,6 +51,7 @@
 #include <assert.h>
 
 #include "concurrent/atomsnap.h"
+#include "utils/log.h"
 
 #define OUTER_REF_CNT	(0x0001000000000000ULL)
 #define OUTER_REF_MASK	(0xffff000000000000ULL)
@@ -91,7 +92,7 @@ struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 	atomsnap_gate *gate = calloc(1, sizeof(atomsnap_gate));
 
 	if (gate == NULL) {
-		fprintf(stderr, "atomsnap_init_gate: gate allocation failed\n");
+		errmsg(stderr, "Gate allocation failed\n");
 		return NULL;
 	}
 
@@ -99,16 +100,16 @@ struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 	gate->atomsnap_free_impl = ctx->atomsnap_free_impl;
 
 	if (gate->atomsnap_alloc_impl == NULL || gate->atomsnap_free_impl == NULL) {
+		errmsg(stderr, "Invalid alloc/free functions\n");
 		free(gate);
-		fprintf(stderr, "atomsnap_init_gate: invalid alloc/free function\n");
 		return NULL;
 	}
 
 	gate->num_extra_control_blocks = ctx->num_extra_control_blocks;
 
 	if (gate->num_extra_control_blocks < 0) {
+		errmsg(stderr, "Invalid num_extra_control_blocks\n");
 		free(gate);
-		fprintf(stderr, "atomsnap_init_gate: invalid num extra_blocks\n");
 		return NULL;
 	}
 
@@ -117,7 +118,7 @@ struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 			sizeof(_Atomic uint64_t));
 
 		if (gate->extra_control_blocks == NULL) {
-			fprintf(stderr, "atomsnap_init_gate: extra block alloc failed\n");
+			errmsg(stderr, "Failure on gate->extra_control_blocks\n");
 			free(gate);
 			return NULL;
 		}

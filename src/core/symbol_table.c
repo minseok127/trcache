@@ -11,6 +11,7 @@
 
 #include "core/symbol_table.h"
 #include "utils/hash_table_callbacks.h"
+#include "utils/log.h"
 
 #include "trcache.h"
 
@@ -29,14 +30,14 @@ static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 	uint64_t capacity = (uint64_t)arg;
 
 	if (version == NULL) {
-		fprintf(stderr, "symbol_array_version_alloc: malloc failed\n");
+		errmsg(stderr, "#atomsnap_version allocation failed\n");
 		return NULL;
 	}
 
 	/* Allocate public_symbol_entry pointer array */
 	version->object = malloc(capacity * sizeof(void *));
 	if (version->object == NULL) {
-		fprintf(stderr, "symbol_array_version_alloc: array malloc failed\n");
+		errmsg(stderr, "Allocation of array is failed\n");
 		free(version);
 		return NULL;
 	}
@@ -84,7 +85,7 @@ init_public_symbol_table(int initial_capacity)
 		= malloc(sizeof(struct public_symbol_table));
 
 	if (table == NULL) {
-		fprintf(stderr, "init_public_symbol_table: malloc failed\n");
+		errmsg(stderr, "#public_symbol_table allocation failed\n");
 		return NULL;
 	}
 
@@ -94,7 +95,7 @@ init_public_symbol_table(int initial_capacity)
 	/* Create gate for version management */
 	table->symbol_ptr_array_gate = atomsnap_init_gate(&ctx);
 	if (table->symbol_ptr_array_gate == NULL) {
-		fprintf(stderr, "init_public_symbol_table: atomsnap_init_gate failed\n");
+		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
 		free(table);
 		return NULL;
 	}
@@ -103,7 +104,7 @@ init_public_symbol_table(int initial_capacity)
 	symbol_ptr_array_version = atomsnap_make_version(
 		table->symbol_ptr_array_gate, (void *)(uintptr_t)initial_capacity);
 	if (symbol_ptr_array_version == NULL) {
-		fprintf(stderr, "init_public_symbol_tabe: atomsnap_make_version failed\n");
+		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		atomsnap_destroy_gate(table->symbol_ptr_array_gate);
 		free(table);
 		return NULL;
@@ -158,7 +159,7 @@ init_admin_symbol_table(int initial_capacity)
 	struct admin_symbol_table *table = malloc(sizeof(struct admin_symbol_table));
 
 	if (table == NULL) {
-		fprintf(stderr, "init_admin_symbol_table: malloc failed\n");
+		errmsg(stderr, "#admin_symbol_table allocation failed\n");
 		return NULL;
 	}
 
@@ -167,7 +168,7 @@ init_admin_symbol_table(int initial_capacity)
 	table->symbol_ptr_array = calloc(1, initial_capacity * sizeof(void *));
 
 	if (table->symbol_ptr_array == NULL) {
-		fprintf(stderr, "init_admin_symbol_table: calloc failed\n");
+		errmsg(stderr, "Allocation of symbol_ptr_array is failed\n");
 		free(table);
 		return NULL;
 	}
@@ -207,7 +208,7 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 	struct symbol_table *table = calloc(1, sizeof(struct symbol_table));
 
 	if (table == NULL) {
-		fprintf(stderr, "init_symbol_table: calloc failed\n");
+		errmsg(stderr, "#symbol_table allocation failed\n");
 		return NULL;
 	}
 
@@ -226,7 +227,7 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 	);
 
 	if (table->symbol_id_map == NULL) {
-		fprintf(stderr, "init_symbol_table: ht_create failed\n");
+		errmsg(stderr, "Failure on ht_create()\n");
 		free(table);
 		return NULL;
 	}
@@ -234,7 +235,7 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 	table->pub_symbol_table = init_public_symbol_table(initial_capacity);
 	
 	if (table->pub_symbol_table == NULL) {
-		fprintf(stderr, "init_symbol_table: init_public_symbol_table failed\n");
+		errmsg(stderr, "Failure on init_public_symbol_table()\n");
 		ht_destroy(table->symbol_id_map);
 		free(table);
 		return NULL;
@@ -243,7 +244,7 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 	table->admin_symbol_table = init_admin_symbol_table(initial_capacity);
 	
 	if (table->admin_symbol_table == NULL) {
-		fprintf(stderr, "init_symbol_table: init_admin_symbol_table failed\n");
+		errmsg(stderr, "Failure on init_admin_symbol_table()\n");
 		ht_destroy(table->symbol_id_map);
 		destroy_public_symbol_table(table->pub_symbol_table);
 		free(table);
@@ -342,7 +343,7 @@ static struct public_symbol_entry *init_public_symbol_entry(int id,
 		sizeof(struct public_symbol_entry));
 
 	if (entry == NULL) {
-		fprintf(stderr, "init_public_symbol_entry: malloc failed\n");
+		errmsg(stderr, "#public_symbol_entry allocation failed\n");
 		return NULL;
 	}
 
@@ -352,7 +353,7 @@ static struct public_symbol_entry *init_public_symbol_entry(int id,
 		strlen(symbol_str) + 1);
 
 	if (entry->symbol_str == NULL) {
-		fprintf(stderr, "init_public_symbol_entry: symbol_str alloc failed\n");
+		errmsg(stderr, "Failure on duplicate_symbol_str()\n");
 		free(entry);
 		return NULL;
 	}
@@ -382,7 +383,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 	if (ht_insert(table->symbol_id_map, symbol_str,
 			strlen(symbol_str) + 1, /* string + NULL */
 			(void *)(uintptr_t)id) < 0) {
-		fprintf(stderr, "symbol_table_register: ht_insert error\n");
+		errmsg(stderr, "Failure on ht_insert()\n");
 		pthread_mutex_unlock(&table->ht_hash_table_mutex);
 		return -1;
 	}
@@ -399,7 +400,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 			pub_symbol_table->symbol_ptr_array_gate, (void *)(uintptr_t)newcap);
 
 		if (new_version == NULL) {
-			fprintf(stderr, "symbol_table_register: new_version alloc failed\n");
+			errmsg(stderr, "Failure on atomsnap_make_version()\n");
 			pthread_mutex_unlock(&table->ht_hash_table_mutex);
 			return -1;
 		}

@@ -13,6 +13,7 @@
 #include <stdio.h>
 
 #include "utils/hash_table.h"
+#include "utils/log.h"
 
 #define HT_MIN_CAP 8            /* Minimum bucket count (power of two) */
 #define HT_LOAD_FACTOR_NUM 3    /* Load factor numerator (3/4) */
@@ -240,7 +241,7 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 	/* Resize if load factor exceeded */
 	if (t->size * HT_LOAD_FACTOR_DEN >= t->capacity * HT_LOAD_FACTOR_NUM) {
 		if (ht_resize(t, t->capacity << 1) != 0) {
-			fprintf(stderr, "ht_insert: ht_resize failed\n");
+			errmsg(stderr, "Failure on ht_resize()\n");
 			return -1;
 		}
 	}
@@ -257,7 +258,7 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 
 	node = malloc(sizeof(*node));
 	if (node == NULL) {
-		fprintf(stderr, "ht_set: malloc failed\n");
+		errmsg(stderr, "#ht_item allocation failed\n");
 		return -1;
 	}
 

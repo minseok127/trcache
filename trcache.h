@@ -213,20 +213,20 @@ typedef struct trcache_init_ctx {
 } trcache_init_ctx;
 
 /**
- * @brief Allocate and initialize the top-level trcache.
+ * @brief   Allocate and initialize the top-level trcache.
  *
- * @param ctx: Pointer to a fully-initialised #trcache_init_ctx.
+ * @param   ctx: Pointer to a fully-initialised #trcache_init_ctx.
  *
- * @return Pointer to trcache or NULL on failure.
+ * @return  Pointer to trcache or NULL on failure.
  */
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx);
 
 /**
- * @brief Destroy all trcache state, including per-thread caches.
+ * @brief   Destroy all trcache state, including per-thread caches.
  *
  * Safe to call after all worker threads have exited.
  *
- * @param cache: Handle from trcache_init().
+ * @param   cache: Handle from trcache_init().
  */
 void trcache_destroy(struct trcache *cache);
 
@@ -258,38 +258,40 @@ const char *trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
  * @param	cache:			Handle from trcache_init().
  * @param	trade_data:		User-filled struct (copied internally).
  * @param	symbol_id:		ID obtained via trcache_register_symbol().
+ *
+ * @return  0 on success, -1 on error.
  */
-void trcache_feed_trade_data(struct trcache *cache,
+int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
 /**
- * @brief  Allocate a contiguous, SIMD-aligned candle batch on the heap.
+ * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param  capacity: Number of OHLCV rows to allocate (must be > 0).
+ * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
  *
- * @return Pointer to a fully-initialised #trcache_candle_batch on success,  
- *         'NULL' on allocation failure or invalid *capacity*.
+ * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
+ *          'NULL' on allocation failure or invalid *capacity*.
  *
  * @note The returned pointer must be released via trcache_batch_free().
  */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
 
 /**
- * @brief  Release a heap-allocated candle batch.
+ * @brief   Release a heap-allocated candle batch.
  *
  * Safe to pass 'NULL'; the function becomes a no-op.
  *
- * @param batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
  */
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
 /**
- * @brief  Align a pointer upward to the next @p a-byte boundary.
+ * @brief   Align a pointer upward to the next @p a-byte boundary.
  *
- * @param p: Raw pointer to be aligned.
- * @param a: Alignment in bytes (power-of-two, e.g. 64).
+ * @param   p: Raw pointer to be aligned.
+ * @param   a: Alignment in bytes (power-of-two, e.g. 64).
  *
- * @return Pointer guaranteed to satisfy ((uintptr_t)ret % a) == 0.
+ * @return  Pointer guaranteed to satisfy ((uintptr_t)ret % a) == 0.
  *
  * @warning Macro clients must ensure @p p lies in a buffer of
  *          at least (a-1) extra bytes to avoid overflow.
@@ -300,14 +302,14 @@ static inline void *trcache_align_up_ptr(void *p, size_t a)
 }
 
 /**
- * @brief  Build a fully-aligned candle batch on the *caller's stack*.
+ * @brief   Build a fully-aligned candle batch on the *caller's stack*.
  *
  * Uses alloca() to reserve raw space for each array, then fixes
  * alignment via #trc_align_up_ptr.  The stack memory lives as long as the
  * caller's frame is active—no explicit free is required.
  *
- * @param dst [out]:  Pre-declared #trcache_candle_batch object to populate.
- * @param capacity:   Number of candle rows to allocate (must be > 0).
+ * @param   dst [out]:  Pre-declared #trcache_candle_batch object to populate.
+ * @param   capacity:   Number of candle rows to allocate (must be > 0).
  *
  * @note All pointers inside @p dst point into the caller's stack frame.
  */
@@ -348,7 +350,7 @@ static inline void trcache_batch_alloc_on_stack(
 }
 
 /**
- * @brief  Declare and initialise a stack-resident candle batch in one line.
+ * @brief   Declare and initialise a stack-resident candle batch in one line.
  *
  * Example:
  * 
@@ -358,8 +360,8 @@ static inline void trcache_batch_alloc_on_stack(
  *     ...
  * }
  *
- * @param var: User-chosen variable name of type #trcache_candle_batch.
- * @param cap: Number of candles to allocate (runtime value allowed).
+ * @param   var: User-chosen variable name of type #trcache_candle_batch.
+ * @param   cap: Number of candles to allocate (runtime value allowed).
  */
 #define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap) \
 	trcache_candle_batch var; \

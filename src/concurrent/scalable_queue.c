@@ -8,6 +8,7 @@
 #include "trcache.h"
 
 #include "concurrent/scalable_queue.h"
+#include "utils/log.h"
 
 #define MAX_SCQ_NUM (1024)
 #define MAX_THREAD_NUM (1024)
@@ -95,14 +96,14 @@ struct scalable_queue *scq_init(void)
 	struct scalable_queue *scq = calloc(1, sizeof(struct scalable_queue));
 
 	if (scq == NULL) {
-		fprintf(stderr, "scalable_queue_init: queue allocation failed\n");
+		errmsg(stderr, "Queue allocation failed\n");
 		return NULL;
 	}
 
 	scq->thread_num = 0;
 
 	if (pthread_spin_init(&scq->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
-		fprintf(stderr, "scalable_queue_init: spinlock init failed\n");
+		errmsg(stderr, "Initialization of spinlock failed\n");
 		free(scq);
 		return NULL;
 	}
@@ -125,7 +126,7 @@ struct scalable_queue *scq_init(void)
 
 	/* Invalid id */
 	if (scq->scq_id == -1) {
-		fprintf(stderr, "scalable_queue_init: invalid scq id\n");
+		errmsg(stderr, "Invalid scq_id\n");
 		free(scq);
 		return NULL;
 	}

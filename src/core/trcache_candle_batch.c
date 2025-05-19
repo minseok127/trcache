@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "utils/log.h"
+
 #include "trcache.h"
 
 /**
@@ -60,7 +62,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 	void *base;
 
 	if (capacity <= 0) {
-		fprintf(stderr, "trcache_batch_alloc_on_heap: invalid capacity\n");
+		errmsg(stderr, "Invalid argument (capacity <= 0)\n");
 		return NULL;
 	}
 
@@ -86,7 +88,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 	base = simd_aligned_alloc(a, total_sz);
 
 	if (base == NULL) {
-		fprintf(stderr, "trcache_batch_alloc_on_heap: alloc failed\n");
+		errmsg(stderr, "Failure on simd_aligned_alloc()\n");
 		return NULL;
 	}
 

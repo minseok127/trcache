@@ -10,6 +10,7 @@
 #include <stdio.h>
 
 #include "utils/hash_table_callbacks.h"
+#include "utils/log.h"
 
 /**
  * @brief Duplicate a string key.
@@ -24,7 +25,7 @@ void *duplicate_symbol_str(const void *symbol_str, size_t len)
 	char *symbol_str_dup = malloc(len);
 
 	if (symbol_str_dup == NULL) {
-		fprintf(stderr, "duplicate_symbol_str: malloc failed\n");
+		errmsg(stderr, "Allocation of symbol_str_dup is failed\n");
 		return NULL;
 	}
 

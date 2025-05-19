@@ -16,6 +16,7 @@
 
 #include "core/trade_data_buffer.h"
 #include "utils/list_head.h"
+#include "utils/log.h"
 
 /**
  * @brief   Create and initialize a trade_data_buffer.
@@ -31,14 +32,14 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 	struct trade_data_buffer_cursor *c = NULL;
 
 	if (num_cursor == 0) {
-		fprintf(stderr, "trade_data_buffer_init: num_cursor is 0\n");
+		errmsg(stderr, "Invalid argument (num_cursor is 0)\n");
 		return NULL;
 	}
 
 	buf = malloc(sizeof(struct trade_data_buffer));
 
 	if (buf == NULL) {
-		fprintf(stderr, "trade_data_buffer_init: buffer malloc failed\n");
+		errmsg(stderr, "#trade_data_buffer allocation failed\n");
 		return NULL;
 	}
 
@@ -46,7 +47,7 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 		= malloc(num_cursor * sizeof(struct trade_data_buffer_cursor));
 	
 	if (buf->cursor_arr == NULL) {
-		fprintf(stderr, "trade_data_buffer_init: cursor malloc failed\n");
+		errmsg(stderr, "Allocation of buf->cursor_arr is failed\n");
 		free(buf);
 		return NULL;
 	}
@@ -54,7 +55,7 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 	chunk = malloc(sizeof(struct trade_data_chunk));
 
 	if (chunk == NULL) {
-		fprintf(stderr, "trade_data_buffer_init: chunk malloc failed\n");
+		errmsg(stderr, "#trade_data_chunk allocation failed\n");
 		free(buf->cursor_arr);
 		free(buf);
 		return NULL;
@@ -152,7 +153,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		} else {
 			new_chunk = malloc(sizeof(struct trade_data_chunk));
 			if (new_chunk == NULL) {
-				fprintf(stderr, "trade_data_buffer_push: malloc failed\n");
+				errmsg(stderr, "#trade_data_chunk allocation failed\n");
 				return -1;
 			}
 

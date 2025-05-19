@@ -12,19 +12,20 @@
 
 #include "core/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
+#include "utils/log.h"
 
 #include "trcache.h"
 
 /**
- * @brief Retrieve or create thread-local data for this trcache instance.
+ * @brief   Retrieve or create thread-local data for this trcache instance.
  *
  * If TLS already exists, returns it. Otherwise allocates a new
  * trcache_tls_data, assigns a unique thread_id under mutex, and installs
  * it via pthread_setspecific.
  *
- * @param tc: Pointer to trcache instance.
+ * @param   tc: Pointer to trcache instance.
  *
- * @return Pointer to initialized trcache_tls_data, or NULL on error.
+ * @return  Pointer to initialized trcache_tls_data, or NULL on error.
  */
 static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 {
@@ -38,7 +39,7 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 
 	tls_data_ptr = malloc(sizeof(struct trcache_tls_data));
 	if (tls_data_ptr == NULL) {
-		fprintf(stderr, "get_tls_data_or_create: malloc failed\n");
+		errmsg(stderr, "#trcache_tls_data allocation failed\n");
 		return NULL;
 	}
 
@@ -61,7 +62,7 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	pthread_mutex_unlock(&tc->tls_id_mutex);
 
 	if (tls_data_ptr->thread_id == -1) {
-		fprintf(stderr, "get_tls_data_or_create: invalid thread id\n");
+		errmsg(stderr, "Invalid thread ID\n");
 		free(tls_data_ptr);
 		return NULL;
 	}
@@ -75,9 +76,9 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 }
 
 /**
- * @brief Clean up per-thread data (called by destructor or trcache_destroy).
+ * @brief   Clean up per-thread data (called by destructor or trcache_destroy).
  *
- * @param tls: Pointer to trcache_tls_data to free.
+ * @param   tls: Pointer to trcache_tls_data to free.
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
@@ -117,11 +118,11 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 }
 
 /**
- * @brief TLS destructor invoked on thread exit.
+ * @brief   TLS destructor invoked on thread exit.
  *
  * Returns thread_id and TLS pointer to pool, then frees data.
  *
- * @param value: TLS pointer from pthread_getspecific.
+ * @param   value: TLS pointer from pthread_getspecific.
  */
 static void trcache_per_thread_destructor(void *value)
 {
@@ -138,11 +139,11 @@ static void trcache_per_thread_destructor(void *value)
 }
 
 /**
- * @brief Initialize trcache, set up TLS key and symbol table.
+ * @brief   Initialize trcache, set up TLS key and symbol table.
  *
- * @param  ctx: Pointer to a fully-initialised #trcache_init_ctx.
+ * @param   ctx: Pointer to a fully-initialised #trcache_init_ctx.
  *
- * @return Pointer to new trcache, or NULL on failure.
+ * @return  Pointer to new trcache, or NULL on failure.
  */
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
@@ -150,7 +151,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	int ret;
 
 	if (tc == NULL) {
-		fprintf(stderr, "trcache_init: trcache allocation failed\n");
+		errmsg(stderr, "#trcache allocation failed\n");
 		return NULL;
 	}
 
@@ -158,8 +159,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	ret = pthread_key_create(&tc->pthread_trcache_key,
 		trcache_per_thread_destructor);
 	if (ret != 0) {
-		fprintf(stderr, "trcache_init: pthread_key_create failed, erro: %d\n",
-			ret);
+		errmsg(stderr, "Failure on pthread_key_create()\n");
 		free(tc);
 		return NULL;
 	}
@@ -167,7 +167,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	/* Initialize shared symbol table */
 	tc->symbol_table = symbol_table_init(1024);
 	if (tc->symbol_table == NULL) {
-		fprintf(stderr, "trcache_init: init_symbol_table failed\n");
+		errmsg(stderr, "Failure on symbol_table_init()\n");
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
@@ -187,9 +187,9 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 }
 
 /**
- * @brief Destroy trcache, freeing all resources including TLS data.
+ * @brief   Destroy trcache, freeing all resources including TLS data.
  *
- * @param tc: Pointer to trcache to destroy.
+ * @param   tc: Pointer to trcache to destroy.
  */
 void trcache_destroy(struct trcache *tc)
 {
@@ -214,12 +214,12 @@ void trcache_destroy(struct trcache *tc)
 }
 
 /**
- * @brief Register symbol string via TLS cache or shared table.
+ * @brief   Register symbol string via TLS cache or shared table.
  *
- * @param tc:         Pointer to trcache instance.
- * @param symbol_str: NULL-terminated string.
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated string.
  *
- * @return Symbol ID >=0, or -1 on error.
+ * @return  Symbol ID >=0, or -1 on error.
  */
 int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 {
@@ -260,7 +260,8 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 		/* Add it into local cache */
 		if (ht_insert(tls_data_ptr->local_symbol_id_map, symbol_str,
 				strlen(symbol_str) + 1, (void *)(uintptr_t)symbol_id) < 0) {
-			fprintf(stderr, "trcache_register_symbol: local cache insert failed\n");
+			errmsg(stderr, "Failure on ht_insert()\n");
+			return -1;
 		}
 	}
 
@@ -268,7 +269,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 }
 
 /**
- * @brief Lookup symbol string by its symbol id.
+ * @brief   Lookup symbol string by its symbol id.
  *
  * @param   tc:         Handle from trcache_init().
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
@@ -288,13 +289,15 @@ const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
 }
 
 /**
- * @brief Stub for feeding trade data.
+ * @brief   Push a single trade into the internal pipeline.
  *
- * @param tc:        Pointer to trcache instance.
- * @param data:      Pointer to trade data struct.
- * @param symbol_id: Symbol ID of trade data.
+ * @param   tc:        Pointer to trcache instance.
+ * @param   data:      Pointer to trade data struct.
+ * @param   symbol_id: Symbol ID of trade data.
+ *
+ * @return  0 on success, -1 on error.
  */
-void trcache_feed_trade_data(struct trcache *tc,
+int trcache_feed_trade_data(struct trcache *tc,
 	struct trcache_trade_data *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
@@ -302,7 +305,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 	bool found = false;
 
 	if (data == NULL || tls_data_ptr == NULL) {
-		return;
+		errmsg(stderr, "Invalid #trcache_trade_data of tls_data_ptr\n");
+		return -1;
 	}
 
 	/* Initial state */
@@ -311,8 +315,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 			= ht_create(128, 0, NULL, NULL, NULL, NULL);
 
 		if (tls_data_ptr->local_trd_databuf_map == NULL) {
-			fprintf(stderr, "trcache_feed_trade_data: map init failed\n");
-			return;
+			errmsg(stderr, "Failure on ht_create()\n");
+			return -1;
 		}
 
 		tls_data_ptr->local_trd_databuf_vec = vector_init(sizeof(void *));
@@ -320,8 +324,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 		if (tls_data_ptr->local_trd_databuf_vec == NULL) {
 			ht_destroy(tls_data_ptr->local_trd_databuf_map);
 			tls_data_ptr->local_trd_databuf_map = NULL;
-			fprintf(stderr, "trcache_feed_trade_data: vec init failed\n");
-			return;
+			errmsg(stderr, "Failure on vector_init()\n");
+			return -1;
 		}
 	}
 
@@ -333,8 +337,8 @@ void trcache_feed_trade_data(struct trcache *tc,
 		trd_databuf = trade_data_buffer_init(tc->num_candle_types);
 
 		if (trd_databuf == NULL) {
-			fprintf(stderr, "trcache_feed_trade_data: databuf init failed\n");
-			return;
+			errmsg(stderr, "Failure on trade_data_buffer_init()\n");
+			return -1;
 		}
 		
 		/* Insert it to the hash table */
@@ -342,16 +346,16 @@ void trcache_feed_trade_data(struct trcache *tc,
 				(void *)(uintptr_t)symbol_id, sizeof(void *),
 				trd_databuf) < 0) {
 			trade_data_buffer_destroy(trd_databuf);
-			fprintf(stderr, "trcache_feed_trade_data: ht_insert failed\n");
-			return;
+			errmsg(stderr, "Failure on ht_insert()\n");
+			return -1;
 		}
 
 		/* Add it to the vector */
 		if (vector_push_back(tls_data_ptr->local_trd_databuf_vec,
 				trd_databuf) < 0) {
 			trade_data_buffer_destroy(trd_databuf);
-			fprintf(stderr, "trcache_feed_trade_data: vec push back failed\n");
-			return;
+			errmsg(stderr, "Failure on vector_push_back()\n");
+			return -1;
 		}
 	}
 
@@ -373,5 +377,6 @@ void trcache_feed_trade_data(struct trcache *tc,
 		}
 	}
 
-	trade_data_buffer_push(trd_databuf, data, &tls_data_ptr->local_free_list);
+	return trade_data_buffer_push(trd_databuf, data, 
+		&tls_data_ptr->local_free_list);
 }

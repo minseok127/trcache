@@ -19,6 +19,7 @@
 #include <assert.h>
 
 #include "core/candle_chunk_index.h"
+#include "utils/log.h"
 
 /**
  * @brief   Allocate atomsnap version and index version.
@@ -34,14 +35,14 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	uint64_t newcap = (uint64_t)cap;
 
 	if (snap_ver == NULL) {
-		fprintf(stderr, "candle_chunk_index_version_alloc: snap failed\n");
+		errmsg(stderr, "#atomsnap_version allocation failed\n");
 		return NULL;
 	}
 
 	idx_ver = malloc(sizeof(struct candle_chunk_index_version));
 
 	if (idx_ver == NULL) {
-		fprintf(stderr, "candle_chunk_index_version_alloc: idx failed\n");
+		errmsg(stderr, "#candle_chunk_index_version allocation failed\n");
 		free(snap_ver);
 		return NULL;
 	}
@@ -52,7 +53,7 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN,
 		newcap * sizeof(struct candle_chunk_index_entry));
 	if (idx_ver->array == NULL) {
-		fprintf(stderr, "candle_chunk_index_version_alloc: array failed\n");
+		errmsg(stderr, "Failure on aligned_alloc() for array\n");
 		free(snap_ver);
 		free(idx_ver);
 		return NULL;
@@ -60,7 +61,7 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 #else
 	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN,
 			newcap * sizeof(struct candle_chunk_index_entry)) != 0) {
-		fprintf(stderr, "candle_chunk_index_version_alloc: array failed\n");
+		errmsg(stderr, "Failure on posix_memalign() for array\n");
 		free(snap_ver);
 		free(idx_ver);
 		return NULL;
@@ -107,20 +108,20 @@ struct candle_chunk_index *candle_chunk_index_create(unsigned init_cap_pow2)
 	struct candle_chunk_index *idx = malloc(sizeof(struct candle_chunk_index));
 
 	if (idx == NULL) {
-		fprintf(stderr, "candle_chunk_index_create: idx alloc failed\n");
+		errmsg(stderr, "#candle_chunk_index allocation failed\n");
 		return NULL;
 	}
 
 	idx->gate = atomsnap_init_gate(&ctx);
 	if (idx->gate == NULL) {
-		fprintf(stderr, "candle_chunk_index_create: gate init failed\n");
+		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
 		free(idx);
 		return NULL;
 	}
 
 	initial_version = atomsnap_make_version((void*)cap);
 	if (initial_version == NULL) {
-		fprintf(stderr, "candle_chunk_index_create: initial version failed\n");
+		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		atomsnap_destroy_gate(idx->gate);
 		free(idx);
 		return NULL;
