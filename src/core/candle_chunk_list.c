@@ -268,8 +268,7 @@ static inline int init_first_candle(struct candle_chunk *chunk,
 	chunk->mutable_row_idx = 0;
 
 	chunk->seq_first = 0;
-    write_start_timestamp(chunk, 0, 0, trade->timestamp);
-
+	write_start_timestamp(chunk, 0, 0, trade->timestamp);
     return 0;
 }
 
@@ -315,7 +314,7 @@ static inline int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count);
 
-    if (new_chunk == NULL) {
+	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
 		return -1;
 	}
@@ -326,7 +325,7 @@ static inline int advance_to_new_chunk(struct candle_chunk_list *list,
 		return -1;
 	}
 
-    /* Link into list */
+	/* Link into list */
 	prev_chunk->next = new_chunk;
 	new_chunk->prev = prev_chunk;
 	list->tail = new_chunk;
@@ -337,7 +336,7 @@ static inline int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	new_chunk->seq_first = prev_chunk->seq_first + list->trc->batch_candle_count;
 	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
-    return 0;
+	return 0;
 }
 
 /**
