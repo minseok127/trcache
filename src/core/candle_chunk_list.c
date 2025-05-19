@@ -256,7 +256,7 @@ static inline void write_start_timestamp(struct candle_chunk *chunk,
 /**
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
-static inline int init_first_candle(struct candle_chunk *chunk,
+static int init_first_candle(struct candle_chunk *chunk,
 	struct candle_update_ops *ops, struct trcache_trade_data *trade)
 {
 	if (candle_chunk_page_init(chunk, 0, ops, trade) == -1) {
@@ -279,7 +279,7 @@ static inline int init_first_candle(struct candle_chunk *chunk,
 /**
  * @brief   Start the next candle within the same page.
  */
-static inline void advance_within_same_page(struct candle_chunk *chunk, 
+static void advance_within_same_page(struct candle_chunk *chunk, 
 	struct candle_row_page *row_page, struct candle_update_ops *ops,
 	struct trcache_trade_data *trade)
 {
@@ -292,7 +292,7 @@ static inline void advance_within_same_page(struct candle_chunk *chunk,
  * @brief   Allocate a new page within the existing chunk and 
  *          start its first candle.
  */
-static inline int advance_to_next_page(struct candle_chunk *chunk,
+static int advance_to_next_page(struct candle_chunk *chunk,
 	struct candle_update_ops *ops, struct trcache_trade_data *trade)
 {
 	int new_page_idx = chunk->mutable_page_idx + 1;
@@ -311,7 +311,7 @@ static inline int advance_to_next_page(struct candle_chunk *chunk,
 /**
  * @brief   Allocate a fresh chunk and start its first candle.
  */
-static inline int advance_to_new_chunk(struct candle_chunk_list *list,
+static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *prev_chunk, struct candle_update_ops *ops,
 	struct trcache_trade_data *trade)
 {
