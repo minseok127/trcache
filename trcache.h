@@ -21,8 +21,7 @@ extern "C" {
 #include <stdlib.h>
 
 /*
- * @def   TRCACHE_SIMD_ALIGN
- * @brief Alignment (in bytes) of every vector array.
+ * @brief   Alignment (in bytes) of every vector array.
  *
  * 64 is enough for AVX-512 and current ARM SVE256. Increase if a wider
  * vector ISA comes along.
@@ -224,9 +223,9 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx);
 /**
  * @brief   Destroy all trcache state, including per-thread caches.
  *
- * Safe to call after all worker threads have exited.
- *
  * @param   cache: Handle from trcache_init().
+ *
+ * Safe to call after all worker threads have exited.
  */
 void trcache_destroy(struct trcache *cache);
 
@@ -255,9 +254,9 @@ const char *trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
 /**
  * @brief   Push a single trade into the internal pipeline.
  *
- * @param	cache:			Handle from trcache_init().
- * @param	trade_data:		User-filled struct (copied internally).
- * @param	symbol_id:		ID obtained via trcache_register_symbol().
+ * @param   cache:       Handle from trcache_init().
+ * @param   trade_data:  User-filled struct (copied internally).
+ * @param   symbol_id:   ID obtained via trcache_register_symbol().
  *
  * @return  0 on success, -1 on error.
  */
@@ -279,9 +278,9 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
 /**
  * @brief   Release a heap-allocated candle batch.
  *
- * Safe to pass 'NULL'; the function becomes a no-op.
- *
  * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ *
+ * Safe to pass 'NULL'; the function becomes a no-op.
  */
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
