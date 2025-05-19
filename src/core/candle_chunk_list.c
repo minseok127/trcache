@@ -289,10 +289,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		// XXX candle chunk index insert
 
-		/* Now the new candle visible to readers */
+		/* Now the new candle visible to converter */
 		atomic_store_explicit(&list->mutable_seq, 0, memory_order_release);
-		atomic_store_explicit(&chunk->num_completed, 0, memory_order_release);
-
 		return 0;
 	}
 
@@ -336,6 +334,12 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 	 */
 		ops->init(candle, trade);
 		atomsnap_release_version(row_page_version);
+
+		/* Write start timestamp for searching */
+		record_idx = candle_chunk_calc_record_index(
+			chunk->mutable_page_idx, chunk->mutable_row_idx);
+		chunk->column_batch->start_timestamp_array[record_idx]
+			= trade->timestamp;
 	} else if (chunk->mutable_row_idx == TRCACHE_ROWS_PER_PAGE - 1 &&
 			expected_num_completed != list->trc->batch_candle_count) {
 		/* Release old page */
@@ -351,6 +355,12 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		}
 
 		chunk->mutable_row_idx = 0;
+
+		/* Write start timestamp for searching */
+		record_idx = candle_chunk_calc_record_index(
+			chunk->mutable_page_idx, chunk->mutable_row_idx);
+		chunk->column_batch->start_timestamp_array[record_idx]
+			= trade->timestamp;
 	} else {
 		/* Release old page */
 		atomsnap_release_version(row_page_version);
@@ -372,7 +382,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 		new_chunk->mutable_page_idx = 0;
 		new_chunk->mutable_row_idx = 0;
-		new_chunk->seq_first = chunk->seq_first + list->trc->batch_candle_count;
 
 		/* Add the new chunk into tail of the linked list */
 		chunk->next = new_chunk;
@@ -381,8 +390,13 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		list->candle_mutable_chunk = new_chunk;
 
 		// XXX candle chunk index insert
+		new_chunk->seq_first = chunk->seq_first + list->trc->batch_candle_count;
 
-		chunk = new_chunk; /* For recording the start_timestamp below */
+		/* Write start timestamp for searching */
+		record_idx = candle_chunk_calc_record_index(
+			new_chunk->mutable_page_idx, new_chunk->mutable_row_idx);
+		new_chunk->column_batch->start_timestamp_array[record_idx]
+			= trade->timestamp;
 	}
 
 	/* Write start timestamp for searching */
@@ -392,7 +406,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 	/*
 	 * Ensure that the previous mutable candle is completed, and a new mutable
-	 * candle can be observed outside the module.
+	 * candle can be observed to converter.
 	 */
 	atomic_store_explicit(&chunk->num_completed, expected_num_completed,
 		memory_order_release);
