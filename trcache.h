@@ -195,7 +195,7 @@ typedef struct trcache_flush_ops {
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
  * @num_worker_threads:       Number of worker threads.
- * @batch_candle_count:       Fixed number of candles per column batch.
+ * @batch_candle_count_pow2:  Number of candles per column batch (log2(cap)).
  * @flush_threshold_batches:  How many candle batches to buffer before flush.
  * @candle_type_flags:        OR-ed set of #trcache_candle_type values.
  * @flush_ops:                User-supplied callbacks used for flush.
@@ -206,7 +206,7 @@ typedef struct trcache_flush_ops {
  */
 typedef struct trcache_init_ctx {
 	int num_worker_threads;
-	int batch_candle_count;
+	int batch_candle_count_pow2;
 	int flush_threshold_batches;
 	trcache_candle_type_flags candle_type_flags;
 	struct trcache_flush_ops flush_ops;

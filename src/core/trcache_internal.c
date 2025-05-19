@@ -177,7 +177,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->num_workers = ctx->num_worker_threads;
 	tc->candle_type_flags = ctx->candle_type_flags;
 	tc->flush_threshold_batches = ctx->flush_threshold_batches;
-	tc->batch_candle_count = ctx->batch_candle_count;
+	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
+	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
 	tc->flush_ops = ctx->flush_ops;
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);

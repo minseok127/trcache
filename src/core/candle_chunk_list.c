@@ -89,7 +89,7 @@ free_head_version:
 	// XXX remove it from candle chunk index
 	candle_chunk_destroy(head_version->tail_node);
 
-	next_head_version = head_version->head_version_next;
+	next_head_version = atomic_load(&head_version->head_version_next);
 
 	free(head_version->snap_version); /* #atomsnap_version */
 	free(head_version); /* #candle_chunk_list_head_version */
@@ -263,7 +263,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
-	int expected_num_completed = atomic_load(&chunk->num_completed) + 1;
+	int expected_num_completed = 1 + 
+		atomic_load_explicit(&chunk->num_completed, memory_order_acquire);
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -376,8 +377,10 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * Ensure that the previous mutable candle is completed, and a new mutable
 	 * candle can be observed outside the module.
 	 */
-	atomic_store(&chunk->num_completed, expected_num_completed);
-	atomic_store(&list->mutable_seq, list->mutable_seq + 1);
+	atomic_store_explicit(&chunk->num_completed, expected_num_completed,
+		memory_order_release);
+	atomic_store_explicit(&list->mutable_seq, list->mutable_seq + 1,
+		memory_order_release);
 
 	return 0;
 }
@@ -393,10 +396,13 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
 	struct candle_chunk *chunk = list->converting_chunk;
-	uint64_t mutable_seq = atomic_load(&list->mutable_seq);
-	uint64_t last_seq_converted = atomic_load(&list->last_seq_converted);
+	uint64_t mutable_seq = atomic_load_explicit(
+		&list->mutable_seq, memory_order_acquire);
+	uint64_t last_seq_converted = atomic_load_explicit(
+		&list->last_seq_converted, memory_order_acquire);
 	struct atomsnap_version *head_snap = NULL;
 	int num_completed, num_converted, start_idx, end_idx;
+	int num_flush_batch = 0;
 
 	/* No more candles to convert */
 	if (mutable_seq == UINT64_MAX || mutable_seq - 1 == last_seq_converted) {
@@ -407,8 +413,10 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 	head_snap = atomsnap_acquire_version(list->head_gate);
 
 	while (chunk != NULL) {
-		num_completed = atomic_load(&chunk->num_completed);
-		num_converted = atomic_load(&chunk->num_converted);
+		num_completed = atomic_load_explicit(
+			&chunk->num_completed, memory_order_acquire);
+		num_converted = atomic_load_explicit(
+			&chunk->num_converted, memory_order_acquire);
 
 		if (num_completed == num_converted) {
 			list->converting_chunk = chunk;
@@ -448,7 +456,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		}
 
 		/* If this chunk is fully converted, notice it to the flush worker */
-		atomic_fetch_add(&list->unflushed_batch_count, 1);
+		num_flush_batch += 1;
 		chunk = chunk->next;
 	}
 
@@ -457,7 +465,11 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 	/* Unpin head */
 	atomsnap_release_version(head_snap);
 
-	atomic_store(&list->last_seq_converted, last_seq_converted);
+	atomic_store_explicit(&list->last_seq_converted, last_seq_converted,
+		memory_order_release);
+
+	atomic_fetch_add_explicit(&list->unflushed_batch_count, num_flush_batch,
+		memory_order_release);
 }
 
 /**
@@ -472,8 +484,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
  */
 void candle_chunk_list_flush(struct candle_chunk_list *list)
 {
-	int flush_batch_count = atomic_load(&list->unflushed_batch_count)
-		- list->trc->flush_threshold_batches;
+	int flush_batch_count = atomic_load_explicit(&list->unflushed_batch_count,
+		memory_order_acquire) - list->trc->flush_threshold_batches;
 	int flush_start_count = 0, flush_done_count = 0;
 	struct atomsnap_version *head_snap, *new_snap;
 	struct candle_chunk_list_head_version *head_version, *new_ver;
@@ -529,7 +541,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 		} while (chunk != last_chunk);
 	}
 
-	atomic_fetch_sub(&list->unflushed_batch_count, flush_done_count);
+	atomic_fetch_sub_explicit(&list->unflushed_batch_count, flush_done_count,
+		memory_order_release);
 
 	/* Change head version */
 	new_ver = (struct candle_chunk_list_head_version *)new_snap->object;
@@ -549,9 +562,6 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	 * traversal from the head version and for freeing old versions. It must be
 	 * set before registering the new head and releasing the old head version.
 	 */
-	__sync_synchronize();
-
 	atomsnap_exchange_version(list->head_gate, new_snap);
-
 	atomsnap_release_version(head_snap);
 }

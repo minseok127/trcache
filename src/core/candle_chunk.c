@@ -239,7 +239,8 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	end_idx += 1;
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
 	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
-	atomic_store(&chunk->num_converted, end_idx);
+	atomic_store_explicit(&chunk->num_converted, end_idx,
+		memory_order_release);
 }
 
 /**
