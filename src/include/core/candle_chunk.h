@@ -44,7 +44,6 @@ struct candle_row_page {
  * @is_flushed:           Flag to indicate flush state.
  * @flush_handle:         Returned pointer of trcache_flush_ops->flush().
  * @next:                 Linked list pointer.
- * @prev:                 Linked list pointer.
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
  * @column_batch:         Structure of Arrays (SoA) buffer
  * @seq_first:            First sequence number of the chunk.
@@ -64,7 +63,6 @@ struct candle_chunk {
 	int is_flushed;
 	void *flush_handle;
 	struct candle_chunk *next;
-	struct candle_chunk *prev;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;

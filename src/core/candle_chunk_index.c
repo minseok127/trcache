@@ -174,7 +174,8 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk_index_entry *entry;
 
 	if (new_tail != 0 && head_pos == new_tail_pos) {
-		if (candle_chunk_index_grow() != 0) {
+		if (candle_chunk_index_grow() == -1) {
+			errmsg(stderr, "Failure on candle_chunk_index_grow()\n");
 			return -1;
 		}
 
@@ -189,8 +190,8 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	entry->seq_first = seq_first;
 	entry->timestamp_first = ts_first;
 	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
-
 	atomsnap_release_version(snap_ver);
+
 	return 0;
 }
 
@@ -198,7 +199,7 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
  * @brief   Remove the oldest chunk if its lifetime has ended.
  *
  * The caller is responsible for deciding whether the chunk is no longer
- * needed (e.g. persisted to disk). On success the function advances
+ * needed and is not referenced by any thread. On success the function advances
  * @head and returns the retired chunk pointer.
  *
  * @return  Pointer to the removed chunk, or NULL if the index is empty.

@@ -99,6 +99,9 @@ struct candle_chunk_list *create_candle_chunk_list(
 /**
  * @brief   Destroy all chunks.
  *
+ * This function must be called only after all chunks in the list have been
+ * converted to column batches.
+ *
  * @param   chunk_list: Pointer from create_candle_chunk_list().
  */
 void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list);

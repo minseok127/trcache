@@ -20,10 +20,12 @@
 /**
  * @brief   Allocate an candle chunk list's head version.
  *
+ * @param   chunk_index: #candle_chunk_index pointer.
+ *
  * @return  Pointer to #atomsnap_version, or NULL on failure.
  */
 static struct atomsnap_version *candle_chunk_list_head_alloc(
-	void *unused __attribute__((unused)))
+	void *chunk_index)
 {
 	struct atomsnap_version *version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
@@ -45,6 +47,7 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
 
 	head->snap_version = version;
 	version->object = (void *)head;
+	version->free_context = chunk_index;
 
 	return version;
 }
@@ -58,11 +61,13 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
  */
 static void candle_chunk_list_head_free(struct atomsnap_version *version)
 {
+	struct candle_chunk_index *chunk_index
+		= (struct candle_chunk_index *)version->free_context;
 	struct candle_chunk_list_head_version *head_version
 		= (struct candle_chunk_list_head_version *)version->object;
 	struct candle_chunk_list_head_version *next_head_version = NULL;
 	struct candle_chunk_list_head_version *prev_head_version = NULL;
-	struct candle_chunk *prev_node = NULL, *node = NULL;
+	struct candle_chunk *prev_chunk = NULL, *chunk = NULL;
 
 	prev_head_version
 		= (struct candle_chunk_list_head_version *) atomic_fetch_or(
@@ -79,13 +84,13 @@ static void candle_chunk_list_head_free(struct atomsnap_version *version)
 
 free_head_version:
 
-	node = head_version->head_node;
-	prev_node = node;
-	while (node != head_version->tail_node) {
-		node = node->next;
+	chunk = head_version->head_node;
+	prev_chunk = chunk;
+	while (chunk != head_version->tail_node) {
+		chunk = chunk->next;
 		// XXX remove it from candle chunk index
-		candle_chunk_destroy(prev_node);
-		prev_node = node;
+		candle_chunk_destroy(prev_chunk);
+		prev_chunk = chunk;
 	}
 	// XXX remove it from candle chunk index
 	candle_chunk_destroy(head_version->tail_node);
@@ -129,9 +134,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 	struct candle_chunk_list_init_ctx *ctx)
 {
 	struct candle_chunk_list *list = NULL;
-	struct atomsnap_version *head_snap_version = NULL;
-	struct candle_chunk_list_head_version *head = NULL;
-	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context atomsnap_ctx = {
 		.atomsnap_alloc_impl = candle_chunk_list_head_alloc,
 		.atomsnap_free_impl = candle_chunk_list_head_free,
@@ -162,39 +164,13 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->row_page_count = (list->trc->batch_candle_count
 		+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
 
-	chunk = create_candle_chunk(ctx->candle_type, ctx->symbol_id,
-		list->row_page_count, list->trc->batch_candle_count);
-	if (chunk == NULL) {
-		errmsg(stderr, "Failure on create_candle_chunk()\n");
-		candle_chunk_index_destroy(list->chunk_index);
-		free(list);
-		return NULL;
-	}
-
 	list->head_gate = atomsnap_init_gate(&atomsnap_ctx);
 	if (list->head_gate == NULL) {
 		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
 		candle_chunk_index_destroy(list->chunk_index);
 		free(list);
-		free(chunk);
 		return NULL;
 	}
-
-	head_snap_version = atomsnap_make_version(list->head_gate, NULL);
-	if (head_snap_version == NULL) {
-		errmsg(stderr, "Failure on atomsnap_make_version()\n");
-		candle_chunk_index_destroy(list->chunk_index);
-		atomsnap_destroy_gate(list->head_gate);
-		free(list);
-		free(chunk);
-		return NULL;
-	}
-
-	head = (struct candle_chunk_list_head_version *)head_snap_version->object;
-	head->head_version_prev = NULL;
-	head->head_version_next = NULL;
-	head->tail_node = NULL;  /* Node range is not yet closed */
-	head->head_node = chunk; /* First node of the range */
 
 	atomic_store(&list->mutable_seq, UINT64_MAX);
 	atomic_store(&list->last_seq_converted, UINT64_MAX);
@@ -204,15 +180,18 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->candle_type = ctx->candle_type;
 	list->symbol_id = ctx->symbol_id;
 
-	list->tail = chunk;
-	list->candle_mutable_chunk = chunk;
-	list->converting_chunk = chunk;
+	list->tail = NULL;
+	list->candle_mutable_chunk = NULL;
+	list->converting_chunk = NULL;
 
 	return list;
 }
 
 /**
  * @brief   Destroy all chunks.
+ *
+ * This function must be called only after all chunks in the list have been
+ * converted to column batches.
  *
  * @param   chunk_list: Pointer from create_candle_chunk_list().
  */
@@ -251,6 +230,8 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	/* This will call candle_chunk_list_head_free() */
 	atomsnap_destroy_gate(chunk_list->head_gate);
 
+	candle_chunk_index_destroy(chunk_list->chunk_index);
+
 	free(chunk_list);
 }
 
@@ -268,27 +249,60 @@ static inline void write_start_timestamp(struct candle_chunk *chunk,
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
 static int init_first_candle(struct candle_chunk_list *list,
-	struct candle_chunk *chunk, struct candle_update_ops *ops,
-	struct trcache_trade_data *trade)
+	struct candle_update_ops *ops, struct trcache_trade_data *trade)
 {
-	if (candle_chunk_page_init(chunk, 0, ops, trade) == -1) {
+	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
+		list->symbol_id, list->row_page_count, list->trc->batch_candle_count);
+	struct atomsnap_version *head_snap_version = NULL;
+	struct candle_chunk_list_head_version *head = NULL;
+	int idx_add_ret = -1;
+
+	if (new_chunk == NULL) {
+		errmsg(stderr, "Failure on create_candle_chunk()\n");
+		return -1;
+	}
+
+	if (candle_chunk_page_init(new_chunk, 0, ops, trade) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
+		candle_chunk_destroy(new_chunk);
 		return -1;
 	}
 
-	chunk->mutable_page_idx = 0;
-	chunk->mutable_row_idx = 0;
-
-	chunk->seq_first = 0;
-	write_start_timestamp(chunk, 0, 0, trade->timestamp);
-
-	/* Add the new chunk into the index */
-	atomic_thread_fence(memory_order_release);
-	if (candle_chunk_index_append(list->chunk_index, chunk,
-			chunk->seq_first, trade->timestamp) == -1) {
-		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
+	head_snap_version
+		= atomsnap_make_version(list->head_gate, (void *)list->chunk_index);
+	if (head_snap_version == NULL) {
+		errmsg(stderr, "Failure on atomsnap_make_version()\n");
+		candle_chunk_destroy(new_chunk);
 		return -1;
 	}
+
+	head = (struct candle_chunk_list_head_version *)head_snap_version->object;
+	head->head_version_prev = NULL;
+	head->head_version_next = NULL;
+	head->tail_node = NULL;
+	head->head_node = new_chunk;
+
+	list->tail = NULL;
+	list->candle_mutable_chunk = NULL;
+	list->converting_chunk = NULL;
+
+	new_chunk->mutable_page_idx = 0;
+	new_chunk->mutable_row_idx = 0;
+
+	new_chunk->seq_first = 0;
+	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
+
+	/*
+	 * Register atomsnap version.
+	 */
+	atomsnap_exchange_version(list->head_gate, head_snap_version);
+
+	/* 
+	 * This is the first chunk inserted into the index. It must not fail.
+	 */
+	idx_add_ret = candle_chunk_index_append(list->chunk_index, new_chunk,
+		new_chunk->seq_first, trade->timestamp);
+	assert(idx_add_ret != -1);
 
 	return 0;
 }
@@ -348,7 +362,6 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	/* Link into list */
 	prev_chunk->next = new_chunk;
-	new_chunk->prev = prev_chunk;
 	list->tail = new_chunk;
 	list->candle_mutable_chunk = new_chunk;
 
@@ -358,10 +371,8 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	new_chunk->seq_first = prev_chunk->seq_first + list->trc->batch_candle_count;
 	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
 
-
 	/* Add the new chunk into the index */
-	atomic_thread_fence(memory_order_release);
-	if (candle_chunk_index_append(list->chunk_index, chunk,
+	if (candle_chunk_index_append(list->chunk_index, new_chunk,
 			new_chunk->seq_first, trade->timestamp) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
 		return -1;
@@ -399,9 +410,10 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * This path occurs only once, right after the chunk list is created.
 	 * During page initialization, the first candle is also initialized, 
 	 * which requires trade data. However, since trade data is not available 
-	 * at the time the chunk list is created, this separate path was introduced.
+	 * at the time the chunk list is created, the first chunk is created not in
+	 * the list init function.
 	 */
-	if (chunk->mutable_page_idx == -1) {
+	if (chunk == NULL) {
 		if (init_first_candle(list, chunk, ops, trade) == -1) {
 			return -1;
 		}
@@ -486,11 +498,11 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
  */
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
-	struct candle_chunk *chunk = list->converting_chunk;
 	uint64_t mutable_seq = atomic_load_explicit(
 		&list->mutable_seq, memory_order_acquire);
 	uint64_t last_seq_converted = atomic_load_explicit(
 		&list->last_seq_converted, memory_order_acquire);
+	struct candle_chunk *chunk = list->converting_chunk;
 	struct atomsnap_version *head_snap = NULL;
 	int num_completed, num_converted, start_idx, end_idx;
 	int num_flush_batch = 0;
@@ -529,7 +541,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 
 		/* If this chunk is fully converted, notice it to the flush worker */
 		num_flush_batch += 1;
-		chunk = chunk->next;
+		chunk = chunk->next; 
 	}
 
 	assert(chunk != NULL);
@@ -567,7 +579,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 		return;
 	}
 
-	new_snap = atomsnap_make_version(list->head_gate, NULL);
+	new_snap = atomsnap_make_version(list->head_gate, (void*)list->chunk_index);
 	if (new_snap == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return;

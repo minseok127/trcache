@@ -138,7 +138,6 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 	atomic_store(&chunk->num_converted, 0);
 
 	chunk->next = NULL;
-	chunk->prev = NULL;
 
 	return chunk;
 }
