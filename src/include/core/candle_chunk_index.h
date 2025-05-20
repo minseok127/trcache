@@ -126,7 +126,6 @@ struct candle_chunk *candle_chunk_index_pop_head(
 void candle_chunk_index_pop_head(struct candle_chunk_index *idx);
 #endif /* TRCACHE_DEBUG */
 
-
 /**
  * @brief   Locate the chunk that contains @seq.
  *
