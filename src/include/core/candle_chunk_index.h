@@ -127,17 +127,27 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx);
 #endif /* TRCACHE_DEBUG */
 
 /**
- * @brief   Locate the chunk that contains @seq.
+ * @brief   Find the chunk that contains @seq.
  *
- * @return  Pointer to the chunk, or NULL if @p seq is outside the index.
+ * The caller must ensure that the head does not move.
+ *
+ * @param   idx: Pointer of the #candle_chunk_index.
+ * @param   seq: Target sequence number.
+ *
+ * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk_index *idx, uint64_t seq);
 
 /**
- * @brief   Locate the chunk whose [ts_min, ts_max] range contains @ts.
+ * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
  *
- * @return  Pointer to the chunk, or NULL if no such chunk exists.
+ * The caller must ensure that the head does not move.
+ *
+ * @param   idx: Pointer of the #candle_chunk_index.
+ * @param   ts:  Target timestamp.
+ *
+ * @return  Pointer to the chunk, or NULL if @ts is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk_index *idx, uint64_t ts);

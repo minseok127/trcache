@@ -374,6 +374,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	/* Link into list */
 	prev_chunk->next = new_chunk;
+	new_chunk->prev = prev_chunk;
 	list->tail = new_chunk;
 	list->candle_mutable_chunk = new_chunk;
 
@@ -524,12 +525,12 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		return;
 	}
 
-	assert(chunk != NULL);
-
 	/* Pin the head for safe node traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 
-	while (chunk != NULL) {
+	while (true) {
+		assert(chunk != NULL);
+
 		num_completed = atomic_load_explicit(
 			&chunk->num_completed, memory_order_acquire);
 		num_converted = atomic_load_explicit(
@@ -555,10 +556,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 
 		/* If this chunk is fully converted, notice it to the flush worker */
 		num_flush_batch += 1;
-		chunk = chunk->next; 
+		chunk = chunk->next;
 	}
-
-	assert(chunk != NULL);
 
 	/* Unpin head */
 	atomsnap_release_version(head_snap);

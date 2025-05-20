@@ -150,7 +150,7 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 }
 
 /**
- * @brief   Grow index array and exchange it to the new version.
+ * @brief   Grow the index's ring buffer.
  *
  * @param   idx:         Pointer of the #candle_chunk_index.
  * @param   cur_idx_ver: Version of the array with no available space.
@@ -159,7 +159,7 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
  * @return  0 on success, -1 on failure.
  *
  * count1 is the number of entries from the head to the end of the old array,
- * and count2 is the number from the beginning of the old array to the tail.
+ * and count2 is the number from the beginning of the old array to (head-1).
  */
 static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	struct candle_chunk_index_version *cur_idx_ver, uint64_t head)
@@ -273,11 +273,15 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 }
 #endif /* TRCACHE_DEBUG */
 
-
 /**
- * @brief Locate the chunk that contains @seq.
+ * @brief   Find the chunk that contains @seq.
  *
- * @return Pointer to the chunk, or NULL if @p seq is outside the index.
+ * The caller must ensure that the head does not move.
+ *
+ * @param   idx: Pointer of the #candle_chunk_index.
+ * @param   seq: Target sequence number.
+ *
+ * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk_index *idx, uint64_t seq)
@@ -286,9 +290,14 @@ struct candle_chunk *candle_chunk_index_find_seq(
 }
 
 /**
- * @brief Locate the chunk whose [ts_min, ts_max] range contains @ts.
+ * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
  *
- * @return Pointer to the chunk, or NULL if no such chunk exists.
+ * The caller must ensure that the head does not move.
+ *
+ * @param   idx: Pointer of the #candle_chunk_index.
+ * @param   ts:  Target timestamp.
+ *
+ * @return  Pointer to the chunk, or NULL if @ts is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk_index *idx, uint64_t ts)
