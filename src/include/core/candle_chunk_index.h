@@ -10,14 +10,14 @@
 /*
  * candle_chunk_index_entry - Metadata that maps a range of candles to a chunk.
  
- * @chunk_ptr:      Pointer to the physical chunk that stores the candles.
- * @seq_first:      Sequence number (inclusive) of the first candle.
- * @timestamp_min:  Minimum timestamp (inclusive) of the first candle.
+ * @chunk_ptr:       Pointer to the physical chunk that stores the candles.
+ * @seq_first:       Sequence number (inclusive) of the first candle.
+ * @timestamp_first: Timestamp (inclusive) of the first candle.
  */
 struct candle_chunk_index_entry {
 	struct candle_chunk *chunk_ptr;
 	uint64_t seq_first;
-	uint64_t timestamp_min;
+	uint64_t timestamp_first;
 };
 
 /**
@@ -89,13 +89,10 @@ struct candle_chunk_index {
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(unsigned init_cap_pow2);
+struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2);
 
 /**
  * @brief   Gracefully destroy the index and all internal arrays.
- *
- * The call waits for the atomsnap grace-period so that no reader holds
- * a reference to any retired array when memory is freed.
  *
  * @param   idx: Pointer from the candle_chunk_index_create().
  */
@@ -104,34 +101,15 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx);
 /**
  * @brief   Append a *newly allocated* chunk to the tail.
  *
- * The function publishes a provisional entry whose @seq_last,
- * @ts_max fields are UINT64_MAX. They must be filled in later
- * with candle_chunk_index_finalize().
- *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   chunk:      Pointer of the newly appended #candle_chunk.
  * @param   seq_first:  First sequence number of the new chunk.
- * @param   ts_min:     First timestamp of the new chunk.
+ * @param   ts_first:   First timestamp of the new chunk.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_index_append(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_min);
-
-/**
- * @brief   Fill in the final range of a chunk once it becomes immutable.
- *
- * Must be called by the writer thread **exactly once** per chunk after
- * the last candle has been closed.
- *
- * @param   chunk:      Pointer identical to the one passed to *append*.
- * @param   seq_last:   Last sequence number stored in the chunk.
- * @param   ts_max:     Maximum timestamp in the chunk.
- *
- * @return  0 on success, -1 if the chunk is not found.
- */
-int candle_chunk_index_finalize(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_last, uint64_t ts_max);
+	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first);
 
 /**
  * @brief   Remove the oldest chunk if its lifetime has ended.

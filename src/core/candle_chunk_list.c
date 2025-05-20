@@ -149,6 +149,14 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
+	list->chunk_index = candle_chunk_index_create(
+		list->trc->batch_candle_count_pow2);
+	if (list->chunk_index == NULL) {
+		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
+		free(list);
+		return NULL;
+	}
+
 	list->trc = ctx->trc;
 
 	list->row_page_count = (list->trc->batch_candle_count
@@ -158,6 +166,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 		list->row_page_count, list->trc->batch_candle_count);
 	if (chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
+		candle_chunk_index_destroy(list->chunk_index);
 		free(list);
 		return NULL;
 	}
@@ -165,6 +174,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->head_gate = atomsnap_init_gate(&atomsnap_ctx);
 	if (list->head_gate == NULL) {
 		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
+		candle_chunk_index_destroy(list->chunk_index);
 		free(list);
 		free(chunk);
 		return NULL;
@@ -173,6 +183,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	head_snap_version = atomsnap_make_version(list->head_gate, NULL);
 	if (head_snap_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
+		candle_chunk_index_destroy(list->chunk_index);
 		atomsnap_destroy_gate(list->head_gate);
 		free(list);
 		free(chunk);
@@ -256,8 +267,9 @@ static inline void write_start_timestamp(struct candle_chunk *chunk,
 /**
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
-static int init_first_candle(struct candle_chunk *chunk,
-	struct candle_update_ops *ops, struct trcache_trade_data *trade)
+static int init_first_candle(struct candle_chunk_list *list,
+	struct candle_chunk *chunk, struct candle_update_ops *ops,
+	struct trcache_trade_data *trade)
 {
 	if (candle_chunk_page_init(chunk, 0, ops, trade) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
@@ -270,8 +282,13 @@ static int init_first_candle(struct candle_chunk *chunk,
 	chunk->seq_first = 0;
 	write_start_timestamp(chunk, 0, 0, trade->timestamp);
 
-	// XXX candle chunk index insert
+	/* Add the new chunk into the index */
 	atomic_thread_fence(memory_order_release);
+	if (candle_chunk_index_append(list->chunk_index, chunk,
+			chunk->seq_first, trade->timestamp) == -1) {
+		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
+		return -1;
+	}
 
 	return 0;
 }
@@ -342,8 +359,13 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
 
 
-	// XXX candle chunk index insert
+	/* Add the new chunk into the index */
 	atomic_thread_fence(memory_order_release);
+	if (candle_chunk_index_append(list->chunk_index, chunk,
+			new_chunk->seq_first, trade->timestamp) == -1) {
+		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
+		return -1;
+	}
 
 	return 0;
 }
@@ -380,7 +402,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * at the time the chunk list is created, this separate path was introduced.
 	 */
 	if (chunk->mutable_page_idx == -1) {
-		if (init_first_candle(chunk, ops, trade) == -1) {
+		if (init_first_candle(list, chunk, ops, trade) == -1) {
 			return -1;
 		}
 

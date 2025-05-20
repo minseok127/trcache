@@ -96,7 +96,7 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(unsigned init_cap_pow2)
+struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2)
 {
 	uint64_t cap = 1ULL << init_cap_pow2;
 	struct atomsnap_init_context ctx = {
@@ -137,9 +137,6 @@ struct candle_chunk_index *candle_chunk_index_create(unsigned init_cap_pow2)
 /**
  * @brief   Gracefully destroy the index and all internal arrays.
  *
- * The call waits for the atomsnap grace-period so that no reader holds
- * a reference to any retired array when memory is freed.
- *
  * @param   idx: Pointer from the candle_chunk_index_create().
  */
 void candle_chunk_index_destroy(struct candle_chunk_index *idx)
@@ -155,19 +152,15 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 /**
  * @brief   Append a *newly allocated* chunk to the tail.
  *
- * The function publishes a provisional entry whose @seq_last,
- * @ts_max fields are UINT64_MAX. They must be filled in later
- * with candle_chunk_index_finalize().
- *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   chunk:      Pointer of the newly appended #candle_chunk.
  * @param   seq_first:  First sequence number of the new chunk.
- * @param   ts_min:     First timestamp of the new chunk.
+ * @param   ts_first:   First timestamp of the new chunk.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_index_append(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_min)
+	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first)
 {
 	uint64_t head = atomic_load_explicit(&idx->head,
 		memory_order_acquire);
@@ -194,31 +187,11 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	entry = idx_ver->array + new_tail_pos;
 	entry->chunk_ptr = chunk;
 	entry->seq_first = seq_first;
-	entry->seq_last = UINT64_MAX;
-	entry->timestamp_min = ts_min;
-	entry->timestamp_max = UINT64_MAX;
+	entry->timestamp_first = ts_first;
 	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
 
 	atomsnap_release_version(snap_ver);
 	return 0;
-}
-
-/**
- * @brief   Fill in the final range of a chunk once it becomes immutable.
- *
- * Must be called by the writer thread **exactly once** per chunk after
- * the last candle has been closed.
- *
- * @param   chunk:      Pointer identical to the one passed to *append*.
- * @param   seq_last:   Last sequence number stored in the chunk.
- * @param   ts_max:     Maximum timestamp in the chunk.
- *
- * @return  0 on success, -1 if the chunk is not found.
- */
-int candle_chunk_index_finalize(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_last, uint64_t ts_max)
-{
-
 }
 
 /**

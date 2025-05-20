@@ -65,6 +65,7 @@ struct candle_chunk_list_init_ctx {
  * @head_gate:               Gate managing head versions.
  * @update_ops:              Candle update callbacks.
  * @trc:                     #trcache back-pointer.
+ * @chunk_index:             Chunk index based on sequence number and timestamp.
  * @row_page_count:          Number of row pages per chunk.
  * @candle_type:             Enum trcache_candle_type.
  * @symbol_id:               Integer symbol ID resolved via symbol table.
@@ -79,6 +80,7 @@ struct candle_chunk_list {
 	struct atomsnap_gate *head_gate;
 	struct candle_update_ops update_ops;
 	struct trcache *trc;
+	struct candle_chunk_index *chunk_index;
 	int row_page_count;
 	trcache_candle_type candle_type;
 	int symbol_id;
