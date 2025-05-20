@@ -174,13 +174,14 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	uint64_t count2 = old_cap - count1;
 	struct atomsnap_version *new_snap
 		= atomsnap_make_version(idx->gate, (void *)new_cap);
-	struct candle_chunk_index_version *new_idx_ver
-		= (struct candle_chunk_index_version *)new_snap->object;
+	struct candle_chunk_index_version *new_idx_ver;
 
 	if (new_snap == NULL ) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return -1;
 	}
+
+	new_idx_ver = (struct candle_chunk_index_version *)new_snap->object;
 
 	memcpy(&new_idx_ver->array[head & new_mask],
 		&cur_idx_ver->array[head & old_mask],
@@ -192,7 +193,6 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	}
 
 	atomsnap_exchange_version(idx->gate, new_snap);
-
 	return 0;
 }
 
