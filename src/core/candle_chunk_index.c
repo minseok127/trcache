@@ -337,6 +337,41 @@ struct candle_chunk *candle_chunk_index_find_seq(
 struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk_index *idx, uint64_t target_ts)
 {
-	return NULL;
+	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
+	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
+	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
+	struct candle_chunk_index_version *idx_ver;
+	struct candle_chunk *out;
+	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
+
+	if (snap_ver == NULL) {
+		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		return NULL;
+	}
+
+	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+	mask = idx_ver->mask;
+
+	/* Binary search */
+	while (lo < hi) {
+		mid = lo + ((hi - lo + 1) >> 1);
+		ts_mid = idx_ver->array[mid & mask].timestamp_first;
+
+		if (ts_mid <= target_ts) {
+			lo = mid;
+		} else {
+			hi = mid - 1;
+		}
+	}
+
+#ifdef TRCACHE_DEBUG
+	if (lo != tail) {
+		assert(target_ts < idx_ver->array[(lo + 1) & mask].timestamp_first);
+	}
+#endif /* TRCACHE_DEBUG */
+
+	out = idx_ver->array[lo & mask].chunk_ptr;
+	atomsnap_release_version(snap_ver);
+	return out;
 }
 
