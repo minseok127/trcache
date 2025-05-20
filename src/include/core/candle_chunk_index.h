@@ -115,13 +115,16 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
  * @brief   Remove the oldest chunk if its lifetime has ended.
  *
  * The caller is responsible for deciding whether the chunk is no longer
- * needed and is not referenced by any thread. On success the function advances
- * @head and returns the retired chunk pointer.
+ * needed and is not referenced by any thread.
  *
- * @return  Pointer to the removed chunk, or NULL if the index is empty.
+ * @return  Pointer to the popped chunk only for debugging purpose.
  */
+#ifdef TRCACHE_DEBUG
 struct candle_chunk *candle_chunk_index_pop_head(
 	struct candle_chunk_index *idx);
+#else  /* !TRCACHE_DEBUG */
+void candle_chunk_index_pop_head(struct candle_chunk_index *idx);
+#endif /* TRCACHE_DEBUG */
 
 
 /**

@@ -150,6 +150,53 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 }
 
 /**
+ * @brief   Grow index array and exchange it to the new version.
+ *
+ * @param   idx:         Pointer of the #candle_chunk_index.
+ * @param   cur_idx_ver: Version of the array with no available space.
+ * @param   head:        Head at the moment when no slots are available.
+ * @param   tail:        Tail at the moment when no slots are available.
+ *
+ * @return  0 on success, -1 on failure.
+ *
+ * count1 is the number of entries from the head to the end of the old array,
+ * and count2 is the number from the beginning of the old array to the tail.
+ */
+static int candle_chunk_index_grow(struct candle_chunk_index *idx,
+	struct candle_chunk_index_version *cur_idx_ver, uint64_t head,
+	uint64_t tail)
+{
+	uint64_t old_mask = cur_idx_ver->mask;
+	uint64_t old_cap  = old_mask + 1;
+	uint64_t new_cap  = old_cap << 1;
+	uint64_t new_mask = new_cap - 1;
+	uint64_t count1 = old_cap - (head & old_mask);
+	uint64_t count2 = old_cap - count1;
+	struct atomsnap_version *new_snap
+		= atomsnap_make_version(idx->gate, (void *)new_cap);
+	struct candle_chunk_index_version *new_idx_ver
+		= (struct candle_chunk_index_version *)new_snap->object;
+
+	if (new_snap == NULL ) {
+		errmsg(stderr, "Failure on atomsnap_make_version()\n");
+		return -1;
+	}
+
+	memcpy(&new_idx_ver->array[head & new_mask],
+		&cur_idx_ver->array[head & old_mask],
+		count1 * sizeof(struct candle_chunk_index_entry));
+
+	if (count2 != 0) {
+		memcpy(&new_idx_ver->array[old_cap & new_mask], cur_idx_ver->array,
+			count2 * sizeof(struct candle_chunk_index_entry));
+	}
+
+	atomsnap_exchange_version(idx->gate, new_snap);
+
+	return 0;
+}
+
+/**
  * @brief   Append a *newly allocated* chunk to the tail.
  *
  * @param   idx:        Pointer of the #candle_chunk_index.
@@ -162,19 +209,18 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first)
 {
-	uint64_t head = atomic_load_explicit(&idx->head,
-		memory_order_acquire);
-	uint64_t new_tail = atomic_load_explicit(&idx->tail,
-		memory_order_acquire) + 1;
+	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
+	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
 	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
 	struct candle_chunk_index_version *idx_ver = 
 		(struct candle_chunk_index_version *)snap_ver->object;
 	uint64_t head_pos = head & idx_ver->mask;
+	uint64_t new_tail = tail + 1;
 	uint64_t new_tail_pos = new_tail & idx_ver->mask;
 	struct candle_chunk_index_entry *entry;
 
 	if (new_tail != 0 && head_pos == new_tail_pos) {
-		if (candle_chunk_index_grow() == -1) {
+		if (candle_chunk_index_grow(idx, idx_ver, head, tail) == -1) {
 			errmsg(stderr, "Failure on candle_chunk_index_grow()\n");
 			return -1;
 		}
@@ -189,26 +235,43 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	entry->chunk_ptr = chunk;
 	entry->seq_first = seq_first;
 	entry->timestamp_first = ts_first;
+
 	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
 	atomsnap_release_version(snap_ver);
-
 	return 0;
 }
 
 /**
  * @brief   Remove the oldest chunk if its lifetime has ended.
  *
- * The caller is responsible for deciding whether the chunk is no longer
- * needed and is not referenced by any thread. On success the function advances
- * @head and returns the retired chunk pointer.
+ * @param   idx: Pointer of the #candle_chunk_index.
  *
- * @return  Pointer to the removed chunk, or NULL if the index is empty.
+ * The caller is responsible for deciding whether the chunk is no longer
+ * needed and is not referenced by any thread.
+ *
+ * @return  Pointer to the popped chunk only for debugging purpose.
  */
-struct candle_chunk *candle_chunk_index_pop_head(
-	struct candle_chunk_index *idx)
+#ifdef TRCACHE_DEBUG
+struct candle_chunk *candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 {
+	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
+	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
+	struct candle_chunk_index_version *idx_ver = 
+		(struct candle_chunk_index_version *)snap_ver->object;
+	uint64_t head_pos = head & idx_ver->mask;
+	struct candle_chunk_index_entry *entry = idx_ver->array + head_pos;
+	struct candle_chunk *chunk = entry->chunk_ptr;
 
+	atomic_store(&idx->head, head + 1, memory_order_release);
+	atomsnap_release_version(snap_ver);
+	return chunk;
 }
+#else  /* !TRCACHE_DEBUG */
+void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
+{
+	atomic_store(&idx->head, idx->head + 1, memory_order_release);
+}
+#endif /* TRCACHE_DEBUG */
 
 
 /**

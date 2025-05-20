@@ -313,9 +313,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
 			new_chunk->seq_first, trade->timestamp) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
-#ifdef TRCACHE_DEBUG
-		assert(false);
-#endif /* TRCACHE_DEBUG */
+		return -1;
 	}
 
 	return 0;
@@ -374,13 +372,6 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 		return -1;
 	}
 
-#ifdef TRCACHE_DEBUG
-	if (prev_chunk != list->tail) {
-		errmsg(stderr, "The given prev_chunk is not the tail of list\n");
-		assert(false);
-	}
-#endif /* TRCACHE_DEBUG */
-
 	/* Link into list */
 	prev_chunk->next = new_chunk;
 	list->tail = new_chunk;
@@ -396,9 +387,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
 			new_chunk->seq_first, trade->timestamp) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
-#ifdef TRCACHE_DEBUG
-		assert(false);
-#endif /* TRCACHE_DEBUG */
+		return -1;
 	}
 
 	return 0;
@@ -437,13 +426,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * the list init function.
 	 */
 	if (chunk == NULL) {
-#ifdef TRCACHE_DEBUG
-		if (list->mutable_seq != UINT64_MAX) {
-			errmsg(stderr, "Invalid mutable_seq initialization\n");
-			assert(false);
-		}
-#endif /* TRCACHE_DEBUG */
-
 		if (init_first_candle(list, ops, trade) == -1) {
 			return -1;
 		}
@@ -480,13 +462,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 */
 	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
 			expected_num_completed != list->trc->batch_candle_count) {
-#ifdef TRCACHE_DEBUG
-		if (chunk->mutable_row_idx >= TRCACHE_ROWS_PER_PAGE) {
-			errmsg(stderr, "Invalid mutable_row_idx\n");
-			assert(false);
-		}
-#endif /* TRCACHE_DEBUG */
-
 		/* Initialize the next candle */
 		advance_within_same_page(chunk, row_page, ops, trade);
 
@@ -496,13 +471,6 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 			expected_num_completed != list->trc->batch_candle_count) {
 		/* First, release the old page */
 		atomsnap_release_version(row_page_version);
-
-#ifdef TRCACHE_DEBUG
-		if (chunk->mutable_page_idx + 1 >= list->row_page_count) {
-			errmsg(stderr, "Invalid mutable_page_idx\n");
-			assert(false);
-		}
-#endif /* TRCACHE_DEBUG */
 
 		/* Then move to the next page */
 		if (advance_to_next_page(chunk, ops, trade) == -1) {
@@ -590,12 +558,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		chunk = chunk->next; 
 	}
 
-#ifdef TRCACHE_DEBUG
-	if (chunk == NULL) {
-		errmsg(stderr, "Chunk pointer is moved to NULL\n");
-		assert(false);
-	}
-#endif /* TRCACHE_DEBUG */
+	assert(chunk != NULL);
 
 	/* Unpin head */
 	atomsnap_release_version(head_snap);
