@@ -294,9 +294,8 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
 	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
 	struct candle_chunk_index_version *idx_ver;
-	struct candle_chunk_index_entry *entry;
-	struct candle_chunk *ret = NULL;
-	uint64_t idx_value, target_pos;
+	uint64_t mask, batch, pow2, first_seq, last_seq, steps, log_idx;
+	struct candle_chunk *out;
 
 	if (snap_ver == NULL) {
 		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
@@ -304,35 +303,25 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	}
 
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+	mask = idx_ver->mask;
+	batch = idx->batch_candle_count;
+	pow2 = idx->batch_candle_count_pow2;
 
-	/* First, check the tail */
-	idx_value = tail;
-	target_pos = idx_value & idx_ver->mask;
-	entry = idx_ver->array + target_pos;
+	first_seq = idx_ver->array[head & mask].seq_first;
+	last_seq = idx_ver->array[tail & mask].seq_first + batch - 1;
 
-	if (entry->seq_first <= target_seq) {
-		assert(entry->seq_first + idx->batch_candle_count > target_seq);
-		ret = entry->chunk_ptr;
+	if (target_seq < first_seq || target_seq > last_seq) {
 		atomsnap_release_version(snap_ver);
-		return ret;
+		return NULL;
 	}
 
-	idx_value -=
-		(entry->seq_first - target_seq + (idx->batch_candle_count - 1))
-			>> idx->batch_candle_count_pow2;
+	steps = (last_seq - target_seq) >> pow2;
+	log_idx = tail - steps;
+	assert(log_idx >= head);
 
-	/* The target chunk is removed */
-	if (idx_value < head) {
-		atomsnap_release_version(snap_ver);
-		return ret;
-	}
-
-	target_pos = idx_value & idx_ver->mask;
-	entry = idx_ver->array + target_pos;
-	ret = entry->chunk_ptr;
+	out = idx_ver->array[log_idx & mask].chunk_ptr;
 	atomsnap_release_version(snap_ver);
-
-	return ret;
+	return out;
 }
 
 /**
