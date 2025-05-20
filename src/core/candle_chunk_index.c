@@ -12,7 +12,7 @@
  *   - Readers load them with 'memory_order_acquire', *before* acquiring
  *     the atomsnap version (see struct comment in the implementation).
  */
-
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,7 +119,7 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2)
 		return NULL;
 	}
 
-	initial_version = atomsnap_make_version((void*)cap);
+	initial_version = atomsnap_make_version(idx->gate, (void*)cap);
 	if (initial_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		atomsnap_destroy_gate(idx->gate);
@@ -155,7 +155,6 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
  * @param   idx:         Pointer of the #candle_chunk_index.
  * @param   cur_idx_ver: Version of the array with no available space.
  * @param   head:        Head at the moment when no slots are available.
- * @param   tail:        Tail at the moment when no slots are available.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -163,8 +162,7 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
  * and count2 is the number from the beginning of the old array to the tail.
  */
 static int candle_chunk_index_grow(struct candle_chunk_index *idx,
-	struct candle_chunk_index_version *cur_idx_ver, uint64_t head,
-	uint64_t tail)
+	struct candle_chunk_index_version *cur_idx_ver, uint64_t head)
 {
 	uint64_t old_mask = cur_idx_ver->mask;
 	uint64_t old_cap  = old_mask + 1;
@@ -220,7 +218,7 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk_index_entry *entry;
 
 	if (new_tail != 0 && head_pos == new_tail_pos) {
-		if (candle_chunk_index_grow(idx, idx_ver, head, tail) == -1) {
+		if (candle_chunk_index_grow(idx, idx_ver, head) == -1) {
 			errmsg(stderr, "Failure on candle_chunk_index_grow()\n");
 			return -1;
 		}
@@ -262,7 +260,7 @@ struct candle_chunk *candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 	struct candle_chunk_index_entry *entry = idx_ver->array + head_pos;
 	struct candle_chunk *chunk = entry->chunk_ptr;
 
-	atomic_store(&idx->head, head + 1, memory_order_release);
+	atomic_store_explicit(&idx->head, head + 1, memory_order_release);
 	atomsnap_release_version(snap_ver);
 	return chunk;
 }
@@ -282,7 +280,7 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk_index *idx, uint64_t seq)
 {
-
+	return NULL;
 }
 
 /**
@@ -293,6 +291,6 @@ struct candle_chunk *candle_chunk_index_find_seq(
 struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk_index *idx, uint64_t ts)
 {
-
+	return NULL;
 }
 
