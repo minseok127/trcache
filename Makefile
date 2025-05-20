@@ -2,9 +2,9 @@ CC = gcc
 AR = ar
 
 CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC
-CFLAGS_DEBUG = -Wall -Wextra -O0 -g -pg -std=c11 -fPIC
+CFLAGS_DEBUG = -Wall -Wextra -O0 -g -pg -std=c11 -fPIC -DTRCACHE_DEBUG
 
-BUILD_MODE ?= release
+BUILD_MODE ?= debug
 
 ifeq ($(BUILD_MODE), release)
 	CFLAGS = $(CFLAGS_RELEASE)

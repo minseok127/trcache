@@ -68,6 +68,9 @@ static void candle_chunk_list_head_free(struct atomsnap_version *version)
 	struct candle_chunk_list_head_version *next_head_version = NULL;
 	struct candle_chunk_list_head_version *prev_head_version = NULL;
 	struct candle_chunk *prev_chunk = NULL, *chunk = NULL;
+#ifdef TRCACHE_DEBUG
+	struct candle_chunk *pop_head = NULL; /* debug purpose */
+#endif /* TRCACHE_DEBUG */
 
 	prev_head_version
 		= (struct candle_chunk_list_head_version *) atomic_fetch_or(
@@ -88,11 +91,23 @@ free_head_version:
 	prev_chunk = chunk;
 	while (chunk != head_version->tail_node) {
 		chunk = chunk->next;
-		// XXX remove it from candle chunk index
+
+#ifdef TRCACHE_DEBUG
+		pop_head = candle_chunk_index_pop_head(chunk_index);
+		assert(pop_head == prev_chunk);
+#else  /* !TRCACHE_DEBUG */
+		candle_chunk_index_pop_head(chunk_index);
+#endif /* TRCACHE_DEBUG */
+
 		candle_chunk_destroy(prev_chunk);
 		prev_chunk = chunk;
 	}
-	// XXX remove it from candle chunk index
+#ifdef TRCACHE_DEBUG
+	pop_head = candle_chunk_index_pop_head(chunk_index);
+	assert(pop_head == head_version->tail_node);
+#else  /* !TRCACHE_DEBUG */
+	candle_chunk_index_pop_head(chunk_index);
+#endif /* TRCACHE_DEBUG */
 	candle_chunk_destroy(head_version->tail_node);
 
 	next_head_version = atomic_load(&head_version->head_version_next);
@@ -151,6 +166,8 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
+	list->trc = ctx->trc;
+
 	list->chunk_index = candle_chunk_index_create(
 		list->trc->batch_candle_count_pow2);
 	if (list->chunk_index == NULL) {
@@ -158,8 +175,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 		free(list);
 		return NULL;
 	}
-
-	list->trc = ctx->trc;
 
 	list->row_page_count = (list->trc->batch_candle_count
 		+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
@@ -255,7 +270,6 @@ static int init_first_candle(struct candle_chunk_list *list,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
-	int idx_add_ret = -1;
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
@@ -282,9 +296,9 @@ static int init_first_candle(struct candle_chunk_list *list,
 	head->tail_node = NULL;
 	head->head_node = new_chunk;
 
-	list->tail = NULL;
-	list->candle_mutable_chunk = NULL;
-	list->converting_chunk = NULL;
+	list->tail = new_chunk;
+	list->candle_mutable_chunk = new_chunk;
+	list->converting_chunk = new_chunk;
 
 	new_chunk->mutable_page_idx = 0;
 	new_chunk->mutable_row_idx = 0;
@@ -292,17 +306,17 @@ static int init_first_candle(struct candle_chunk_list *list,
 	new_chunk->seq_first = 0;
 	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
 
-	/*
-	 * Register atomsnap version.
-	 */
+	/* Register atomsnap version of head */
 	atomsnap_exchange_version(list->head_gate, head_snap_version);
 
-	/* 
-	 * This is the first chunk inserted into the index. It must not fail.
-	 */
-	idx_add_ret = candle_chunk_index_append(list->chunk_index, new_chunk,
-		new_chunk->seq_first, trade->timestamp);
-	assert(idx_add_ret != -1);
+	/* Add the new chunk into the index */
+	if (candle_chunk_index_append(list->chunk_index, new_chunk,
+			new_chunk->seq_first, trade->timestamp) == -1) {
+		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
+#ifdef TRCACHE_DEBUG
+		assert(false);
+#endif /* TRCACHE_DEBUG */
+	}
 
 	return 0;
 }
@@ -360,6 +374,13 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 		return -1;
 	}
 
+#ifdef TRCACHE_DEBUG
+	if (prev_chunk != list->tail) {
+		errmsg(stderr, "The given prev_chunk is not the tail of list\n");
+		assert(false);
+	}
+#endif /* TRCACHE_DEBUG */
+
 	/* Link into list */
 	prev_chunk->next = new_chunk;
 	list->tail = new_chunk;
@@ -375,7 +396,9 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
 			new_chunk->seq_first, trade->timestamp) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
-		return -1;
+#ifdef TRCACHE_DEBUG
+		assert(false);
+#endif /* TRCACHE_DEBUG */
 	}
 
 	return 0;
@@ -414,7 +437,14 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * the list init function.
 	 */
 	if (chunk == NULL) {
-		if (init_first_candle(list, chunk, ops, trade) == -1) {
+#ifdef TRCACHE_DEBUG
+		if (list->mutable_seq != UINT64_MAX) {
+			errmsg(stderr, "Invalid mutable_seq initialization\n");
+			assert(false);
+		}
+#endif /* TRCACHE_DEBUG */
+
+		if (init_first_candle(list, ops, trade) == -1) {
 			return -1;
 		}
 
@@ -450,6 +480,13 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 */
 	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
 			expected_num_completed != list->trc->batch_candle_count) {
+#ifdef TRCACHE_DEBUG
+		if (chunk->mutable_row_idx >= TRCACHE_ROWS_PER_PAGE) {
+			errmsg(stderr, "Invalid mutable_row_idx\n");
+			assert(false);
+		}
+#endif /* TRCACHE_DEBUG */
+
 		/* Initialize the next candle */
 		advance_within_same_page(chunk, row_page, ops, trade);
 
@@ -459,6 +496,13 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 			expected_num_completed != list->trc->batch_candle_count) {
 		/* First, release the old page */
 		atomsnap_release_version(row_page_version);
+
+#ifdef TRCACHE_DEBUG
+		if (chunk->mutable_page_idx + 1 >= list->row_page_count) {
+			errmsg(stderr, "Invalid mutable_page_idx\n");
+			assert(false);
+		}
+#endif /* TRCACHE_DEBUG */
 
 		/* Then move to the next page */
 		if (advance_to_next_page(chunk, ops, trade) == -1) {
@@ -512,7 +556,9 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		return;
 	}
 
-	/* Pin the head */
+	assert(chunk != NULL);
+
+	/* Pin the head for safe node traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 
 	while (chunk != NULL) {
@@ -544,7 +590,12 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		chunk = chunk->next; 
 	}
 
-	assert(chunk != NULL);
+#ifdef TRCACHE_DEBUG
+	if (chunk == NULL) {
+		errmsg(stderr, "Chunk pointer is moved to NULL\n");
+		assert(false);
+	}
+#endif /* TRCACHE_DEBUG */
 
 	/* Unpin head */
 	atomsnap_release_version(head_snap);
@@ -590,8 +641,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 
 	/*
 	 * Modifying the head of the list is restricted to a single thread,
-	 * coordinated by the admin thread. Thus, only this execution path is
-	 * allowed to update the list head, making this head version the latest one.
+	 * coordinated by the admin thread. Thus, only this execution thread is
+	 * allowed to update the list head.
 	 */
 	chunk = head_version->head_node;
 
