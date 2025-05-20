@@ -36,10 +36,11 @@ struct candle_chunk_index_version {
 /*
  * candle_chunk_index - Lock-free ring-buffer that maps candles to chunks.
  *
- * @gate:               Atomsnap gate that publishes {entry_array*, mask}.
- * @head:               Logical position of the oldest live entry.
- * @tail:               Logical position one past the newest live entry.
- * @batch_candle_count: Number of candles per chunk.
+ * @gate:                    Atomsnap gate that publishes {entry_array*, mask}.
+ * @head:                    Logical position of the oldest live entry.
+ * @tail:                    Logical position one past the newest live entry.
+ * @batch_candle_count:      Number of candles per chunk.
+ * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
  *
  * The index is a *single-producer / single-consumer* ring with many concurrent
  * readers. A writer (producer) appends one #candle_chunk_index_entry per newly
@@ -82,18 +83,19 @@ struct candle_chunk_index {
 	_Atomic uint64_t head;
 	_Atomic uint64_t tail;
 	int batch_candle_count;
+	int batch_candle_count_pow2;
 };
 
 /**
  * @brief   Allocate and initialise an empty index.
  *
- * @param   init_cap_pow2:      Initial capacity expressed as log2(capacity).
- * @param   batch_candle_count: Number of candles per chunk.
+ * @param   init_cap_pow2:           Equals to log2(array_capacity).
+ * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
 struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
-	int batch_candle_count);
+	int batch_candle_count_pow2);
 
 /**
  * @brief   Gracefully destroy the index and all internal arrays.
@@ -135,25 +137,25 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx);
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx: Pointer of the #candle_chunk_index.
- * @param   seq: Target sequence number.
+ * @param   idx:        Pointer of the #candle_chunk_index.
+ * @param   target_seq: Target sequence number to search.
  *
  * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
-	struct candle_chunk_index *idx, uint64_t seq);
+	struct candle_chunk_index *idx, uint64_t target_seq);
 
 /**
  * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx: Pointer of the #candle_chunk_index.
- * @param   ts:  Target timestamp.
+ * @param   idx:       Pointer of the #candle_chunk_index.
+ * @param   target_ts: Target timestamp to search.
  *
  * @return  Pointer to the chunk, or NULL if @ts is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_ts(
-	struct candle_chunk_index *idx, uint64_t ts);
+	struct candle_chunk_index *idx, uint64_t target_ts);
 
 #endif /* CANDLE_CHUNK_INDEX_H */

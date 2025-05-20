@@ -61,10 +61,10 @@ struct trcache {
 	trcache_candle_type_flags candle_type_flags;
 	int num_candle_types;
 	int num_workers;
-	int batch_candle_count_pow2;
 	int batch_candle_count;
-	int flush_threshold_pow2;
+	int batch_candle_count_pow2;
 	int flush_threshold;
+	int flush_threshold_pow2;
 	struct trcache_flush_ops flush_ops;
 };
 

@@ -169,7 +169,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->trc = ctx->trc;
 
 	list->chunk_index = candle_chunk_index_create(
-		list->trc->flush_threshold_pow2, list->trc->batch_candle_count);
+		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2);
 	if (list->chunk_index == NULL) {
 		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
 		free(list);

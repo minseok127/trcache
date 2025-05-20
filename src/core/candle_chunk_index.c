@@ -92,13 +92,13 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 /**
  * @brief   Allocate and initialise an empty index.
  *
- * @param   init_cap_pow2:      Initial capacity expressed as log2(capacity).
- * @param   batch_candle_count: Number of candles per chunk.
+ * @param   init_cap_pow2:           Equals to log2(array_capacity).
+ * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
 struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
-	int batch_candle_count)
+	int batch_candle_count_pow2)
 {
 	uint64_t cap = 1ULL << init_cap_pow2;
 	struct atomsnap_init_context ctx = {
@@ -132,7 +132,8 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 	atomsnap_exchange_version(idx->gate, initial_version);
 	atomic_store(&idx->head, 0);
 	atomic_store(&idx->tail, UINT64_MAX);
-	idx->batch_candle_count = batch_candle_count;
+	idx->batch_candle_count = 1 << batch_candle_count_pow2;
+	idx->batch_candle_count_pow2 = batch_candle_count_pow2;
 
 	return idx;
 }
@@ -281,15 +282,57 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx: Pointer of the #candle_chunk_index.
- * @param   seq: Target sequence number.
+ * @param   idx:        Pointer of the #candle_chunk_index.
+ * @param   target_seq: Target sequence number to search.
  *
  * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
-	struct candle_chunk_index *idx, uint64_t seq)
+	struct candle_chunk_index *idx, uint64_t target_seq)
 {
-	return NULL;
+	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
+	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
+	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
+	struct candle_chunk_index_version *idx_ver;
+	struct candle_chunk_index_entry *entry;
+	struct candle_chunk *ret = NULL;
+	uint64_t idx_value, target_pos;
+
+	if (snap_ver == NULL) {
+		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		return NULL;
+	}
+
+	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+
+	/* First, check the tail */
+	idx_value = tail;
+	target_pos = idx_value & idx_ver->mask;
+	entry = idx_ver->array + target_pos;
+
+	if (entry->seq_first <= target_seq) {
+		assert(entry->seq_first + idx->batch_candle_count > target_seq);
+		ret = entry->chunk_ptr;
+		atomsnap_release_version(snap_ver);
+		return ret;
+	}
+
+	idx_value -=
+		(entry->seq_first - target_seq + (idx->batch_candle_count_pow2 - 1))
+			>> idx->batch_candle_count_pow2;
+
+	/* The target chunk is removed */
+	if (idx_value < head) {
+		atomsnap_release_version(snap_ver);
+		return ret;
+	}
+
+	target_pos = idx_value & idx_ver->mask;
+	entry = idx_ver->array + target_pos;
+	ret = entry->chunk_ptr;
+	atomsnap_release_version(snap_ver);
+
+	return ret;
 }
 
 /**
@@ -297,13 +340,13 @@ struct candle_chunk *candle_chunk_index_find_seq(
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx: Pointer of the #candle_chunk_index.
- * @param   ts:  Target timestamp.
+ * @param   idx:       Pointer of the #candle_chunk_index.
+ * @param   target_ts: Target timestamp to search.
  *
  * @return  Pointer to the chunk, or NULL if @ts is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_ts(
-	struct candle_chunk_index *idx, uint64_t ts)
+	struct candle_chunk_index *idx, uint64_t target_ts)
 {
 	return NULL;
 }
