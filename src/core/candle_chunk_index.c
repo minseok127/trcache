@@ -318,7 +318,7 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	}
 
 	idx_value -=
-		(entry->seq_first - target_seq + (idx->batch_candle_count_pow2 - 1))
+		(entry->seq_first - target_seq + (idx->batch_candle_count - 1))
 			>> idx->batch_candle_count_pow2;
 
 	/* The target chunk is removed */
