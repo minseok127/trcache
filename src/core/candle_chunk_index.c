@@ -92,11 +92,13 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 /**
  * @brief   Allocate and initialise an empty index.
  *
- * @param   init_cap_pow2: Initial capacity expressed as log2(capacity).
+ * @param   init_cap_pow2:      Initial capacity expressed as log2(capacity).
+ * @param   batch_candle_count: Number of candles per chunk.
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2)
+struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
+	int batch_candle_count)
 {
 	uint64_t cap = 1ULL << init_cap_pow2;
 	struct atomsnap_init_context ctx = {
@@ -130,6 +132,7 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2)
 	atomsnap_exchange_version(idx->gate, initial_version);
 	atomic_store(&idx->head, 0);
 	atomic_store(&idx->tail, UINT64_MAX);
+	idx->batch_candle_count = batch_candle_count;
 
 	return idx;
 }

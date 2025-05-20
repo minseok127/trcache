@@ -36,9 +36,10 @@ struct candle_chunk_index_version {
 /*
  * candle_chunk_index - Lock-free ring-buffer that maps candles to chunks.
  *
- * @gate:  Atomsnap gate that publishes {entry_array*, mask}.
- * @head: Logical position of the oldest live entry.
- * @tail: Logical position one past the newest live entry.
+ * @gate:               Atomsnap gate that publishes {entry_array*, mask}.
+ * @head:               Logical position of the oldest live entry.
+ * @tail:               Logical position one past the newest live entry.
+ * @batch_candle_count: Number of candles per chunk.
  *
  * The index is a *single-producer / single-consumer* ring with many concurrent
  * readers. A writer (producer) appends one #candle_chunk_index_entry per newly
@@ -80,16 +81,19 @@ struct candle_chunk_index {
 	struct atomsnap_gate *gate;
 	_Atomic uint64_t head;
 	_Atomic uint64_t tail;
+	int batch_candle_count;
 };
 
 /**
  * @brief   Allocate and initialise an empty index.
  *
- * @param   init_cap_pow2: Initial capacity expressed as log2(capacity).
+ * @param   init_cap_pow2:      Initial capacity expressed as log2(capacity).
+ * @param   batch_candle_count: Number of candles per chunk.
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2);
+struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
+	int batch_candle_count);
 
 /**
  * @brief   Gracefully destroy the index and all internal arrays.

@@ -169,7 +169,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->trc = ctx->trc;
 
 	list->chunk_index = candle_chunk_index_create(
-		list->trc->batch_candle_count_pow2);
+		list->trc->flush_threshold_pow2, list->trc->batch_candle_count);
 	if (list->chunk_index == NULL) {
 		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
 		free(list);
@@ -582,7 +582,7 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 void candle_chunk_list_flush(struct candle_chunk_list *list)
 {
 	int flush_batch_count = atomic_load_explicit(&list->unflushed_batch_count,
-		memory_order_acquire) - list->trc->flush_threshold_batches;
+		memory_order_acquire) - list->trc->flush_threshold;
 	int flush_start_count = 0, flush_done_count = 0;
 	struct atomsnap_version *head_snap, *new_snap;
 	struct candle_chunk_list_head_version *head_version, *new_ver;

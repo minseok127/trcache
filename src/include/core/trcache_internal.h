@@ -46,9 +46,10 @@ struct trcache_tls_data {
  * @candle_type_flags:       Candle type configuration flags.
  * @num_candle_types:        Number of candle types.
  * @num_workers:             Number of worker threads.
- * @batch_candle_count_pow2: Number of candles per column batch (log2(cap)).
  * @batch_candle_count:      Number of candles per column batch.
- * @flush_threshold_batches: How many candle batches to buffer before flush.
+ * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
+ * @flush_threshold:         How many candle batches to buffer before flush.
+ * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
  * @flush_ops:               User-supplied callbacks used for flush.
  */
 struct trcache {
@@ -62,7 +63,8 @@ struct trcache {
 	int num_workers;
 	int batch_candle_count_pow2;
 	int batch_candle_count;
-	int flush_threshold_batches;
+	int flush_threshold_pow2;
+	int flush_threshold;
 	struct trcache_flush_ops flush_ops;
 };
 
