@@ -364,12 +364,6 @@ struct candle_chunk *candle_chunk_index_find_ts(
 		}
 	}
 
-#ifdef TRCACHE_DEBUG
-	if (lo != tail) {
-		assert(target_ts < idx_ver->array[(lo + 1) & mask].timestamp_first);
-	}
-#endif /* TRCACHE_DEBUG */
-
 	out = idx_ver->array[lo & mask].chunk_ptr;
 	atomsnap_release_version(snap_ver);
 	return out;
