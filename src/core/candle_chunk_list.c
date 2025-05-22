@@ -541,11 +541,18 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 			break;
 		}
 
-		/* Convert row-format candles into the column batch */
 		start_idx = candle_chunk_calc_record_index(
 			chunk->converting_page_idx, chunk->converting_row_idx);
 		end_idx = num_completed - 1;
+
+		/* Convert row-format candles into the column batch */
 		candle_chunk_convert_to_batch(chunk, start_idx, end_idx);
+
+		/*
+		 * Since the initial value of last_seq_converted is UINT64_MAX, adding
+		 * the number of converted candles yields the sequence number of the
+		 * last converted candle.
+		 */
 		last_seq_converted += (end_idx - start_idx + 1);
 
 		/* The chunk is not fully converted, try it again in later */
@@ -661,4 +668,79 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	 */
 	atomsnap_exchange_version(list->head_gate, new_snap);
 	atomsnap_release_version(head_snap);
+}
+
+/**
+ * @brief   Copy @count candles ending at @anchor_seq.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   anchor_seq:  Sequence number of the anchor candle.
+ * @param   count:       Number of candles to copy.
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
+	uint64_t anchor_seq, int count, trcache_candle_field_flags field_mask,
+	struct trcache_candle_batch *dst)
+{
+	uint64_t mutable_seq = atomic_load_explicit(&list->mutable_seq,
+		memory_order_acquire);
+	struct candle_chunk_index *idx = list->chunk_index;
+	struct candle_chunk *head_chunk, *chunk;
+	struct atomsnap_version *head_snap;
+	struct candle_chunk_list_head_version *head_ver;
+
+	if (dst == NULL || dst->capacity < count) {
+		errmsg("Invalid #trcache_candle_batch\n");
+		return -1;
+	}
+
+	/* Pin the head of list for safe chunk traversing */
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
+	head_chunk = head_ver->head_node;
+
+	/* Search the anchor chunk after pinning the head */
+	chunk = candle_chunk_index_find_seq(idx, anchor_seq);
+
+	if (chunk == NULL) {
+		errmsg("Anchor chunk is not found\n");
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
+
+	if (mutable_seq == anchor_seq) {
+
+		count -= 1;
+	}
+
+	while (count != 0) {
+
+	}
+
+	atomsnap_release_version(head_snap);
+	return 0;
+}
+
+/**
+ * @brief   Copy @count candles whose range ends at the candle
+ *          that contains @anchor_ts.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   anchor_ts:   Timestamp of the anchor candle.
+ * @param   count:       Number of candles to copy.
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ *
+ * @return  0 on success, -1 on failure.
+ *
+ * Anchor candle's start_ts <= @anchor_ts < next candle's start_ts.
+ */
+int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
+	uint64_t anchor_ts, int count, trcache_candle_field_flags field_mask,
+	struct trcache_candle_batch *dst)
+{
+
 }

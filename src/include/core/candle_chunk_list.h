@@ -1,6 +1,7 @@
 #ifndef CANDLE_CHUNK_LIST_H
 #define CANDLE_CHUNK_LIST_H
 
+#include <errono.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -144,6 +145,39 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
  * list is executed by only one worker thread at a time.
  */
 void candle_chunk_list_flush(struct candle_chunk_list *list);
+
+/**
+ * @brief   Copy @count candles ending at @anchor_seq.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   anchor_seq:  Sequence number of the anchor candle.
+ * @param   count:       Number of candles to copy.
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
+	uint64_t anchor_seq, int count, trcache_candle_field_flags field_mask,
+	struct trcache_candle_batch *dst);
+
+/**
+ * @brief   Copy @count candles whose range ends at the candle
+ *          that contains @anchor_ts.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   anchor_ts:   Timestamp of the anchor candle.
+ * @param   count:       Number of candles to copy.
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ *
+ * @return  0 on success, -1 on failure.
+ *
+ * Anchor candle's start_ts <= @anchor_ts < next candle's start_ts.
+ */
+int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
+	uint64_t anchor_ts, int count, trcache_candle_field_flags field_mask,
+	struct trcache_candle_batch *dst);
 
 #endif /* CANDLE_CHUNK_LIST_H */
 
