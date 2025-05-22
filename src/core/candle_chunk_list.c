@@ -545,7 +545,11 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 			chunk->converting_page_idx, chunk->converting_row_idx);
 		end_idx = num_completed - 1;
 
-		/* Convert row-format candles into the column batch */
+		/* 
+		 * Convert row-format candles into the column batch. This function will
+		 * modify converting_page_idx, converting_row_idx, and num_converted of
+		 * the chunk.
+		 */
 		candle_chunk_convert_to_batch(chunk, start_idx, end_idx);
 
 		/*

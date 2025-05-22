@@ -204,7 +204,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx)
 {
 	struct trcache_candle_batch *batch = chunk->column_batch;
-	int cur_page_idx = chunk->converting_page_idx, next_page_idx = -1;
+	int cur_page_idx = chunk->converting_page_idx, next_page_idx;
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *page
@@ -252,10 +252,14 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	}
 	atomsnap_release_version(page_version);
 
-	/* Remember converting context for this chunk */
+	/* This value is equal to chunk->num_completed */
 	end_idx += 1;
+
+	/* Remember converting context for this chunk */
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);
 	chunk->converting_row_idx = candle_chunk_calc_row_idx(end_idx);
+
+	/* chunk->num_converted = chunk->num_completed */
 	atomic_store_explicit(&chunk->num_converted, end_idx,
 		memory_order_release);
 }
