@@ -147,10 +147,10 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 void candle_chunk_list_flush(struct candle_chunk_list *list);
 
 /**
- * @brief   Copy @count candles ending at @anchor_seq.
+ * @brief   Copy @count candles ending at @seq_end.
  *
  * @param   list:        Pointer to the candle chunk list.
- * @param   anchor_seq:  Sequence number of the anchor candle.
+ * @param   seq_end:     Sequence number of the last candle.
  * @param   count:       Number of candles to copy.
  * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
@@ -158,7 +158,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list);
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
-	uint64_t anchor_seq, int count, trcache_candle_field_flags field_mask,
+	uint64_t seq_end, int count, trcache_candle_field_flags field_mask,
 	struct trcache_candle_batch *dst);
 
 /**
@@ -166,7 +166,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  *          that contains @anchor_ts.
  *
  * @param   list:        Pointer to the candle chunk list.
- * @param   anchor_ts:   Timestamp of the anchor candle.
+ * @param   ts_end:      Timestamp belonging to the last candle.
  * @param   count:       Number of candles to copy.
  * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
@@ -176,7 +176,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  * Anchor candle's start_ts <= @anchor_ts < next candle's start_ts.
  */
 int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
-	uint64_t anchor_ts, int count, trcache_candle_field_flags field_mask,
+	uint64_t ts_end, int count, trcache_candle_field_flags field_mask,
 	struct trcache_candle_batch *dst);
 
 #endif /* CANDLE_CHUNK_LIST_H */
