@@ -693,7 +693,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	struct candle_chunk *head_chunk, *chunk;
 	struct atomsnap_version *head_snap;
 	struct candle_chunk_list_head_version *head_ver;
-	uint64_t seq_start = seq_end - count + 1, mutable_seq;
+	uint64_t seq_start = seq_end - count + 1, mutable_seq, last_converted_seq;
 	int start_record_idx, end_record_idx, dst_idx, num_copied;
 
 	if (dst == NULL || dst->capacity < count) {
@@ -728,7 +728,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	dst_idx = count - 1;
 
 	/*
-	 * Case where a spinlock must be acquired.
+	 * Exceptional case where a spinlock must be acquired.
 	 */
 	if (seq_end == mutable_seq) {
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
@@ -748,37 +748,39 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		}
 	}
 
-	/*
-	 * Case where a candle is copied before conversion.
-	 */
-	while (atomic_load_explicit(&list->last_seq_converted,
-			memory_order_acquire) < seq_end && count != 0) {
-		start_record_idx = candle_chunk_clamp_seq(chunk, seq_first);
-		end_record_idx = candle_chunk_clam_seq(chunk, seq_end);
+	last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
+		memory_order_acquire);
 
-		num_copied = candle_chunk_copy_rows_until_converted();
+	while (count > 0) {
+		if (last_converted_seq < seq_end) {
+			start_record_idx = candle_chunk_clamp_seq(chunk, seq_first);
+			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
-		seq_end -= num_copied;
-		dst_idx -= num_copied;
-		count -= num_copied;
+			/* Backward copy */
+			num_copied = candle_chunk_copy_rows_until_converetd(chunk, dst
+				start_record_idx, end_record_idx, dst_idx);
+			seq_end -= num_copied;
+			dst_idx -= num_copied;
+			count -= num_copied;
 
-		/* If we crossed conversion point, move to the next loop */
-		if (end_record_idx - start_record_idx + 1 != num_copied) {
-			break;
+			if (num_copied == (end_record_idx - start_record_idx + 1)) {
+				chunk = chunk->prev;
+				continue;
+			}
+
+			/*
+			 * If we encounter a crossover point, proceed to the code below
+			 * using the same chunk.
+			 */
+			last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
+				memory_order_release);
 		}
 
-		chunk = chunk->prev;
-	}
-
-	/*
-	 * Case where a candle is copied after conversion.
-	 */
-	while (count != 0) {
 		start_record_idx = candle_chunk_clamp_seq(chunk, seq_first);
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
-		num_copied = candle_chunk_copy_from_column_batch();
-
+		num_copied = candle_chunk_copy_from_column_batch(chunk, dst
+			start_record_idx, end_record_idx, dst_idx);
 		seq_end -= num_copied;
 		dst_idx -= num_copied;
 		count -= num_copied;
