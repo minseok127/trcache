@@ -163,7 +163,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 
 /**
  * @brief   Copy @count candles whose range ends at the candle
- *          that contains @anchor_ts.
+ *          that contains @ts_end.
  *
  * @param   list:        Pointer to the candle chunk list.
  * @param   ts_end:      Timestamp belonging to the last candle.
@@ -173,7 +173,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  *
  * @return  0 on success, -1 on failure.
  *
- * Anchor candle's start_ts <= @anchor_ts < next candle's start_ts.
+ * Last candle's start_ts <= @ts_end < next (last+1) candle's start_ts.
  */
 int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	uint64_t ts_end, int count, trcache_candle_field_flags field_mask,
