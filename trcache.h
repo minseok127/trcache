@@ -86,14 +86,14 @@ typedef uint32_t trcache_candle_type_flags;
 typedef enum {
 	TRCACHE_START_TIMESTAMP     = 1 << 0,
 	TRCACHE_START_TRADE_ID      = 1 << 1,
-	TRCACHE_TIMESTAMP_INTERVAL  = 1 << 2,
-	TRCACHE_TRADE_ID_INTERVAL   = 1 << 3,
-	TRCACHE_OPEN                = 1 << 4,
-	TRCACHE_HIGH                = 1 << 5,
-	TRCACHE_LOW                 = 1 << 6,
-	TRCACHE_CLOSE               = 1 << 7,
-	TRCACHE_VOLUME              = 1 << 8,
+	TRCACHE_OPEN                = 1 << 2,
+	TRCACHE_HIGH                = 1 << 3,
+	TRCACHE_LOW                 = 1 << 4,
+	TRCACHE_CLOSE               = 1 << 5,
+	TRCACHE_VOLUME              = 1 << 6,
 } trcache_candle_field_type;
+
+#define TRCACHE_NUM_CANDLE_FIELD (7)
 
 typedef uint32_t trcache_candle_field_flags;
 
@@ -103,8 +103,6 @@ typedef uint32_t trcache_candle_field_flags;
  * @start_timestamp:    Start timestamp covered by the candle
  *                      (unix epoch in milliseconds).
  * @start_trade_id:     Trade-ID of the first trade in the candle.
- * @timestamp_interval: Time interval of the candle in milliseconds.
- * @trade_id_interval:  Number of trades that make up the candle.
  * @open:               Price of the very first trade.
  * @high:               Highest traded price inside the candle.
  * @low:                Lowest traded price inside the candle.
@@ -114,13 +112,12 @@ typedef uint32_t trcache_candle_field_flags;
 typedef struct trcache_candle {
 	uint64_t start_timestamp;
 	uint64_t start_trade_id;
-	uint32_t timestamp_interval;
-	uint32_t trade_id_interval;
 	double open;
 	double high;
 	double low;
 	double close;
 	double volume;
+	uint64_t pad; /* for 64 byte align */
 } trcache_candle;
 
 /*
@@ -144,8 +141,6 @@ typedef struct trcache_candle {
 typedef struct trcache_candle_batch {
 	uint64_t *start_timestamp_array;
 	uint64_t *start_trade_id_array;
-	uint32_t *timestamp_interval_array;
-	uint32_t *trade_id_interval_array;
 	double *open_array;
 	double *high_array;
 	double *low_array;
@@ -322,8 +317,6 @@ static inline void trcache_batch_alloc_on_stack(
 
 	uint8_t *buf_ts = alloca(u64b + a - 1);
 	uint8_t *buf_tid = alloca(u64b + a - 1);
-	uint8_t *buf_ts_inter = alloca(u32b + a - 1);
-	uint8_t *buf_tid_inter = alloca(u32b + a - 1);
 	uint8_t *buf_op = alloca(dblb + a - 1);
 	uint8_t *buf_hi = alloca(dblb + a - 1);
 	uint8_t *buf_lo = alloca(dblb + a - 1);
@@ -337,10 +330,6 @@ static inline void trcache_batch_alloc_on_stack(
 
 	dst->start_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ts, a);
 	dst->start_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_tid, a);
-	dst->timestamp_interval_array
-		= (uint32_t *)trcache_align_up_ptr(buf_ts_inter, a);
-	dst->trade_id_interval_array
-		= (uint32_t *)trcache_align_up_ptr(buf_tid_inter, a);
 	dst->open_array = (double *)trcache_align_up_ptr(buf_op, a);
 	dst->high_array = (double *)trcache_align_up_ptr(buf_hi, a);
 	dst->low_array = (double *)trcache_align_up_ptr(buf_lo, a);

@@ -55,7 +55,7 @@ static size_t align_up(size_t x, size_t a)
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
-	size_t off_start_ts, off_start_tid, off_ts_interval, off_tid_interval;
+	size_t off_start_ts, off_start_tid;
 	size_t off_open, off_high, off_low, off_close, off_vol;
 	size_t off_struct, total_sz, u64b, dblb, u32b;
 	struct trcache_candle_batch *b;
@@ -75,9 +75,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 	/* Compute offsets for each array, respecting alignment padding. */
 	off_start_ts = off_struct;
 	off_start_tid = align_up(off_start_ts + u64b, a);
-	off_ts_interval = align_up(off_start_tid + u64b, a);
-	off_tid_interval = align_up(off_ts_interval + u32b, a);
-	off_open = align_up(off_tid_interval + u32b, a);
+	off_open = align_up(off_start_interval + u64b, a);
 	off_high = align_up(off_open + dblb, a);
 	off_low = align_up(off_high + dblb, a);
 	off_close = align_up(off_low + dblb, a);
@@ -102,10 +100,6 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 
 	b->start_timestamp_array = (uint64_t *)((uint8_t *)base + off_start_ts);
 	b->start_trade_id_array = (uint64_t *)((uint8_t *)base + off_start_tid);
-	b->timestamp_interval_array
-		= (uint32_t *)((uint8_t *)base + off_ts_interval);
-	b->trade_id_interval_array
-		= (uint32_t *)((uint8_t *)base + off_tid_interval);
 	b->open_array = (double *)((uint8_t *)base + off_open);
 	b->high_array = (double *)((uint8_t *)base + off_high);
 	b->low_array = (double *)((uint8_t *)base + off_low);

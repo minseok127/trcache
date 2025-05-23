@@ -214,8 +214,6 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	/* Vector pointers */
 	uint64_t *ts_ptr = batch->start_timestamp_array + start_idx;
 	uint64_t *id_ptr = batch->start_trade_id_array + start_idx;
-	uint32_t *ti_ptr = batch->timestamp_interval_array + start_idx;
-	uint32_t *ii_ptr = batch->trade_id_interval_array + start_idx;
 	double *o_ptr = batch->open_array + start_idx;
 	double *h_ptr = batch->high_array + start_idx;
 	double *l_ptr = batch->low_array + start_idx;
@@ -242,8 +240,6 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 		*ts_ptr++ = c->start_timestamp;
 		*id_ptr++ = c->start_trade_id;
-		*ti_ptr++ = c->timestamp_interval;
-		*ii_ptr++ = c->trade_id_interval;
 		*o_ptr++ = c->open;
 		*h_ptr++ = c->high;
 		*l_ptr++ = c->low;
