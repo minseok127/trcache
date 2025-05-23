@@ -144,6 +144,62 @@ static inline int candle_chunk_clamp_seq(
 }
 
 /**
+ * @brief    Return the zero-based index of the candle whose range
+ *           contains @ts inside @chunk.
+ *
+ * @param    chunk:   Pointer to the candle_chunk.
+ * @param    ts:      Timestamp to locate.
+ *
+ * @return   The linear record index in the chunk, or -1 on out-of-range.
+ */
+static inline int candle_chunk_find_idx_by_ts(
+	struct candle_chunk *chunk, uint64_t ts)
+{
+	int num_rows = atomic_load_explicit(&chunk->num_completed, 
+		memory_order_acquire) + 1;
+	const uint64_t *start_ts_arr = chunk->column_batch->start_timestamp_array;
+	int lo = 0, hi = num_rows - 1, mid;
+
+	if (ts < start_ts_arr[0] || ts > start_ts_arr[num_rows - 1]) {
+		return -1;
+	}
+
+	while (lo < hi) {
+		mid = lo + ((hi - lo + 1) >> 1);
+
+		if (ts <= start_ts_arr[mid]) {
+			lo = mid;
+		} else {
+			hi = mid - 1;
+		}
+	}
+
+	return lo;
+}
+
+/**
+ * @brief   Return the absolute sequence number of the candle whose range
+ *          contains @ts inside @chunk.
+ *
+ * @param   chunk:   Pointer to the candle_chunk.
+ * @param   ts:      Timestamp to locate.
+ *
+ * @return  Absolute sequence number on success, UINT64_MAX if @ts is
+ *          before the first candle or after the last candle’s start.
+ */
+static inline uint64_t candle_chunk_calc_seq_by_ts(
+	struct candle_chunk *chunk, uint64_t ts)
+{
+	int idx = candle_chunk_find_idx_by_ts(chunk, ts);
+
+	if (idx == -1) {
+		return UINT64_MAX;
+	}
+
+	return chunk->seq_first + idx;
+}
+
+/**
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   candle_type:        Candle type of the column-batch.

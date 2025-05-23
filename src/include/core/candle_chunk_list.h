@@ -173,7 +173,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  *
  * @return  0 on success, -1 on failure.
  *
- * Last candle's start_ts <= @ts_end < next (last+1) candle's start_ts.
+ * @note    If @ts_end is greater than the start timestamp of the most recent
+ *          candle, return -1 without identifying a containing candle.
  */
 int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	uint64_t ts_end, int count, trcache_candle_field_flags field_mask,

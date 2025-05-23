@@ -352,6 +352,11 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
 	mask = idx_ver->mask;
 
+	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
+		atomsnap_release_version(snap_ver);
+		return NULL;
+	}
+
 	/* Binary search */
 	while (lo < hi) {
 		mid = lo + ((hi - lo + 1) >> 1);
@@ -365,6 +370,12 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	}
 
 	out = idx_ver->array[lo & mask].chunk_ptr;
+
+	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
+		atomsnap_release_version(snap_ver);
+		return NULL;
+	}
+
 	atomsnap_release_version(snap_ver);
 	return out;
 }
