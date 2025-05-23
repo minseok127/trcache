@@ -121,6 +121,29 @@ static inline int candle_chunk_calc_row_idx(int record_index)
 }
 
 /**
+ * @brief    Map @seq into the index range of @chunk.
+ *
+ * @param    chunk:   Pointer to the candle_chunk.
+ * @param    seq:     Absolute sequence number to clamp.
+ *
+ * @return   The linear record index in the chunk.
+ */
+static inline int candle_chunk_clamp_seq(
+	struct candle_chunk *chunk, uint64_t seq)
+{
+	int last_idx = atomic_load_explicit(&chunk->num_completed,
+		memory_order_acquire);
+
+	if (seq < chunk->seq_first) {
+		return 0;
+	} else if (seq > chunk->seq_first + last_idx) {
+		return last_idx;
+	} else {
+		return (int)(seq - chunk->seq_first);
+	}
+}
+
+/**
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   candle_type:        Candle type of the column-batch.

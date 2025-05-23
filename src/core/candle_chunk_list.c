@@ -694,8 +694,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	struct atomsnap_version *head_snap;
 	struct candle_chunk_list_head_version *head_ver;
 	uint64_t seq_start = seq_end - count + 1, mutable_seq;
-	int batch_candle_count = list->trc->batch_candle_count, num_copied = 0;
-	int first_idx, last_idx, dst_first_idx, dst_last_idx;
+	int start_record_idx, end_record_idx, dst_idx, num_copied;
 
 	if (dst == NULL || dst->capacity < count) {
 		errmsg("Invalid #trcache_candle_batch\n");
@@ -726,29 +725,64 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	chunk = candle_chunk_index_find_seq(idx, seq_end);
 	assert(chunk != NULL);
 
+	dst_idx = count - 1;
+
 	/*
-	 * Exceptional case where a spinlock must be used.
+	 * Case where a spinlock must be acquired.
 	 */
 	if (seq_end == mutable_seq) {
+		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
+		num_copied = candle_chunk_copy_mutable_row();
 
-		seq_end -= 1;
-		num_copied += 1;
+		if (num_copied == 1) {
+			seq_end -= 1;
+			dst_idx -= 1;
+			count -= 1;
+
+			if (count == 0) {
+				atomsnap_release_version(head_snap);
+				return 0;
+			} else if (end_record_idx == 0) {
+				chunk = chunk->prev;
+			}
+		}
 	}
 
-	while (true) {
-		first_idx = chunk->seq_first < seq_start ?
-			seq_start - chunk->seq_first : 0;
-		last_idx = chunk->seq_first + batch_candle_count - 1 < seq_end ?
-			batch_candle_count - 1 : seq_end - chunk->seq_first;
+	/*
+	 * Case where a candle is copied before conversion.
+	 */
+	while (atomic_load_explicit(&list->last_seq_converted,
+			memory_order_acquire) < seq_end && count != 0) {
+		start_record_idx = candle_chunk_clamp_seq(chunk, seq_first);
+		end_record_idx = candle_chunk_clam_seq(chunk, seq_end);
 
+		num_copied = candle_chunk_copy_rows_until_converted();
 
+		seq_end -= num_copied;
+		dst_idx -= num_copied;
+		count -= num_copied;
 
-		num_copied += last_idx - first_idx + 1;
-		if (num_copied == count) {
+		/* If we crossed conversion point, move to the next loop */
+		if (end_record_idx - start_record_idx + 1 != num_copied) {
 			break;
 		}
 
-		assert(chunk != head_chunk);
+		chunk = chunk->prev;
+	}
+
+	/*
+	 * Case where a candle is copied after conversion.
+	 */
+	while (count != 0) {
+		start_record_idx = candle_chunk_clamp_seq(chunk, seq_first);
+		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
+
+		num_copied = candle_chunk_copy_from_column_batch();
+
+		seq_end -= num_copied;
+		dst_idx -= num_copied;
+		count -= num_copied;
+
 		chunk = chunk->prev;
 	}
 
