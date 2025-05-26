@@ -745,14 +745,14 @@ static int candle_chunk_list_copy_backward(
 			if (num_copied == (end_record_idx - start_record_idx + 1)) {
 				chunk = chunk->prev;
 				continue;
+			} else {
+				/*
+			 	 * If we encounter a crossover point, proceed to the
+			 	 * column-batch copy operation below using the same chunk.
+			 	 */
+				last_converted_seq = atomic_load_explicit(
+					&list->last_seq_converted, memory_order_acquire);
 			}
-
-			/*
-			 * If we encounter a crossover point, proceed to the code below
-			 * using the same chunk.
-			 */
-			last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
-				memory_order_acquire);
 		}
 
 		start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
