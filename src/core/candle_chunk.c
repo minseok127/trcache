@@ -250,6 +250,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 	/* This value is equal to chunk->num_completed */
 	end_idx += 1;
+	batch->num_candles = end_idx;
 
 	/* Remember converting context for this chunk */
 	chunk->converting_page_idx = candle_chunk_calc_page_idx(end_idx);

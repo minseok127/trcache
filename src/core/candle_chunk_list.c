@@ -695,7 +695,7 @@ static int candle_chunk_list_copy_backward(
 	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
 {
 	uint64_t mutable_seq, last_converted_seq;
-	int start_record_idx, end_record_idx, num_copied;
+	int start_record_idx, end_record_idx, num_copied, remains = count;
 
 	mutable_seq = atomic_load_explicit(&list->mutable_seq,
 		memory_order_acquire);
@@ -711,13 +711,14 @@ static int candle_chunk_list_copy_backward(
 	if (seq_end == mutable_seq) {
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 		num_copied = candle_chunk_copy_mutable_row(chunk, end_record_idx,
-			count - 1, dst, field_mask);
+			remains - 1, dst, field_mask);
 
 		if (num_copied == 1) {
 			seq_end -= 1;
-			count -= 1;
+			remains -= 1;
 
-			if (count == 0) {
+			if (remains == 0) {
+				dst->num_candles = 1;
 				return 0;
 			} else if (end_record_idx == 0) {
 				chunk = chunk->prev;
@@ -732,15 +733,15 @@ static int candle_chunk_list_copy_backward(
 	 * Copy the candles at the chunk level while traversing from the oldest
 	 * chunk toward the newest chunk.
 	 */
-	while (count > 0) {
+	while (remains > 0) {
 		if (last_converted_seq < seq_end) {
 			start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
 			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
 			num_copied = candle_chunk_copy_rows_until_converted(chunk,
-				start_record_idx, end_record_idx, count - 1, dst, field_mask);
+				start_record_idx, end_record_idx, remains - 1, dst, field_mask);
 			seq_end -= num_copied;
-			count -= num_copied;
+			remains -= num_copied;
 
 			if (num_copied == (end_record_idx - start_record_idx + 1)) {
 				chunk = chunk->prev;
@@ -759,12 +760,13 @@ static int candle_chunk_list_copy_backward(
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
 		num_copied = candle_chunk_copy_from_column_batch(chunk,
-			start_record_idx, end_record_idx, count - 1, dst, field_mask);
+			start_record_idx, end_record_idx, remains - 1, dst, field_mask);
 		seq_end -= num_copied;
-		count -= num_copied;
+		remains -= num_copied;
 		chunk = chunk->prev;
 	}
 
+	dst->num_candles = count;
 	return 0;
 }
 
