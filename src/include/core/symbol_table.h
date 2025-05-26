@@ -5,10 +5,18 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
+#include "core/candle_chunk_list.h"
 #include "utils/hash_table.h"
 
-/* Publicly visible symbol entry. */
+/*
+ * public_symbol_entry - 
+ *
+ * @candle_chunk_list:
+ * @symbol_str:
+ * @id:
+ */
 struct public_symbol_entry {
+	struct candle_chunk_list *candle_chunk_list;
 	char *symbol_str;
 	int id;
 };

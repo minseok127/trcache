@@ -2,7 +2,7 @@
  * @file core/trcache_internal.c
  * @brief APIs for trcache, and thread-local cache management for trcache.
  */
-
+#define _GNU_SOURCE
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

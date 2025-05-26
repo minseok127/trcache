@@ -3,7 +3,7 @@
  * @brief Implements a thread-safe symbol table with lock-free reads by atomsnap
  *        and mutex-protected copy-on-write updates for writes.
  */
-
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
