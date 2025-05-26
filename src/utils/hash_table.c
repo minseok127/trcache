@@ -85,7 +85,7 @@ static int ht_resize(struct ht_hash_table *t, size_t new_cap)
 {
 	struct ht_item **new_buckets = NULL;
 	struct ht_item *it = NULL, *next = NULL;
-	size_t cap = 1, idx = -1;
+	size_t cap = 1, idx = -1, old_cap = t->capacity;
 
 	if (new_cap < HT_MIN_CAP) {
 		new_cap = HT_MIN_CAP;
@@ -99,11 +99,12 @@ static int ht_resize(struct ht_hash_table *t, size_t new_cap)
 
 	new_buckets = calloc(cap, sizeof(struct ht_item *));
 	if (!new_buckets) {
+		errmsg(stderr, "New bucket array allocation is failed\n");
 		return -1;
 	}
 
 	/* Rehash all items */
-	for (size_t i = 0; i < t->capacity; ++i) {
+	for (size_t i = 0; i < old_cap; i++) {
 		it = t->buckets[i];
 		while (it) {
 			next = it->next;
@@ -114,7 +115,7 @@ static int ht_resize(struct ht_hash_table *t, size_t new_cap)
 		}
 	}
 	free(t->buckets);
-	t->buckets  = new_buckets;
+	t->buckets = new_buckets;
 	return 0;
 }
 
