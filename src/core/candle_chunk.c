@@ -332,9 +332,10 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 }
 
 /*
- * Helper functions to copy candle fields.
+ * Helper function type to copy a field of the candle into the batch.
  */
-typedef void (*fld_cp_fn)(struct trcache_candle*, struct trcache_candle_batch*, int);
+typedef void (*fld_cp_fn)(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i);
 
 static inline void cp_start_ts(struct trcache_candle* c,
 	struct trcache_candle_batch* d, int i)
@@ -409,18 +410,18 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	trcache_candle_field_flags field_mask)
 {
 	int page_idx = candle_chunk_calc_page_idx(record_idx);
-	int row_idx = candle_chunk_calc_row_idx(record_idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
-	int bit;
+	int bit, row_idx;
 
 	if (page_version == NULL) {
 		return 0;
 	}
 
 	row_page = (struct candle_row_page *)page_version->object;
+	row_idx = candle_chunk_calc_row_idx(record_idx);
 	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 	pthread_spin_lock(&chunk->spinlock);
