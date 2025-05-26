@@ -354,9 +354,9 @@ _Static_assert(TRCACHE_NUM_CANDLE_FIELD == 7, "Field count/dispatch mismatch");
 static inline void candle_copy_dispatch_tbl(
 	struct trcache_candle * __restrict c,
 	struct trcache_candle_batch * __restrict d,
-	int i, trcache_candle_field_flags mask)
+	int i, trcache_candle_field_flags field_mask)
 {
-	static void *dispatch[] = {
+	static void *dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
 		&&copy_start_ts,
 		&&copy_start_id,
 		&&copy_open,
@@ -364,16 +364,16 @@ static inline void candle_copy_dispatch_tbl(
 		&&copy_low,
 		&&copy_close,
 		&&copy_volume,
-		&&out,
+		&&copy_done
 	};
+	uint32_t m;
 
-	uint32_t m = mask;
-	if (m == 0) {
+	if (field_mask == 0) {
 		return; /* nothing to copy */
 	}
 
 	/* Set the out bit */
-	m |= (1 << TRCACHE_NUM_CANDLE_FIELD);
+	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
 	goto *dispatch[__builtin_ctz(m)];
 
 copy_start_ts:
@@ -410,7 +410,7 @@ copy_volume:
 	d->volume_array[i] = c->volume;
 	/* Fall through */
 
-out:
+copy_done:
 	return;
 }
 
@@ -423,7 +423,7 @@ out:
  * requested fields into @dst.
  *
  * @param   chunk:       Pointer to the candle_chunk.
- * @param   record_idx:  Index of the record to copy (0-based).
+ * @param   idx:         Index of the candle to copy (0-based).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
  * @param   field_mask:  Bit-mask describing which columns to copy.
@@ -431,10 +431,10 @@ out:
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
-	int record_idx, int dst_idx, struct trcache_candle_batch *dst,
+	int idx, int dst_idx, struct trcache_candle_batch *dst,
 	trcache_candle_field_flags field_mask)
 {
-	int page_idx = candle_chunk_calc_page_idx(record_idx);
+	int page_idx = candle_chunk_calc_page_idx(idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
 	struct candle_row_page *row_page;
@@ -446,7 +446,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	}
 
 	row_page = (struct candle_row_page *)page_version->object;
-	row_idx = candle_chunk_calc_row_idx(record_idx);
+	row_idx = candle_chunk_calc_row_idx(idx);
 	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 	pthread_spin_lock(&chunk->spinlock);
@@ -465,20 +465,20 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
  * If the background convert thread converts the range midway, the
  * function stops early and returns the count copied so far.
  *
- * @param   chunk:             Pointer to the candle_chunk.
- * @param   start_record_idx:  First record index in the range (inclusive).
- * @param   end_record_idx:    Last  record index in the range (inclusive).
- * @param   dst_idx:           Index of the last element in @dst to fill.
- * @param   dst [out]:         Pre-allocated destination batch.
- * @param   field_mask:        Bit-mask describing which columns to copy.
+ * @param   chunk:      Pointer to the candle_chunk.
+ * @param   start_idx:  First candle index in the range (inclusive).
+ * @param   end_idx:    Last candle index in the range (inclusive).
+ * @param   dst_idx:    Index of the last element in @dst to fill.
+ * @param   dst [out]:  Pre-allocated destination batch.
+ * @param   field_mask: Bit-mask describing which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
-	int start_record_idx, int end_record_idx, int dst_idx,
-	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
+	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask)
 {
-	int cur_page_idx = candle_chunk_calc_page_idx(end_record_idx);
+	int cur_page_idx = candle_chunk_calc_page_idx(end_idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *row_page;
@@ -491,7 +491,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 	row_page = (struct candle_row_page *)page_version->object;
 
-	for (int idx = end_record_idx; idx >= start_record_idx; idx--) {
+	for (int idx = end_idx; idx >= start_idx; idx--) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
 		if (next_page_idx != cur_page_idx) {
 			atomsnap_release_version(page_version);
@@ -517,6 +517,23 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 	return num_copied;
 }
 
+/*
+ * Helper for candle_chunk_copy_from_column_batch().
+ */
+static inline void copy_segment(const void *__restrict src,
+	void *__restrict dst, int bytes)
+{
+	if (bytes <= 256) {
+		const uint8_t *s = src;
+		uint8_t *d = dst;
+		for (int i = 0; i < bytes; i++) {
+			d[i] = s[i];
+		}
+	} else {                             /* clear bit */
+		memcpy(dst, src, bytes);
+	}
+}
+
 /**
  * @brief   Copy candles that already reside in the column batch.
  *
@@ -524,18 +541,82 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
  * pulls data from the chunk-local columnar storage area. It therefore
  * requires that the specified record range has *already* been converted.
  *
- * @param   chunk:              Pointer to the candle_chunk.
- * @param   start_record_idx:   First record index in the range (inclusive).
- * @param   end_record_idx:     Last  record index in the range (inclusive).
- * @param   dst_idx:            Index of the last element in @dst to fill.
- * @param   dst [out]:          Pre-allocated destination batch.
- * @param   field_mask:         Bit-mask describing which columns to copy.
+ * @param   chunk:       Pointer to the candle_chunk.
+ * @param   start_idx:   First candle index in the range (inclusive).
+ * @param   end_idx:     Last candle index in the range (inclusive).
+ * @param   dst_idx:     Index of the last element in @dst to fill.
+ * @param   dst [out]:   Pre-allocated destination batch.
+ * @param   field_mask:  Bit-mask describing which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
-	int start_record_idx, int end_record_idx, int dst_idx,
-	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
+	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask)
 {
+	static void *const col_dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
+		&&col_copy_start_ts,
+		&&col_copy_start_id,
+		&&col_copy_open,
+		&&col_copy_high,
+		&&col_copy_low,
+		&&col_copy_close,
+		&&col_copy_volume,
+		&&col_copy_done
+	};
+	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n;
+	int bytes_db = n * sizeof(double), bytes_u64 = n * sizeof(uint64_t);
+	uint32_t m;
 
+	if (n == 0 || field_mask == 0) {
+		return 0;
+	}
+
+	/* Set the out bit */
+	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_start_ts:
+	copy_segment(chunk->column_batch->start_timestamp_array + start_idx,
+		dst->start_timestamp_array + dst_first, bytes_u64);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_start_id:
+	copy_segment(chunk->column_batch->start_trade_id_array + start_idx,
+		dst->start_trade_id_array + dst_first, bytes_u64);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_open:
+	copy_segment(chunk->column_batch->open_array + start_idx,
+		dst->open_array + dst_first, bytes_db);
+    m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_high:
+	copy_segment(chunk->column_batch->high_array + start_idx,
+		dst->high_array + dst_first, bytes_db);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_low:
+	copy_segment(chunk->column_batch->low_array + start_idx,
+		dst->low_array + dst_first, bytes_db);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_close:
+	copy_segment(chunk->column_batch->close_array + start_idx,
+		dst->close_array + dst_first, bytes_db);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_volume:
+	copy_segment(chunk->column_batch->volume_array + start_idx,
+		dst->volume_array + dst_first, bytes_db);
+	/* Fall through */
+
+col_copy_done:
+    return n;
 }

@@ -285,7 +285,7 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk);
  * requested fields into @dst.
  *
  * @param   chunk:       Pointer to the candle_chunk.
- * @param   record_idx:  Index of the record to copy (0-based).
+ * @param   idx:         Index of the candle to copy (0-based).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
  * @param   field_mask:  Bit-mask describing which columns to copy.
@@ -293,7 +293,7 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk);
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
-	int record_idx, int dst_idx, struct trcache_candle_batch *dst,
+	int idx, int dst_idx, struct trcache_candle_batch *dst,
 	trcache_candle_field_flags field_mask);
 
 /**
@@ -304,18 +304,18 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
  * If the background convert thread converts the range midway, the
  * function stops early and returns the count copied so far.
  *
- * @param   chunk:             Pointer to the candle_chunk.
- * @param   start_record_idx:  First record index in the range (inclusive).
- * @param   end_record_idx:    Last  record index in the range (inclusive).
- * @param   dst_idx:           Index of the last element in @dst to fill.
- * @param   dst [out]:         Pre-allocated destination batch.
- * @param   field_mask:        Bit-mask describing which columns to copy.
+ * @param   chunk:      Pointer to the candle_chunk.
+ * @param   start_idx:  First candle index in the range (inclusive).
+ * @param   end_idx:    Last candle index in the range (inclusive).
+ * @param   dst_idx:    Index of the last element in @dst to fill.
+ * @param   dst [out]:  Pre-allocated destination batch.
+ * @param   field_mask: Bit-mask describing which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
-	int start_record_idx, int end_record_idx, int dst_idx,
-	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask);
+	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask);
 
 /**
  * @brief   Copy candles that already reside in the column batch.
@@ -324,17 +324,17 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
  * pulls data from the chunk-local columnar storage area. It therefore
  * requires that the specified record range has *already* been converted.
  *
- * @param   chunk:              Pointer to the candle_chunk.
- * @param   start_record_idx:   First record index in the range (inclusive).
- * @param   end_record_idx:     Last  record index in the range (inclusive).
- * @param   dst_idx:            Index of the last element in @dst to fill.
- * @param   dst [out]:          Pre-allocated destination batch.
- * @param   field_mask:         Bit-mask describing which columns to copy.
+ * @param   chunk:       Pointer to the candle_chunk.
+ * @param   start_idx:   First candle index in the range (inclusive).
+ * @param   end_idx:     Last candle index in the range (inclusive).
+ * @param   dst_idx:     Index of the last element in @dst to fill.
+ * @param   dst [out]:   Pre-allocated destination batch.
+ * @param   field_mask:  Bit-mask describing which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
-	int start_record_idx, int end_record_idx, int dst_idx,
-	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask);
+	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask);
 
 #endif /* CANDLE_CHUNK_H */
