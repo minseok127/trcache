@@ -591,7 +591,7 @@ col_copy_start_id:
 col_copy_open:
 	copy_segment(chunk->column_batch->open_array + start_idx,
 		dst->open_array + dst_first, bytes_db);
-    m &= m - 1;
+	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_high:
