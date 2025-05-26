@@ -331,6 +331,63 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 	return 0;
 }
 
+/*
+ * Helper functions to copy candle fields.
+ */
+typedef void (*fld_cp_fn)(struct trcache_candle*, struct trcache_candle_batch*, int);
+
+static inline void cp_start_ts(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->start_timestamp_array[i] = c->start_timestamp; 
+}
+
+static inline void cp_start_id (struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->start_trade_id_array[i]  = c->start_trade_id;
+}
+
+static inline void cp_open (struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->open_array[i] = c->open;
+}
+
+static inline void cp_high(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->high_array[i] = c->high;
+}
+
+static inline void cp_low(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->low_array[i] = c->low;
+}
+
+static inline void cp_close(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->close_array[i] = c->close;
+}
+
+static inline void cp_volume(struct trcache_candle* c,
+	struct trcache_candle_batch* d, int i)
+{
+	d->volume_array[i] = c->volume;
+}
+
+static const fld_cp_fn copy_tbl[] = {
+	cp_start_ts,   /* bit 0 */
+	cp_start_id,   /* bit 1 */
+	cp_open,       /* bit 2 */
+	cp_high,       /* bit 3 */
+	cp_low,        /* bit 4 */
+	cp_close,      /* bit 5 */
+	cp_volume      /* bit 6 */
+};
+
 /**
  * @brief   Copy a single mutable candle from a row page into a SoA batch.
  *
@@ -357,6 +414,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
+	int bit;
 
 	if (page_version == NULL) {
 		return 0;
@@ -367,32 +425,9 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 
 	pthread_spin_lock(&chunk->spinlock);
 
-	if (field_mask & TRCACHE_START_TIMESTAMP) {
-		dst->start_timestamp_array[dst_idx] = candle->start_timestamp;
-	}
-
-	if (field_mask & TRCACHE_START_TRADE_ID) {
-		dst->start_trade_id_array[dst_idx] = candle->start_trade_id;
-	}
-
-	if (field_mask & TRCACHE_OPEN) {
-		dst->open_array[dst_idx] = candle->open;
-	}
-
-	if (field_mask & TRCACHE_HIGH) {
-		dst->high_array[dst_idx] = candle->high;
-	}
-
-	if (field_mask & TRCACHE_LOW) {
-		dst->low_array[dst_idx] = candle->low;
-	}
-
-	if (field_mask & TRCACHE_CLOSE) {
-		dst->close_array[dst_idx] = candle->close;
-	}
-
-	if (field_mask & TRCACHE_VOLUME) {
-		dst->volume_array[dst_idx] = candle->volume;
+	for (uint32_t m = field_mask; m; m &= m - 1) {
+		bit = __builtin_ctz(m);
+		copy_tbl[bit](candle, dst, dst_idx);
 	}
 
 	pthread_spin_unlock(&chunk->spinlock);
@@ -427,7 +462,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
-	int idx, next_page_idx, num_copied = 0;
+	int next_page_idx, bit, num_copied = 0;
 
 	if (page_version == 0) {
 		return 0;
@@ -452,32 +487,9 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 		candle = &(row_page->rows[candle_chunk_calc_row_idx(idx)]);
 
-		if (field_mask & TRCACHE_START_TIMESTAMP) {
-			dst->start_timestamp_array[dst_idx] = candle->start_timestamp;
-		}
-
-		if (field_mask & TRCACHE_START_TRADE_ID) {
-			dst->start_trade_id_array[dst_idx] = candle->start_trade_id;
-		}
-
-		if (field_mask & TRCACHE_OPEN) {
-			dst->open_array[dst_idx] = candle->open;
-		}
-
-		if (field_mask & TRCACHE_HIGH) {
-			dst->high_array[dst_idx] = candle->high;
-		}
-
-		if (field_mask & TRCACHE_LOW) {
-			dst->low_array[dst_idx] = candle->low;
-		}
-
-		if (field_mask & TRCACHE_CLOSE) {
-			dst->close_array[dst_idx] = candle->close;
-		}
-
-		if (field_mask & TRCACHE_VOLUME) {
-			dst->volume_array[dst_idx] = candle->volume;
+		for (uint32_t m = field_mask; m; m &= m - 1) {
+			bit = __builtin_ctz(m);
+			copy_tbl[bit](candle, dst, dst_idx);
 		}
 
 		num_copied += 1;
