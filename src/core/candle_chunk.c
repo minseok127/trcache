@@ -351,7 +351,54 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	int record_idx, int dst_idx, struct trcache_candle_batch *dst,
 	trcache_candle_field_flags field_mask)
 {
+	int page_idx = candle_chunk_calc_page_idx(record_idx);
+	int row_idx = candle_chunk_calc_row_idx(record_idx);
+	struct atomsnap_version *page_version
+		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
+	struct candle_row_page *row_page;
+	struct trcache_candle *candle;
 
+	if (page_version == NULL) {
+		return 0;
+	}
+
+	row_page = (struct candle_row_page *)page_version->object;
+	candle = &(row_page->rows[row_idx]);
+
+	pthread_spin_lock(&chunk->spinlock);
+
+	if (field_mask & TRCACHE_START_TIMESTAMP) {
+		dst->start_timestamp_array[dst_idx] = candle->start_timestamp;
+	}
+
+	if (field_mask & TRCACHE_START_TRADE_ID) {
+		dst->start_trade_id_array[dst_idx] = candle->start_trade_id;
+	}
+
+	if (field_mask & TRCACHE_OPEN) {
+		dst->open_array[dst_idx] = candle->open;
+	}
+
+	if (field_mask & TRCACHE_HIGH) {
+		dst->high_array[dst_idx] = candle->high;
+	}
+
+	if (field_mask & TRCACHE_LOW) {
+		dst->low_array[dst_idx] = candle->low;
+	}
+
+	if (field_mask & TRCACHE_CLOSE) {
+		dst->close_array[dst_idx] = candle->close;
+	}
+
+	if (field_mask & TRCACHE_VOLUME) {
+		dst->volume_array[dst_idx] = candle->volume;
+	}
+
+	pthread_spin_unlock(&chunk->spinlock);
+
+	atomsnap_release_version(page_version);
+	return 1;
 }
 
 /**
@@ -375,7 +422,69 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 	int start_record_idx, int end_record_idx, int dst_idx,
 	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
 {
+	int cur_page_idx = candle_chunk_calc_page_idx(end_record_idx);
+	struct atomsnap_version *page_version
+		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
+	struct candle_row_page *row_page;
+	struct trcache_candle *candle;
+	int idx, next_page_idx, num_copied = 0;
 
+	if (page_version == 0) {
+		return 0;
+	}
+
+	row_page = (struct candle_row_page *)page_version->object;
+
+	for (int idx = end_record_idx; idx >= start_record_idx; idx--) {
+		next_page_idx = candle_chunk_calc_page_idx(idx);
+		if (next_page_idx != cur_page_idx) {
+			atomsnap_release_version(page_version);
+
+			cur_page_idx = next_page_idx;
+			page_version = atomsnap_acquire_version_slot(
+				chunk->row_gate, cur_page_idx);
+			if (page_version == NULL) {
+				break;
+			}
+
+			row_page = (struct candle_row_page *)page_version->object;
+		}
+
+		candle = &(row_page->rows[candle_chunk_calc_row_idx(idx)]);
+
+		if (field_mask & TRCACHE_START_TIMESTAMP) {
+			dst->start_timestamp_array[dst_idx] = candle->start_timestamp;
+		}
+
+		if (field_mask & TRCACHE_START_TRADE_ID) {
+			dst->start_trade_id_array[dst_idx] = candle->start_trade_id;
+		}
+
+		if (field_mask & TRCACHE_OPEN) {
+			dst->open_array[dst_idx] = candle->open;
+		}
+
+		if (field_mask & TRCACHE_HIGH) {
+			dst->high_array[dst_idx] = candle->high;
+		}
+
+		if (field_mask & TRCACHE_LOW) {
+			dst->low_array[dst_idx] = candle->low;
+		}
+
+		if (field_mask & TRCACHE_CLOSE) {
+			dst->close_array[dst_idx] = candle->close;
+		}
+
+		if (field_mask & TRCACHE_VOLUME) {
+			dst->volume_array[dst_idx] = candle->volume;
+		}
+
+		num_copied += 1;
+		dst_idx -= 1;
+	}
+
+	return num_copied;
 }
 
 /**
