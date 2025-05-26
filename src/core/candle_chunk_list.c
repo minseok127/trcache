@@ -675,72 +675,49 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 }
 
 /**
- * @brief   Copy @count candles ending at @anchor_seq.
+ * @brief   Core implementation shared by copy() functions.
  *
  * @param   list:        Pointer to the candle chunk list.
- * @param   seq_end:     Sequence number of the last candle.
+ * @param   chunk:       Chunk where the search begins.
+ * @param   seq_start:   Minimum sequence number to copy.
+ * @param   seq_end:     Maximum sequence number to copy.
  * @param   count:       Number of candles to copy.
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
+ *
+ * @note    head_snap is acquired/released by the caller.
  */
-int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
-	uint64_t seq_end, int count, trcache_candle_field_flags field_mask,
-	struct trcache_candle_batch *dst)
+static int candle_chunk_list_copy_backward(
+	struct candle_chunk_list *list, struct candle_chunk *chunk,
+	uint64_t seq_start, uint64_t seq_end, int count,
+	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
 {
-	struct candle_chunk_index *idx = list->chunk_index;
-	struct candle_chunk *head_chunk, *chunk;
-	struct atomsnap_version *head_snap;
-	struct candle_chunk_list_head_version *head_ver;
-	uint64_t seq_start = seq_end - count + 1, mutable_seq, last_converted_seq;
-	int start_record_idx, end_record_idx, dst_idx, num_copied;
-
-	if (dst == NULL || dst->capacity < count) {
-		errmsg("Invalid #trcache_candle_batch\n");
-		return -1;
-	}
-
-	/* Pin the head of list for safe chunk traversing */
-	head_snap = atomsnap_acquire_version(list->head_gate);
-	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
-	head_chunk = head_ver->head_node;
-
-	if (seq_start < head_chunk->seq_first) {
-		errmsg("Start sequence number is out of range\n");
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
+	uint64_t mutable_seq, last_converted_seq;
+	int start_record_idx, end_record_idx, num_copied;
 
 	mutable_seq = atomic_load_explicit(&list->mutable_seq,
 		memory_order_acquire);
 
 	if (mutable_seq < seq_end) {
-		errmsg("End sequence number is out of range\n");
-		atomsnap_release_version(head_snap);
+		errmsg(stderr, "End sequence number is out of range\n");
 		return -1;
 	}
-
-	/* Search the last chunk after pinning the head */
-	chunk = candle_chunk_index_find_seq(idx, seq_end);
-	assert(chunk != NULL);
-
-	dst_idx = count - 1;
 
 	/*
 	 * Exceptional case where a spinlock must be acquired.
 	 */
 	if (seq_end == mutable_seq) {
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
-		num_copied = candle_chunk_copy_mutable_row();
+		num_copied = candle_chunk_copy_mutable_row(chunk, end_record_idx,
+			count - 1, dst, field_mask);
 
 		if (num_copied == 1) {
 			seq_end -= 1;
-			dst_idx -= 1;
 			count -= 1;
 
 			if (count == 0) {
-				atomsnap_release_version(head_snap);
 				return 0;
 			} else if (end_record_idx == 0) {
 				chunk = chunk->prev;
@@ -752,19 +729,17 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		memory_order_acquire);
 
 	/*
-	 * Copy the candles at the chunk level while traversing from the last chunk
-	 * toward the first chunk.
+	 * Copy the candles at the chunk level while traversing from the oldest
+	 * chunk toward the newest chunk.
 	 */
 	while (count > 0) {
 		if (last_converted_seq < seq_end) {
 			start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
 			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
-			/* Backward copy */
-			num_copied = candle_chunk_copy_rows_until_converetd(chunk, dst
-				start_record_idx, end_record_idx, dst_idx);
+			num_copied = candle_chunk_copy_rows_until_converted(chunk,
+				start_record_idx, end_record_idx, count - 1, dst, field_mask);
 			seq_end -= num_copied;
-			dst_idx -= num_copied;
 			count -= num_copied;
 
 			if (num_copied == (end_record_idx - start_record_idx + 1)) {
@@ -777,23 +752,69 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 			 * using the same chunk.
 			 */
 			last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
-				memory_order_release);
+				memory_order_acquire);
 		}
 
 		start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
-		num_copied = candle_chunk_copy_from_column_batch(chunk, dst
-			start_record_idx, end_record_idx, dst_idx);
+		num_copied = candle_chunk_copy_from_column_batch(chunk,
+			start_record_idx, end_record_idx, count - 1, dst, field_mask);
 		seq_end -= num_copied;
-		dst_idx -= num_copied;
 		count -= num_copied;
-
 		chunk = chunk->prev;
 	}
 
-	atomsnap_release_version(head_snap);
 	return 0;
+}
+
+/**
+ * @brief   Copy @count candles ending at @anchor_seq.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   seq_end:     Sequence number of the last candle.
+ * @param   count:       Number of candles to copy.
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
+	uint64_t seq_end, int count, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask)
+{
+	struct candle_chunk_index *idx = list->chunk_index;
+	struct candle_chunk *head_chunk, *chunk;
+	struct atomsnap_version *head_snap;
+	struct candle_chunk_list_head_version *head_ver;
+	uint64_t seq_start = seq_end - count + 1;
+	int ret;
+
+	if (dst == NULL || dst->capacity < count) {
+		errmsg(stderr, "Invalid #trcache_candle_batch\n");
+		return -1;
+	}
+
+	/* Pin the head of list for safe chunk traversing */
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
+	head_chunk = head_ver->head_node;
+
+	if (seq_start < head_chunk->seq_first) {
+		errmsg(stderr, "Start sequence number is out of range\n");
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
+
+	/* Search the last chunk after pinning the head */
+	chunk = candle_chunk_index_find_seq(idx, seq_end);
+	assert(chunk != NULL);
+
+	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
+		count, dst, field_mask);
+
+	atomsnap_release_version(head_snap);
+	return ret;
 }
 
 /**
@@ -803,8 +824,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  * @param   list:        Pointer to the candle chunk list.
  * @param   ts_end:      Timestamp belonging to the last candle.
  * @param   count:       Number of candles to copy.
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -812,18 +833,18 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  *          candle, return -1 without identifying a containing candle.
  */
 int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
-	uint64_t ts_end, int count, trcache_candle_field_flags field_mask,
-	struct trcache_candle_batch *dst)
+	uint64_t ts_end, int count, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask)
 {
 	struct candle_chunk_index *idx = list->chunk_index;
 	struct candle_chunk *head_chunk, *chunk;
 	struct atomsnap_version *head_snap;
 	struct candle_chunk_list_head_version *head_ver;
-	uint64_t seq_start, seq_end, mutable_seq, last_converted_seq;
-	int start_record_idx, end_record_idx, dst_idx, num_copied;
+	uint64_t seq_start, seq_end;
+	int ret;
 
 	if (dst == NULL || dst->capacity < count) {
-		errmsg("Invalid #trcache_candle_batch\n");
+		errmsg(stderr, "Invalid #trcache_candle_batch\n");
 		return -1;
 	}
 
@@ -836,101 +857,24 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	chunk = candle_chunk_index_find_ts(idx, ts_end);
 
 	if (chunk == NULL) {
-		errmsg("Target timestamp is out of range\n");
+		errmsg(stderr, "Target timestamp is out of range\n");
 		atomsnap_release_version(head_snap);
 		return -1;
 	}
 
 	seq_end = candle_chunk_calc_seq_by_ts(chunk, ts_end);
 	seq_start = seq_end - count + 1;
+	assert(seq_end != UINT64_MAX);
 
 	if (seq_start < head_chunk->seq_first) {
-		errmsg("Start sequence number is out of range\n");
+		errmsg(stderr, "Start sequence number is out of range\n");
 		atomsnap_release_version(head_snap);
 		return -1;
 	}
 
-	mutable_seq = atomic_load_explicit(&list->mutable_seq,
-		memory_order_acquire);
-	assert(mutable_seq >= seq_end);
-
-	if (mutable_seq < seq_end) {
-		errmsg("End sequence number is out of range\n");
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
-
-	/* Search the last chunk after pinning the head */
-	chunk = candle_chunk_index_find_seq(idx, seq_end);
-	assert(chunk != NULL);
-
-	dst_idx = count - 1;
-
-	/*
-	 * Exceptional case where a spinlock must be acquired.
-	 */
-	if (seq_end == mutable_seq) {
-		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
-		num_copied = candle_chunk_copy_mutable_row();
-
-		if (num_copied == 1) {
-			seq_end -= 1;
-			dst_idx -= 1;
-			count -= 1;
-
-			if (count == 0) {
-				atomsnap_release_version(head_snap);
-				return 0;
-			} else if (end_record_idx == 0) {
-				chunk = chunk->prev;
-			}
-		}
-	}
-
-	last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
-		memory_order_acquire);
-
-	/*
-	 * Copy the candles at the chunk level while traversing from the last chunk
-	 * toward the first chunk.
-	 */
-	while (count > 0) {
-		if (last_converted_seq < seq_end) {
-			start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
-			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
-
-			/* Backward copy */
-			num_copied = candle_chunk_copy_rows_until_converetd(chunk, dst
-				start_record_idx, end_record_idx, dst_idx);
-			seq_end -= num_copied;
-			dst_idx -= num_copied;
-			count -= num_copied;
-
-			if (num_copied == (end_record_idx - start_record_idx + 1)) {
-				chunk = chunk->prev;
-				continue;
-			}
-
-			/*
-			 * If we encounter a crossover point, proceed to the code below
-			 * using the same chunk.
-			 */
-			last_converted_seq = atomic_load_explicit(&list->last_seq_converted,
-				memory_order_release);
-		}
-
-		start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
-		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
-
-		num_copied = candle_chunk_copy_from_column_batch(chunk, dst
-			start_record_idx, end_record_idx, dst_idx);
-		seq_end -= num_copied;
-		dst_idx -= num_copied;
-		count -= num_copied;
-
-		chunk = chunk->prev;
-	}
+	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
+		count, dst, field_mask);
 
 	atomsnap_release_version(head_snap);
-	return 0;
+	return ret;
 }

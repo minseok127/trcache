@@ -1,7 +1,6 @@
 #ifndef CANDLE_CHUNK_LIST_H
 #define CANDLE_CHUNK_LIST_H
 
-#include <errono.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -9,6 +8,7 @@
 
 #include "core/candle_chunk.h"
 #include "core/candle_chunk_index.h"
+#include "utils/log.h"
 
 /*
  * candle_chunk_list_head_version - Covers the lifetime of the chunks.
@@ -152,14 +152,14 @@ void candle_chunk_list_flush(struct candle_chunk_list *list);
  * @param   list:        Pointer to the candle chunk list.
  * @param   seq_end:     Sequence number of the last candle.
  * @param   count:       Number of candles to copy.
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
-	uint64_t seq_end, int count, trcache_candle_field_flags field_mask,
-	struct trcache_candle_batch *dst);
+	uint64_t seq_end, int count, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask);
 
 /**
  * @brief   Copy @count candles whose range ends at the candle
@@ -168,8 +168,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  * @param   list:        Pointer to the candle chunk list.
  * @param   ts_end:      Timestamp belonging to the last candle.
  * @param   count:       Number of candles to copy.
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -177,8 +177,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  *          candle, return -1 without identifying a containing candle.
  */
 int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
-	uint64_t ts_end, int count, trcache_candle_field_flags field_mask,
-	struct trcache_candle_batch *dst);
+	uint64_t ts_end, int count, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask);
 
 #endif /* CANDLE_CHUNK_LIST_H */
 

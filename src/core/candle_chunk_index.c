@@ -371,6 +371,11 @@ struct candle_chunk *candle_chunk_index_find_ts(
 
 	out = idx_ver->array[lo & mask].chunk_ptr;
 
+	/*
+	 * If the target timestamp is greater than the start timestamp of the most
+	 * recent candle, it is not possible to determine whether the target belongs
+	 * to that candle, and the chunk is considered not found.
+	 */
 	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
 		atomsnap_release_version(snap_ver);
 		return NULL;

@@ -330,3 +330,73 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 	/* Still pending. */
 	return 0;
 }
+
+/**
+ * @brief   Copy a single mutable candle from a row page into a SoA batch.
+ *
+ * The function acquires the chunk's spin-lock, verifies that the target
+ * record is still resident in a row page (i.e., has not yet been moved to
+ * the column batch by the background *convert* thread), and copies the
+ * requested fields into @dst.
+ *
+ * @param   chunk:       Pointer to the candle_chunk.
+ * @param   record_idx:  Index of the record to copy (0-based).
+ * @param   dst_idx:     Index of the last element in @dst to fill.
+ * @param   dst [out]:   Pre-allocated destination batch.
+ * @param   field_mask:  Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
+	int record_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask)
+{
+
+}
+
+/**
+ * @brief   Copy a contiguous range of row-oriented candles.
+ *
+ * Starting at @end_record_idx and walks towards @start_record_idx (inclusive),
+ * this routine copies all rows that are still in row pages into @dst.
+ * If the background convert thread converts the range midway, the
+ * function stops early and returns the count copied so far.
+ *
+ * @param   chunk:             Pointer to the candle_chunk.
+ * @param   start_record_idx:  First record index in the range (inclusive).
+ * @param   end_record_idx:    Last  record index in the range (inclusive).
+ * @param   dst_idx:           Index of the last element in @dst to fill.
+ * @param   dst [out]:         Pre-allocated destination batch.
+ * @param   field_mask:        Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
+	int start_record_idx, int end_record_idx, int dst_idx,
+	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
+{
+
+}
+
+/**
+ * @brief   Copy candles that already reside in the column batch.
+ *
+ * Unlike the previous helpers, this routine bypasses row pages entirely and
+ * pulls data from the chunk-local columnar storage area. It therefore
+ * requires that the specified record range has *already* been converted.
+ *
+ * @param   chunk:              Pointer to the candle_chunk.
+ * @param   start_record_idx:   First record index in the range (inclusive).
+ * @param   end_record_idx:     Last  record index in the range (inclusive).
+ * @param   dst_idx:           Index of the last element in @dst to fill.
+ * @param   dst [out]:          Pre-allocated destination batch.
+ * @param   field_mask:         Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
+	int start_record_idx, int end_record_idx, int dst_idx,
+	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
+{
+
+}

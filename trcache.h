@@ -312,7 +312,6 @@ static inline void trcache_batch_alloc_on_stack(
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
 	size_t u64b = (size_t)capacity * sizeof(uint64_t);
-	size_t u32b = (size_t)capacity * sizeof(uint32_t);
 	size_t dblb = (size_t)capacity * sizeof(double);
 
 	uint8_t *buf_ts = alloca(u64b + a - 1);

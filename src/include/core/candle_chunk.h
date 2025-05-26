@@ -147,27 +147,27 @@ static inline int candle_chunk_clamp_seq(
  * @brief    Return the zero-based index of the candle whose range
  *           contains @ts inside @chunk.
  *
- * @param    chunk:   Pointer to the candle_chunk.
- * @param    ts:      Timestamp to locate.
+ * @param    chunk:      Pointer to the candle_chunk.
+ * @param    target_ts:  Timestamp to locate.
  *
  * @return   The linear record index in the chunk, or -1 on out-of-range.
  */
 static inline int candle_chunk_find_idx_by_ts(
-	struct candle_chunk *chunk, uint64_t ts)
+	struct candle_chunk *chunk, uint64_t target_ts)
 {
 	int num_rows = atomic_load_explicit(&chunk->num_completed, 
 		memory_order_acquire) + 1;
 	const uint64_t *start_ts_arr = chunk->column_batch->start_timestamp_array;
 	int lo = 0, hi = num_rows - 1, mid;
 
-	if (ts < start_ts_arr[0] || ts > start_ts_arr[num_rows - 1]) {
+	if (target_ts < start_ts_arr[0] || target_ts > start_ts_arr[num_rows - 1]) {
 		return -1;
 	}
 
 	while (lo < hi) {
 		mid = lo + ((hi - lo + 1) >> 1);
 
-		if (ts <= start_ts_arr[mid]) {
+		if (start_ts_arr[mid] <= target_ts) {
 			lo = mid;
 		} else {
 			hi = mid - 1;
@@ -181,16 +181,16 @@ static inline int candle_chunk_find_idx_by_ts(
  * @brief   Return the absolute sequence number of the candle whose range
  *          contains @ts inside @chunk.
  *
- * @param   chunk:   Pointer to the candle_chunk.
- * @param   ts:      Timestamp to locate.
+ * @param   chunk:      Pointer to the candle_chunk.
+ * @param   target_ts:  Timestamp to locate.
  *
  * @return  Absolute sequence number on success, UINT64_MAX if @ts is
  *          before the first candle or after the last candle’s start.
  */
 static inline uint64_t candle_chunk_calc_seq_by_ts(
-	struct candle_chunk *chunk, uint64_t ts)
+	struct candle_chunk *chunk, uint64_t target_ts)
 {
-	int idx = candle_chunk_find_idx_by_ts(chunk, ts);
+	int idx = candle_chunk_find_idx_by_ts(chunk, target_ts);
 
 	if (idx == -1) {
 		return UINT64_MAX;
@@ -275,5 +275,66 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk);
  *          0  flush has not completed *in this call*.
  */
 int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk);
+
+/**
+ * @brief   Copy a single mutable candle from a row page into a SoA batch.
+ *
+ * The function acquires the chunk's spin-lock, verifies that the target
+ * record is still resident in a row page (i.e., has not yet been moved to
+ * the column batch by the background *convert* thread), and copies the
+ * requested fields into @dst.
+ *
+ * @param   chunk:       Pointer to the candle_chunk.
+ * @param   record_idx:  Index of the record to copy (0-based).
+ * @param   dst_idx:     Index of the last element in @dst to fill.
+ * @param   dst [out]:   Pre-allocated destination batch.
+ * @param   field_mask:  Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
+	int record_idx, int dst_idx, struct trcache_candle_batch *dst,
+	trcache_candle_field_flags field_mask);
+
+/**
+ * @brief   Copy a contiguous range of row-oriented candles.
+ *
+ * Starting at @end_record_idx and walks towards @start_record_idx (inclusive),
+ * this routine copies all rows that are still in row pages into @dst.
+ * If the background convert thread converts the range midway, the
+ * function stops early and returns the count copied so far.
+ *
+ * @param   chunk:             Pointer to the candle_chunk.
+ * @param   start_record_idx:  First record index in the range (inclusive).
+ * @param   end_record_idx:    Last  record index in the range (inclusive).
+ * @param   dst_idx:           Index of the last element in @dst to fill.
+ * @param   dst [out]:         Pre-allocated destination batch.
+ * @param   field_mask:        Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
+	int start_record_idx, int end_record_idx, int dst_idx,
+	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask);
+
+/**
+ * @brief   Copy candles that already reside in the column batch.
+ *
+ * Unlike the previous helpers, this routine bypasses row pages entirely and
+ * pulls data from the chunk-local columnar storage area. It therefore
+ * requires that the specified record range has *already* been converted.
+ *
+ * @param   chunk:              Pointer to the candle_chunk.
+ * @param   start_record_idx:   First record index in the range (inclusive).
+ * @param   end_record_idx:     Last  record index in the range (inclusive).
+ * @param   dst_idx:           Index of the last element in @dst to fill.
+ * @param   dst [out]:          Pre-allocated destination batch.
+ * @param   field_mask:         Bit-mask describing which columns to copy.
+ *
+ * @return  The number of candles copied.
+ */
+int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
+	int start_record_idx, int end_record_idx, int dst_idx,
+	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask);
 
 #endif /* CANDLE_CHUNK_H */
