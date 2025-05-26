@@ -331,6 +331,8 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 	return 0;
 }
 
+_Static_assert(TRCACHE_NUM_CANDLE_FIELD == 7, "Field count/dispatch mismatch");
+
 /**
  * @brief   Dispatch-table based copier (GNU computed-goto).
  *
