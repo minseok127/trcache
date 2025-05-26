@@ -327,7 +327,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
  * @param   chunk:              Pointer to the candle_chunk.
  * @param   start_record_idx:   First record index in the range (inclusive).
  * @param   end_record_idx:     Last  record index in the range (inclusive).
- * @param   dst_idx:           Index of the last element in @dst to fill.
+ * @param   dst_idx:            Index of the last element in @dst to fill.
  * @param   dst [out]:          Pre-allocated destination batch.
  * @param   field_mask:         Bit-mask describing which columns to copy.
  *
