@@ -500,8 +500,9 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 			cur_page_idx = next_page_idx;
 			page_version = atomsnap_acquire_version_slot(
 				chunk->row_gate, cur_page_idx);
+
 			if (page_version == NULL) {
-				break;
+				return num_copied;
 			}
 
 			row_page = (struct candle_row_page *)page_version->object;
@@ -515,6 +516,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		dst_idx -= 1;
 	}
 
+	atomsnap_release_version(page_version);
 	return num_copied;
 }
 
