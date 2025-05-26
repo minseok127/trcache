@@ -69,26 +69,11 @@ struct trcache {
 };
 
 /**
- * @brief	Test whether @type bit is enabled in @flags.
- *
- * @param	flags:	Bit-OR of ::trcache_candle_type values.
- * @param	type:	One ::trcache_candle_type constant.
- *
- * @return	1 if enabled, 0 otherwise.
- */
-static inline int trcache_candle_type_is_enabled(
-	trcache_candle_type_flags flags,
-	trcache_candle_type type)
-{
-	return (flags & (trcache_candle_type_flags)type) != 0;
-}
-
-/**
  * @brief	Count how many candle-type bits are set in @flags.
  *
  * @param	flags:	Bit-OR of ::trcache_candle_type values.
  *
- * @return	Number of enabled types (0‥TRCACHE_NUM_CANDLE_TYPE).
+ * @return	Number of enabled types (0...TRCACHE_NUM_CANDLE_TYPE).
  */
 static inline int trcache_candle_type_count(
 	trcache_candle_type_flags flags)
