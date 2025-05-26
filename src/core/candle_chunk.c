@@ -351,7 +351,8 @@ _Static_assert(TRCACHE_NUM_CANDLE_FIELD == 7, "Field count/dispatch mismatch");
  *        Undefined behaviour is avoided by checking @mask==0
  *        before every computed-goto re-entry.
  */
-static inline void copy_dispatch_tbl(struct trcache_candle * __restrict c,
+static inline void candle_copy_dispatch_tbl(
+	struct trcache_candle * __restrict c,
 	struct trcache_candle_batch * __restrict d,
 	int i, trcache_candle_field_flags mask)
 {
@@ -449,7 +450,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 	pthread_spin_lock(&chunk->spinlock);
-	copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
+	candle_copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
 	pthread_spin_unlock(&chunk->spinlock);
 
 	atomsnap_release_version(page_version);
@@ -507,7 +508,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 		row_idx = candle_chunk_calc_row_idx(idx);
 		candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
-		copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
+		candle_copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
 
 		num_copied += 1;
 		dst_idx -= 1;
