@@ -529,7 +529,7 @@ static inline void copy_segment(const void *__restrict src,
 		for (int i = 0; i < bytes; i++) {
 			d[i] = s[i];
 		}
-	} else {                             /* clear bit */
+	} else {
 		memcpy(dst, src, bytes);
 	}
 }
