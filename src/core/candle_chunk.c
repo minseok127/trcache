@@ -421,7 +421,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	}
 
 	row_page = (struct candle_row_page *)page_version->object;
-	candle = &(row_page->rows[row_idx]);
+	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 	pthread_spin_lock(&chunk->spinlock);
 
@@ -462,9 +462,9 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
-	int next_page_idx, bit, num_copied = 0;
+	int next_page_idx, row_idx, bit, num_copied = 0;
 
-	if (page_version == 0) {
+	if (page_version == NULL) {
 		return 0;
 	}
 
@@ -485,7 +485,8 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 			row_page = (struct candle_row_page *)page_version->object;
 		}
 
-		candle = &(row_page->rows[candle_chunk_calc_row_idx(idx)]);
+		row_idx = candle_chunk_calc_row_idx(idx);
+		candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 		for (uint32_t m = field_mask; m; m &= m - 1) {
 			bit = __builtin_ctz(m);
