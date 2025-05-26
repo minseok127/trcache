@@ -343,7 +343,7 @@ static inline void cp_start_ts(struct trcache_candle* c,
 	d->start_timestamp_array[i] = c->start_timestamp; 
 }
 
-static inline void cp_start_id (struct trcache_candle* c,
+static inline void cp_start_id(struct trcache_candle* c,
 	struct trcache_candle_batch* d, int i)
 {
 	d->start_trade_id_array[i]  = c->start_trade_id;
@@ -388,6 +388,69 @@ static const fld_cp_fn copy_tbl[] = {
 	cp_close,      /* bit 5 */
 	cp_volume      /* bit 6 */
 };
+
+static inline void cp_dispatch(struct trcache_candle *c,
+	struct trcache_candle_batch *d, int i, trcache_candle_field_flags mask)
+{
+	static void *dispatch[] = {
+		&&out,
+		&&copy_start_ts,
+		&&copy_start_id,
+		&&copy_open,
+		&&copy_high,
+		&&copy_low,
+		&&copy_close,
+		&&copy_volume,
+	};
+	uint32_t m = mask;
+	int bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_start_ts:
+	d->start_timestamp_array[i] = c->start_timestamp;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_start_id:
+	d->start_trade_id_array[i] = c->start_trade_id;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_open:
+	d->open_array[i] = c->open;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_high:
+	d->high_array[i] = c->high;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_low:
+	d->low_array[i] = c->low;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_close:
+	d->close_array[i] = c->close;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+copy_volume:
+	d->volume_array[i] = c->volume;
+	m &= (m - 1);
+	bit = __builtin_ctz(m);
+	goto *dispatch[bit];
+
+out:
+	return;
+}
 
 /**
  * @brief   Copy a single mutable candle from a row page into a SoA batch.
