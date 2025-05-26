@@ -331,69 +331,29 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 	return 0;
 }
 
-/*
- * Helper function type to copy a field of the candle into the batch.
+/**
+ * @brief   Dispatch-table based copier (GNU computed-goto).
+ *
+ * The function jumps directly to the code block that handles the first set-bit
+ * in @mask, copies one field, clears that bit, and jumps again until all
+ * requested fields are processed. It never executes an indirect *call*,
+ * only indirect *jumps*, so there is no call/return overhead.
+ *
+ * @param   c:     Pointer to the source candle (AoS).
+ * @param   d:     Pointer to the destination batch (SoA).
+ * @param   i:     Destination index to fill.
+ * @param   mask:  Bit-mask describing which fields to copy (>= 1).
+ *
+ * @note  Uses GNU C's "computed goto". Portable only with GCC/Clang.
+ *        The lowest bit (0) corresponds to START_TIMESTAMP.
+ *        Undefined behaviour is avoided by checking @mask==0
+ *        before every computed-goto re-entry.
  */
-typedef void (*fld_cp_fn)(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i);
-
-static inline void cp_start_ts(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->start_timestamp_array[i] = c->start_timestamp; 
-}
-
-static inline void cp_start_id(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->start_trade_id_array[i]  = c->start_trade_id;
-}
-
-static inline void cp_open (struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->open_array[i] = c->open;
-}
-
-static inline void cp_high(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->high_array[i] = c->high;
-}
-
-static inline void cp_low(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->low_array[i] = c->low;
-}
-
-static inline void cp_close(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->close_array[i] = c->close;
-}
-
-static inline void cp_volume(struct trcache_candle* c,
-	struct trcache_candle_batch* d, int i)
-{
-	d->volume_array[i] = c->volume;
-}
-
-static const fld_cp_fn copy_tbl[] = {
-	cp_start_ts,   /* bit 0 */
-	cp_start_id,   /* bit 1 */
-	cp_open,       /* bit 2 */
-	cp_high,       /* bit 3 */
-	cp_low,        /* bit 4 */
-	cp_close,      /* bit 5 */
-	cp_volume      /* bit 6 */
-};
-
-static inline void cp_dispatch(struct trcache_candle *c,
-	struct trcache_candle_batch *d, int i, trcache_candle_field_flags mask)
+static inline void copy_dispatch_tbl(struct trcache_candle * __restrict c,
+	struct trcache_candle_batch * __restrict d,
+	int i, trcache_candle_field_flags mask)
 {
 	static void *dispatch[] = {
-		&&out,
 		&&copy_start_ts,
 		&&copy_start_id,
 		&&copy_open,
@@ -401,52 +361,51 @@ static inline void cp_dispatch(struct trcache_candle *c,
 		&&copy_low,
 		&&copy_close,
 		&&copy_volume,
+		&&out,
 	};
+
 	uint32_t m = mask;
-	int bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	if (m == 0) {
+		return; /* nothing to copy */
+	}
+
+	/* Set the out bit */
+	m |= (1 << TRCACHE_NUM_CANDLE_FIELD);
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_start_ts:
 	d->start_timestamp_array[i] = c->start_timestamp;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_start_id:
 	d->start_trade_id_array[i] = c->start_trade_id;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_open:
 	d->open_array[i] = c->open;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_high:
 	d->high_array[i] = c->high;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_low:
 	d->low_array[i] = c->low;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_close:
 	d->close_array[i] = c->close;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
 
 copy_volume:
 	d->volume_array[i] = c->volume;
-	m &= (m - 1);
-	bit = __builtin_ctz(m);
-	goto *dispatch[bit];
+	/* Fall through */
 
 out:
 	return;
@@ -477,7 +436,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
-	int bit, row_idx;
+	int row_idx;
 
 	if (page_version == NULL) {
 		return 0;
@@ -488,12 +447,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
 
 	pthread_spin_lock(&chunk->spinlock);
-
-	for (uint32_t m = field_mask; m; m &= m - 1) {
-		bit = __builtin_ctz(m);
-		copy_tbl[bit](candle, dst, dst_idx);
-	}
-
+	copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
 	pthread_spin_unlock(&chunk->spinlock);
 
 	atomsnap_release_version(page_version);
@@ -526,7 +480,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *row_page;
 	struct trcache_candle *candle;
-	int next_page_idx, row_idx, bit, num_copied = 0;
+	int next_page_idx, row_idx, num_copied = 0;
 
 	if (page_version == NULL) {
 		return 0;
@@ -551,11 +505,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 		row_idx = candle_chunk_calc_row_idx(idx);
 		candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
-
-		for (uint32_t m = field_mask; m; m &= m - 1) {
-			bit = __builtin_ctz(m);
-			copy_tbl[bit](candle, dst, dst_idx);
-		}
+		copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
 
 		num_copied += 1;
 		dst_idx -= 1;
