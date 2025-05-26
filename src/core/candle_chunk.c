@@ -523,11 +523,20 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 static inline void copy_segment(const void *__restrict src,
 	void *__restrict dst, int bytes)
 {
+	assert((bytes & 7u) == 0);
+
 	if (bytes <= 256) {
-		const uint8_t *s = src;
-		uint8_t *d = dst;
-		for (int i = 0; i < bytes; i++) {
+		const uint64_t *__restrict s = (const uint64_t *)src;
+		uint64_t *__restrict d = (uint64_t *)dst;
+		size_t n_qwords = bytes >> 3;
+
+		/* Simple unroll (16 bytes) */
+		for (size_t i = 0; i + 1 < n_qwords; i += 2) {
 			d[i] = s[i];
+			d[i + 1] = s[i + 1];
+		}
+		if (n_qwords & 1) {
+			d[n_qwords - 1] = s[n_qwords - 1];
 		}
 	} else {
 		memcpy(dst, src, bytes);
