@@ -81,32 +81,32 @@ struct trade_data_buffer {
 };
 
 /**
- * @brief Create a new trade data buffer.
+ * @brief   Create a new trade data buffer.
  *
- * @param num_cursor: Number of cursors (candle types) tracked per trade.
+ * @param   num_cursor: Number of cursors (candle types) tracked per trade.
  *
- * @return Pointer to buffer, or NULL on allocation failure.
+ * @return  Pointer to buffer, or NULL on allocation failure.
  */
 struct trade_data_buffer *trade_data_buffer_init(int num_cursor);
 
 /**
- * @brief Destroy a trade data buffer and free resources.
+ * @brief   Destroy a trade data buffer and free resources.
  *
- * @param buf: Pointer returned by trade_data_buffer_create.
+ * @param   buf: Pointer returned by trade_data_buffer_create.
  */
 void trade_data_buffer_destroy(struct trade_data_buffer *buf);
 
 /**
- * @brief Push a trade entry into the buffer.
+ * @brief   Push a trade entry into the buffer.
  *
  * Copies the data into the tail chunk, allocating a new chunk if
  * the current one is full.
  *
- * @param buf:       Buffer to push into.
- * @param data:      Pointer to trcache_trade_data to copy.
- * @param free_list: Linked list pointer holding recycled chunks.
+ * @param   buf:       Buffer to push into.
+ * @param   data:      Pointer to trcache_trade_data to copy.
+ * @param   free_list: Linked list pointer holding recycled chunks.
  *
- * @return 0 on success, -1 on error.
+ * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
 	const struct trcache_trade_data *data,
@@ -115,10 +115,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 /**
  * @brief	Peek at next entries for a given cursor.
  *
- * @param buf:	            Buffer to peek from.
- * @param cursor:	        Pointer to initialized cursor.
- * @param data_array (out): Pointer to entries array.
- * @param count (out):      Number of entries available from cursor.
+ * @param   buf:	           Buffer to peek from.
+ * @param   cursor:            Pointer to initialized cursor.
+ * @param   data_array (out):  Pointer to entries array.
+ * @param   count (out):       Number of entries available from cursor.
  *
  * @return	1 if available, 0 if empty or on error.
  */
@@ -129,8 +129,8 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 /**
  * @brief	Consume entries up to cursor’s peek position.
  *
- * @param buf:     Buffer to consume from.
- * @param cursor:  Pointer to cursor used in peek.
+ * @param   buf:     Buffer to consume from.
+ * @param   cursor:  Pointer to cursor used in peek.
  */
 void trade_data_buffer_consume(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor);
@@ -138,8 +138,8 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
 /**
  * @brief   Move free chunks into the free list.
  *
- * @param buf:       Buffer to reap the free chunks.
- * @param free_list: Linked list pointer holding recycled chunks.
+ * @param   buf:       Buffer to reap the free chunks.
+ * @param   free_list: Linked list pointer holding recycled chunks.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	struct list_head *free_list);

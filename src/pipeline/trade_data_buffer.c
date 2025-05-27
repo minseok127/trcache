@@ -21,9 +21,9 @@
 /**
  * @brief   Create and initialize a trade_data_buffer.
  *
- * @param num_cursor: Number of cursors (candle types) to track.
+ * @param   num_cursor: Number of cursors (candle types) to track.
  *
- * @return pointer to buffer, or NULL on failure.
+ * @return  Pointer to buffer, or NULL on failure.
  */
 struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 {
@@ -85,9 +85,9 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 }
 
 /**
- * @brief Destroy buffer and free all resources.
+ * @brief   Destroy buffer and free all resources.
  *
- * @param buf: Buffer to destroy.
+ * @param   buf: Buffer to destroy.
  */
 void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 {
@@ -116,11 +116,11 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 /**
  * @brief   Push one trade record into buffer.
  *
- * @param buf:       Buffer to push into.
- * @param data:      Trade record to copy.
- * @param free_list: Linked list pointer holding recycled chunks.
+ * @param   buf:       Buffer to push into.
+ * @param   data:      Trade record to copy.
+ * @param   free_list: Linked list pointer holding recycled chunks.
  *
- * @return: 0 on success, -1 on error.
+ * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
 	const trcache_trade_data *data,
