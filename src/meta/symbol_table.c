@@ -18,14 +18,14 @@
 #include "trcache.h"
 
 /**
- * @brief atomsnap version allocation callback.
+ * @brief   atomsnap version allocation callback.
  *
  * Allocates a new atomsnap_version and its underlying array of
  * public_symbol_entry pointers.
  *
- * @param arg:  Capacity for the pointer array (cast via (uint64_t)arg).
+ * @param   arg:  Capacity for the pointer array (cast via (uint64_t)arg).
  *
- * @return Pointer to initialized atomsnap_version, or NULL on error.
+ * @return  Pointer to initialized atomsnap_version, or NULL on error.
  */
 static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 	struct atomsnap_version *version = malloc(sizeof(struct atomsnap_version));
@@ -51,11 +51,11 @@ static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
 }
 
 /**
- * @brief atomsnap version free callback.
+ * @brief   atomsnap version free callback.
  *
  * Frees the object array and the version struct itself.
  *
- * @param version: atomsnap_version to free.
+ * @param   version: atomsnap_version to free.
  */
 static void symbol_array_version_free(struct atomsnap_version *version) {
 	struct public_symbol_entry **symbol_array
@@ -65,13 +65,13 @@ static void symbol_array_version_free(struct atomsnap_version *version) {
 }
 
 /**
- * @brief Initialize public symbol table.
+ * @brief   Initialize public symbol table.
  *
  * Creates atomsnap_gate and installs initial empty snapshot.
  *
- * @param initial_capacity: Initial array capacity.
+ * @param   initial_capacity: Initial array capacity.
  *
- * @return Pointer to public_symbol_table, or NULL on error.
+ * @return  Pointer to public_symbol_table, or NULL on error.
  */
 static struct public_symbol_table *
 init_public_symbol_table(int initial_capacity)
@@ -119,9 +119,9 @@ init_public_symbol_table(int initial_capacity)
 }
 
 /**
- * @brief Destroy public_symbol_table and its gate.
+ * @brief   Destroy public_symbol_table and its gate.
  *
- * @param table: public_symbol_table to destroy.
+ * @param   table: public_symbol_table to destroy.
  */
 static void
 destroy_public_symbol_table(struct public_symbol_table *table)
@@ -156,13 +156,13 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 }
 
 /**
- * @brief Initialize admin symbol table.
+ * @brief   Initialize admin symbol table.
  *
  * Allocates array of admin entries.
  *
- * @param initial_capacity: Number of entries.
+ * @param   initial_capacity: Number of entries.
  *
- * @return Pointer to admin_symbol_table, or NULL on error.
+ * @return  Pointer to admin_symbol_table, or NULL on error.
  */
 static struct admin_symbol_table *
 init_admin_symbol_table(int initial_capacity)
@@ -188,9 +188,9 @@ init_admin_symbol_table(int initial_capacity)
 }
 
 /**
- * @brief Destroy admin_symbol_table.
+ * @brief   Destroy admin_symbol_table.
  *
- * @param table: admin_symbol_table to destroy.
+ * @param   table: admin_symbol_table to destroy.
  */
 static void
 destroy_admin_symbol_table(struct admin_symbol_table *table)

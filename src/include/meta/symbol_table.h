@@ -152,15 +152,15 @@ int symbol_table_lookup_symbol_id(
 	struct symbol_table *table, const char *symbol_str);
 
 /**
- * @brief Register a new symbol or return existing ID.
+ * @brief   Register a new symbol or return existing ID.
  *
  * Inserts the string into the internal hash map and expands 
  * public symbol table via copy-on-write if needed.
  *
- * @param table:      Pointer to symbol_table.
- * @param symbol_str: NULL-terminated symbol string.
+ * @param   table:      Pointer to symbol_table.
+ * @param   symbol_str: NULL-terminated symbol string.
  *
- * @return Assigned symbol ID >=0, or -1 on error.
+ * @return  Assigned symbol ID >=0, or -1 on error.
  *
  * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
  */
