@@ -279,7 +279,7 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 }
 
 /**
- * @brief   Move free chunks into the free list
+ * @brief   Move free chunks into the free list.
  *
  * @param   buf:       Buffer to reap the free chunks.
  * @param   free_list: Linked list pointer holding recycled chunks.
