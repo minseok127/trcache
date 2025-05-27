@@ -380,6 +380,7 @@ static struct public_symbol_entry *init_public_symbol_entry(
 		bit = __builtin_ctz(m);
 		type = 1 << bit;
 		update_ops = get_candle_update_ops(type);
+		assert(update_ops != NULL);
 
 		ctx.trc = tc;
 		ctx.update_ops = update_ops;

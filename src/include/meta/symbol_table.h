@@ -11,11 +11,18 @@
 #include "trcache.h"
 
 /*
- * public_symbol_entry - 
+ * public_symbol_entry - Metadata and candle storage for one symbol
  *
- * @candle_chunk_list_array:
- * @symbol_str:
- * @id:
+ * @candle_chunk_list_array:  Each slot points to a candle_chunk_list that stores 
+ *                            the given candle type for this symbol. 
+ *                            NULL if that type is disabled.
+ * @symbol_str:               Null-terminated canonical symbol string
+ *                            (e.g. "AAPL").
+ * @id:                       Symbol ID.
+ *
+ * A public_symbol_entry represents a user-visible symbol in the symbol table.
+ * It owns the per-candle-type chunk lists as well as the canonical symbol
+ * string.
  */
 struct public_symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_array[TRCACHE_NUM_CANDLE_TYPE];
