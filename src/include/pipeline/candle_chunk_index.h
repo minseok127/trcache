@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#include "core/candle_chunk.h"
+#include "pipeline/candle_chunk.h"
 
 /*
  * candle_chunk_index_entry - Metadata that maps a range of candles to a chunk.

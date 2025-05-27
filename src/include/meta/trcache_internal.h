@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <pthread.h>
 
-#include "core/symbol_table.h"
-#include "core/trade_data_buffer.h"
+#include "meta/symbol_table.h"
+#include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
 #include "utils/list_head.h"
 #include "utils/vector.h"

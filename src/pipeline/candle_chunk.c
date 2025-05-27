@@ -13,8 +13,8 @@
 #include <assert.h>
 #include <stdatomic.h>
 
-#include "core/candle_chunk.h"
-#include "core/trcache_internal.h"
+#include "meta/trcache_internal.h"
+#include "pipeline/candle_chunk.h"
 #include "utils/log.h"
 
 /**

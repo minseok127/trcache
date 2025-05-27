@@ -18,7 +18,7 @@
 #include <string.h>
 #include <assert.h>
 
-#include "core/candle_chunk_index.h"
+#include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
 
 /**

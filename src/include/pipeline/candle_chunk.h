@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
+#include "pipeline/candle_update_ops.h"
 
 #include "trcache.h"
 
@@ -68,19 +69,6 @@ struct candle_chunk {
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
-};
-
-/*
- * candle_update_ops - Callbacks for updating candles.
- *
- * @init:      Init function that sets up the candle with the first trade data.
- * @update:    Update function that reflects trade data.
- * @is_closed: Checks if trade data can be applied to the candle.
- */
-struct candle_update_ops {
-	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
-	void (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
-	bool (*is_closed)(struct trcache_candle *c, struct trcache_trade_data *d);
 };
 
 /**

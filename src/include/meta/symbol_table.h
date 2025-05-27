@@ -5,7 +5,7 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
-#include "core/candle_chunk_list.h"
+#include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table.h"
 
 /*

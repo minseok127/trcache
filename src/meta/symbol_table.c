@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include "core/symbol_table.h"
+#include "meta/symbol_table.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 

@@ -14,7 +14,7 @@
 #include <string.h>
 #include <stdatomic.h>
 
-#include "core/trade_data_buffer.h"
+#include "pipeline/trade_data_buffer.h"
 #include "utils/list_head.h"
 #include "utils/log.h"
 

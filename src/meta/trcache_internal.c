@@ -10,7 +10,7 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "core/trcache_internal.h"
+#include "meta/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 

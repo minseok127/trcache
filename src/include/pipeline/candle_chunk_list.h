@@ -6,8 +6,8 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "core/candle_chunk.h"
-#include "core/candle_chunk_index.h"
+#include "pipeline/candle_chunk.h"
+#include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
 
 /*

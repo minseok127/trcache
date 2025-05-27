@@ -16,7 +16,7 @@ endif
 
 PROJECT_ROOT := $(realpath .)
 SRC_DIR := src
-SUBDIRS := concurrent core utils
+SUBDIRS := concurrent utils meta pipeline sched
 
 OBJS = $(wildcard $(SRC_DIR)/*/*.o)
 
