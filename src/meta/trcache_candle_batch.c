@@ -11,15 +11,15 @@
 #include "trcache.h"
 
 /**
- * @brief  Allocate an @p align-byte-aligned memory block.
+ * @brief   Allocate an @p align-byte-aligned memory block.
  *
  * Wraps 'aligned_alloc', 'posix_memalign', or '_aligned_malloc'
  * depending on platform capabilities.
  *
- * @param align: Alignment in bytes (must be a power-of-two).
- * @param bytes: Requested size in bytes.
+ * @param   align: Alignment in bytes (must be a power-of-two).
+ * @param   bytes: Requested size in bytes.
  *
- * @return Pointer on success, 'NULL' on failure.
+ * @return  Pointer on success, 'NULL' on failure.
  */
 static void *simd_aligned_alloc(size_t align, size_t bytes)
 {
@@ -43,14 +43,14 @@ static size_t align_up(size_t x, size_t a)
 }
 
 /**
- * @brief  Allocate a contiguous, SIMD-aligned candle batch on the heap.
+ * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param  capacity: Number of OHLCV rows to allocate (must be > 0).
+ * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
  *
- * @return Pointer to a fully-initialised #trcache_candle_batch on success,  
- *         'NULL' on allocation failure or invalid *capacity*.
+ * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
+ *          'NULL' on allocation failure or invalid *capacity*.
  *
- * @note The returned pointer must be released via trcache_batch_free().
+ * @note    The returned pointer must be released via trcache_batch_free().
  */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 {
@@ -109,11 +109,11 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity)
 }
 
 /**
- * @brief  Release a heap-allocated candle batch.
+ * @brief   Release a heap-allocated candle batch.
  *
  * Safe to pass 'NULL'; the function becomes a no-op.
  *
- * @param batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
  */
 void trcache_batch_free(struct trcache_candle_batch *b)
 {
