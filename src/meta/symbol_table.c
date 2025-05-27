@@ -128,6 +128,7 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 {
 	struct public_symbol_entry **symbol_ptr_array = NULL;
 	struct atomsnap_version *version = NULL;
+	struct public_symbol_entry *entry = NULL;
 
 	if (table == NULL) {
 		return;
@@ -136,7 +137,15 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 	version = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	symbol_ptr_array = (struct public_symbol_entry **) version->object;
 	for (int i = 0; i < table->num_symbols; i++) {
-		free(symbol_ptr_array[i]->symbol_str);
+		entry = symbol_ptr_array[i];
+
+		for (int j = 0; j < TRCACHE_NUM_CANDLE_TYPE; j++) {
+			if (entry->candle_chunk_list_array[j] != NULL) {
+				destroy_candle_chunk_list(entry->candle_chunk_list_array[j]);
+			}
+		}
+
+		free(entry->symbol_str);
 		free(symbol_ptr_array[i]);
 	}
 	atomsnap_release_version(version);
