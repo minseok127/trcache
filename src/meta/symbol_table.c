@@ -10,6 +10,8 @@
 #include <assert.h>
 
 #include "meta/symbol_table.h"
+#include "meta/trcache_internal.h"
+#include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 
@@ -197,11 +199,13 @@ destroy_admin_symbol_table(struct admin_symbol_table *table)
 }
 
 /**
- * @brief Create and initialize symbol_table.
+ * @brief   Create a new symbol_table.
  *
- * @param initial_capacity: Initial size for public/admin tables.
+ * @param   initial_capacity: Initial bucket/array size (power of two).
  *
- * @return Pointer to symbol_table, or NULL on error.
+ * @return  Pointer to a newly allocated symbol_table, or NULL on error.
+ *
+ * @thread-safety Single-threaded: must be called before any concurrent access.
  */
 struct symbol_table *symbol_table_init(int initial_capacity)
 {
@@ -255,9 +259,11 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 }
 
 /**
- * @brief Destroy symbol_table and all substructures.
+ * @brief   Destroy a symbol_table and free all resources.
  *
- * @param table: symbol_table to destroy.
+ * @param   symbol_table:	Pointer returned by init_symbol_table().
+ *
+ * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
 void symbol_table_destroy(struct symbol_table *table)
 {
@@ -277,15 +283,19 @@ void symbol_table_destroy(struct symbol_table *table)
 }
 
 /**
- * @brief Lock-free lookup of public_symbol_entry by ID.
+ * @brief   Lookup a public symbol by ID.
  *
- * @param table: symbol_table pointer.
- * @param symbol_id: ID to lookup.
+ * Lock-free, reader-safe via atomsnap.
  *
- * @return public_symbol_entry or NULL if out of range.
+ * @param   table:     Pointer to symbol_table.
+ * @param   symbol_id: Symbol ID to lookup.
+ *
+ * @return  Pointer to public_symbol_entry, or NULL if out of range.
+ *
+ * @thread-safety Safe for concurrent readers.
  */
-struct public_symbol_entry *
-symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
+struct public_symbol_entry *symbol_table_lookup_public_entry(
+	struct symbol_table *table, int symbol_id)
 {
 	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
 	struct atomsnap_version *version =
@@ -304,12 +314,16 @@ symbol_table_lookup_public_entry(struct symbol_table *table, int symbol_id)
 }
 
 /**
- * @brief Lookup symbol ID by string.
+ * @brief   Lookup symbol ID by its string name.
  *
- * @param table: symbol_table pointer.
- * @param symbol_str: NULL-terminated string.
+ * Performs a mutex-protected hash lookup.
  *
- * @return ID >=0, or -1 if not found.
+ * @param   table:      Pointer to symbol_table.
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Symbol ID >=0 on success, or -1 if not found.
+ *
+ * @thread-safety Safe for concurrent callers; protected by internal mutex.
  */
 int symbol_table_lookup_symbol_id(struct symbol_table *table,
 	const char *symbol_str)
@@ -329,25 +343,29 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 }
 
 /**
- * @brief Allocate a new public symbol entry.
+ * @brief   Allocate a new public symbol entry.
  *
- * @param id:         Symbol ID to assign.
- * @param symbol_str: Symbol string to assign.
+ * @param   tc:         Pointer to the #trcache.
+ * @param   id:         Symbol ID to assign.
+ * @param   symbol_str: Symbol string to assign.
  *
- * @return Pointer to entry, or NULL on failure.
+ * @return  Pointer to entry, or NULL on failure.
  */
-static struct public_symbol_entry *init_public_symbol_entry(int id, 
-	const char *symbol_str)
+static struct public_symbol_entry *init_public_symbol_entry(
+	struct trcache *tc, int id, const char *symbol_str)
 {
-	struct public_symbol_entry *entry = malloc(
+	struct candle_chunk_list_init_ctx ctx = { 0, };
+	struct public_symbol_entry *entry = calloc(1,
 		sizeof(struct public_symbol_entry));
+	struct candle_chunk_list *candle_chunk_list_ptr;
+	const struct candle_update_ops *update_ops;
+	trcache_candle_type type;
+	int bit;
 
 	if (entry == NULL) {
 		errmsg(stderr, "#public_symbol_entry allocation failed\n");
 		return NULL;
 	}
-
-	entry->id = id;
 
 	entry->symbol_str = duplicate_symbol_str(symbol_str,
 		strlen(symbol_str) + 1);
@@ -358,18 +376,55 @@ static struct public_symbol_entry *init_public_symbol_entry(int id,
 		return NULL;
 	}
 
+	for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
+		bit = __builtin_ctz(m);
+		type = 1 << bit;
+		update_ops = get_candle_update_ops(type);
+
+		ctx.trc = tc;
+		ctx.update_ops = update_ops;
+		ctx.candle_type = type;
+		ctx.symbol_id = id;
+
+		candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
+		if (candle_chunk_list_ptr == NULL) {
+			errmsg(stderr, "Candle chunk list allocation is failed\n");
+			
+			for (int i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++ ) {
+				if (entry->candle_chunk_list_array[i] != NULL) {
+					destroy_candle_chunk_list(entry->candle_chunk_list_array[i]);
+				}
+			}
+
+			free(entry->symbol_str);
+			free(entry);
+			return NULL;
+		}
+
+		entry->candle_chunk_list_array[bit] = candle_chunk_list_ptr;
+	}
+
+	entry->id = id;
+
 	return entry;
 }
 
 /**
- * @brief Register a new symbol string.
+ * @brief   Register a new symbol or return existing ID.
  *
- * @param table: symbol_table pointer.
- * @param symbol_str: NULL-terminated string.
+ * Inserts the string into the internal hash map and expands 
+ * public symbol table via copy-on-write if needed.
  *
- * @return Assigned ID >=0, or -1 on error.
+ * @param   tc:         Pointer to the #trcache.
+ * @param   table:      Pointer to symbol_table.
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Assigned symbol ID >=0, or -1 on error.
+ *
+ * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
  */
-int symbol_table_register(struct symbol_table *table, const char *symbol_str)
+int symbol_table_register(struct trcache *tc, struct symbol_table *table,
+	const char *symbol_str)
 {
 	struct public_symbol_table *pub_symbol_table = table->pub_symbol_table;
 	struct public_symbol_entry **symbol_array = NULL;
@@ -417,7 +472,7 @@ int symbol_table_register(struct symbol_table *table, const char *symbol_str)
 			pub_symbol_table->symbol_ptr_array_gate, new_version);
 	}
 
-	symbol_array[id] = init_public_symbol_entry(id, symbol_str);
+	symbol_array[id] = init_public_symbol_entry(tc, id, symbol_str);
 
 	if (symbol_array[id] == NULL) {
 		atomsnap_release_version(version);

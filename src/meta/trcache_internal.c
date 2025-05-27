@@ -256,7 +256,7 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 	symbol_id = symbol_table_lookup_symbol_id(tc->symbol_table, symbol_str);
 
 	if (symbol_id == -1) {
-		symbol_id = symbol_table_register(tc->symbol_table, symbol_str);
+		symbol_id = symbol_table_register(tc, tc->symbol_table, symbol_str);
 
 		/* Add it into local cache */
 		if (ht_insert(tls_data_ptr->local_symbol_id_map, symbol_str,

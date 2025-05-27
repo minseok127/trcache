@@ -8,15 +8,17 @@
 #include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table.h"
 
+#include "trcache.h"
+
 /*
  * public_symbol_entry - 
  *
- * @candle_chunk_list:
+ * @candle_chunk_list_array:
  * @symbol_str:
  * @id:
  */
 struct public_symbol_entry {
-	struct candle_chunk_list *candle_chunk_list;
+	struct candle_chunk_list *candle_chunk_list_array[TRCACHE_NUM_CANDLE_TYPE];
 	char *symbol_str;
 	int id;
 };
@@ -93,34 +95,34 @@ struct symbol_table {
 };
 
 /**
- * @brief Create a new symbol_table.
+ * @brief   Create a new symbol_table.
  *
- * @param initial_capacity:	Initial bucket/array size (rounded up to power of two).
+ * @param   initial_capacity: Initial bucket/array size (power of two).
  *
- * @return Pointer to a newly allocated symbol_table, or NULL on error.
+ * @return  Pointer to a newly allocated symbol_table, or NULL on error.
  *
  * @thread-safety Single-threaded: must be called before any concurrent access.
  */
 struct symbol_table *symbol_table_init(int initial_capacity);
 
 /**
- * @brief Destroy a symbol_table and free all resources.
+ * @brief   Destroy a symbol_table and free all resources.
  *
- * @param symbol_table:	Pointer returned by init_symbol_table().
+ * @param   symbol_table:	Pointer returned by init_symbol_table().
  *
  * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
 void symbol_table_destroy(struct symbol_table *symbol_table);
 
 /**
- * @brief Lookup a public symbol by ID.
+ * @brief   Lookup a public symbol by ID.
  *
  * Lock-free, reader-safe via atomsnap.
  *
- * @param table:     Pointer to symbol_table.
- * @param symbol_id: Symbol ID to lookup.
+ * @param   table:     Pointer to symbol_table.
+ * @param   symbol_id: Symbol ID to lookup.
  *
- * @return Pointer to public_symbol_entry, or NULL if out of range.
+ * @return  Pointer to public_symbol_entry, or NULL if out of range.
  *
  * @thread-safety Safe for concurrent readers.
  */
@@ -128,14 +130,14 @@ struct public_symbol_entry *symbol_table_lookup_public_entry(
 	struct symbol_table *table, int symbol_id);
 
 /**
- * @brief Lookup symbol ID by its string name.
+ * @brief   Lookup symbol ID by its string name.
  *
  * Performs a mutex-protected hash lookup.
  *
- * @param table:      Pointer to symbol_table.
- * @param symbol_str: NULL-terminated symbol string.
+ * @param   table:      Pointer to symbol_table.
+ * @param   symbol_str: NULL-terminated symbol string.
  *
- * @return Symbol ID >=0 on success, or -1 if not found.
+ * @return  Symbol ID >=0 on success, or -1 if not found.
  *
  * @thread-safety Safe for concurrent callers; protected by internal mutex.
  */
@@ -155,6 +157,7 @@ int symbol_table_lookup_symbol_id(
  *
  * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
  */
-int symbol_table_register(struct symbol_table *table, const char *symbol_str);
+int symbol_table_register(struct trcache *tc, struct symbol_table *table,
+	const char *symbol_str);
 
 #endif /* SYMBOL_TABLE_H */

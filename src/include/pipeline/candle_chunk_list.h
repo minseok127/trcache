@@ -49,7 +49,7 @@ struct candle_chunk_list_head_version {
  */
 struct candle_chunk_list_init_ctx {
 	struct trcache *trc;
-	struct candle_update_ops update_ops;
+	const struct candle_update_ops *update_ops;
 	trcache_candle_type candle_type;
 	int symbol_id;
 };
@@ -79,7 +79,7 @@ struct candle_chunk_list {
 	struct candle_chunk *candle_mutable_chunk;
 	struct candle_chunk *converting_chunk;
 	struct atomsnap_gate *head_gate;
-	struct candle_update_ops update_ops;
+	const struct candle_update_ops *update_ops;
 	struct trcache *trc;
 	struct candle_chunk_index *chunk_index;
 	int row_page_count;
