@@ -146,7 +146,7 @@ destroy_public_symbol_table(struct public_symbol_table *table)
 		}
 
 		free(entry->symbol_str);
-		free(symbol_ptr_array[i]);
+		free(entry);
 	}
 	atomsnap_release_version(version);
 
