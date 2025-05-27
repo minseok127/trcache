@@ -99,23 +99,9 @@ DEFINE_TICK_CANDLE_OPS(50tick,   50);
 DEFINE_TICK_CANDLE_OPS(10tick,   10);
 DEFINE_TICK_CANDLE_OPS(5tick,     5);
 
-static const struct candle_update_ops ops_month = {
-	.init = NULL,
-	.update = NULL,
-	.is_closed = NULL,
-};
-
-static const struct candle_update_ops ops_week = {
-	.init = NULL,
-	.update = NULL,
-	.is_closed = NULL,
-};
-
 /* Index == bit position in trcache_candle_type */
 static const struct candle_update_ops *const ops_tbl[TRCACHE_NUM_CANDLE_TYPE] =
 {
-	&ops_month,
-	&ops_week,
 	&ops_day,
 	&ops_1h,
 	&ops_30min,

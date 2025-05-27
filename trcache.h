@@ -60,22 +60,20 @@ typedef struct trcache_trade_data {
  * Identifiers used by the user and trcache to recognize candle types.
  */
 typedef enum {
-	TRCACHE_MONTH_CANDLE    = 1 << 0,
-	TRCACHE_WEEK_CANDLE     = 1 << 1,
-	TRCACHE_DAY_CANDLE      = 1 << 2,
-	TRCACHE_1H_CANDLE       = 1 << 3,
-	TRCACHE_30MIN_CANDLE    = 1 << 4,
-	TRCACHE_15MIN_CANDLE    = 1 << 5,
-	TRCACHE_5MIN_CANDLE     = 1 << 6,
-	TRCACHE_1MIN_CANDLE     = 1 << 7,
-	TRCACHE_1SEC_CANDLE     = 1 << 8,
-	TRCACHE_100TICK_CANDLE  = 1 << 9,
-	TRCACHE_50TICK_CANDLE   = 1 << 10,
-	TRCACHE_10TICK_CANDLE   = 1 << 11,
-	TRCACHE_5TICK_CANDLE    = 1 << 12,
+	TRCACHE_DAY_CANDLE      = 1 << 0,
+	TRCACHE_1H_CANDLE       = 1 << 1,
+	TRCACHE_30MIN_CANDLE    = 1 << 2,
+	TRCACHE_15MIN_CANDLE    = 1 << 3,
+	TRCACHE_5MIN_CANDLE     = 1 << 4,
+	TRCACHE_1MIN_CANDLE     = 1 << 5,
+	TRCACHE_1SEC_CANDLE     = 1 << 6,
+	TRCACHE_100TICK_CANDLE  = 1 << 7,
+	TRCACHE_50TICK_CANDLE   = 1 << 8,
+	TRCACHE_10TICK_CANDLE   = 1 << 9,
+	TRCACHE_5TICK_CANDLE    = 1 << 10,
 } trcache_candle_type;
 
-#define TRCACHE_NUM_CANDLE_TYPE	(13)
+#define TRCACHE_NUM_CANDLE_TYPE	(11)
 
 typedef uint32_t trcache_candle_type_flags;
 
