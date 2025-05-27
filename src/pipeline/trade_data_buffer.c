@@ -235,10 +235,10 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 }
 
 /**
- * @brief	Consume all entries that the caller has already peeked.
+ * @brief   Consume all entries that the caller has already peeked.
  *
- * @param	buf:	buffer to consume from.
- * @param	cursor:	caller-managed cursor (same one used for peek).
+ * @param   buf:	 Buffer to consume from.
+ * @param   cursor:	 Caller-managed cursor (same one used for peek).
  */
 void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 	struct trade_data_buffer_cursor *cursor)
