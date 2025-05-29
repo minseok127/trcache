@@ -16,7 +16,7 @@
 /*
  * scq_node - Linked list node
  * @next: pointer to the next inserted node
- * @datum: 8 bytes scalar or pointer
+ * @datum: scalar or pointer
  *
  * When scq_enqueue is called, an scq_node is allocated and inserted into the
  * linked list queue. When scq_dequeue is called, the nodes are detached from
@@ -24,7 +24,7 @@
  */
 struct scq_node {
 	struct scq_node *next;
-	uint64_t datum;
+	void *datum;
 };
 
 /* 
@@ -291,7 +291,7 @@ static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
 /*
  * Enqueue the given datum into the queue.
  */
-void scq_enqueue(struct scalable_queue *scq, uint64_t datum)
+void scq_enqueue(struct scalable_queue *scq, void *datum)
 {
 	struct scq_tls_data *tls_data = NULL;
 	struct scq_node *node = NULL;
@@ -338,7 +338,7 @@ static void scq_free_nodes(struct scalable_queue *scq,
  */
 static bool pop_from_dequeued_list(struct scalable_queue *scq,
 	struct scq_dequeued_node_list *dequeued_node_list,
-	uint64_t *datum, int enqueue_thread_idx)
+	void **datum, int enqueue_thread_idx)
 {
 	struct scq_node *node = NULL;
 
@@ -371,7 +371,7 @@ static bool pop_from_dequeued_list(struct scalable_queue *scq,
  * Dequeue the datum from the scalable_queue.
  * Return true if there is dequeued node.
  */
-bool scq_dequeue(struct scalable_queue *scq, uint64_t *datum)
+bool scq_dequeue(struct scalable_queue *scq, void **datum)
 {
 	struct scq_dequeued_node_list *dequeued_node_list = NULL;
 	struct scq_tls_data *tls_data = NULL, *tls_data_enq_thread = NULL;

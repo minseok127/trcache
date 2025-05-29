@@ -13,8 +13,8 @@ struct scalable_queue *scq_init(void);
 
 void scq_destroy(struct scalable_queue *scq);
 
-void scq_enqueue(struct scalable_queue *scq, uint64_t datum);
+void scq_enqueue(struct scalable_queue *scq, void *datum);
 
-bool scq_dequeue(struct scalable_queue *scq, uint64_t *datum);
+bool scq_dequeue(struct scalable_queue *scq, void **datum);
 
 #endif /* SCQ_H */
