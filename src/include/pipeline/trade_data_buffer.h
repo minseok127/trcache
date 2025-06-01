@@ -86,6 +86,23 @@ struct trade_data_buffer {
 };
 
 /**
+ * @brief   Obtain a cursor positioned at the given type.
+ *
+ * @param   buf:          Pointer to the #trade_data_buffer holding cursor.
+ * @param   candle_type:  Desired candle type.
+ *
+ * @return  Pointer of the #trade_data_buffer_cursor (non-NULL).
+ *
+ * Validation of the type is the caller's responsibility.
+ */
+static inline struct trade_data_buffer_cursor *trade_data_buffer_get_cursor(
+	struct trade_data_buffer *buf, trcache_candle_type candle_type)
+{
+	int bit = __builtin_ctz(candle_type);
+	return (buf->cursor_arr + bit);
+}
+
+/**
  * @brief   Create and initialize a trade_data_buffer.
  *
  * @param   tc: Pointer to the #trcache.
