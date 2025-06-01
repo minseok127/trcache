@@ -166,6 +166,7 @@ void symbol_table_destroy(struct symbol_table *table)
 			}
 		}
 
+		trade_data_buffer_destroy(entry->trd_buf);
 		free(entry->symbol_str);
 		free(entry);
 	}

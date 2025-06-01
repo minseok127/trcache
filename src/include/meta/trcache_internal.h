@@ -8,7 +8,6 @@
 #include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
 #include "utils/list_head.h"
-#include "utils/vector.h"
 
 #include "trcache.h"
 
@@ -21,7 +20,6 @@ typedef struct trcache trcache;
  *   
  * @local_symbol_id_map:   Thread-local map from symbol string to ID.
  * @local_trd_databuf_map: Thread-local map from symbol ID to trd_databuf.
- * @local_trd_databuf_vec: Thread-local vector containing trd_databuf.
  * @local_free_list:       Thread-local chunk free-list used by trd_databufs.
  * @trcache_ptr:           Back-pointer to owner trcache instance.
  * @thread_id:             Assigned index in tls_data_ptr_arr[].
@@ -29,7 +27,6 @@ typedef struct trcache trcache;
 struct trcache_tls_data {
 	struct ht_hash_table *local_symbol_id_map;
 	struct ht_hash_table *local_trd_databuf_map;
-	struct vector *local_trd_databuf_vec;
 	struct list_head local_free_list;
 	struct trcache *trcache_ptr;
 	int thread_id;
