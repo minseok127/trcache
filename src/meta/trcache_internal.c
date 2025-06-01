@@ -279,14 +279,14 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
  */
 const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
 {
-	struct public_symbol_entry *pub_symbol_entry
-		= symbol_table_lookup_public_entry(tc->symbol_table, symbol_id);
+	struct symbol_entry *entry
+		= symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 
-	if (pub_symbol_entry == NULL) {
+	if (entry == NULL) {
 		return NULL;
 	}
 
-	return pub_symbol_entry->symbol_str;
+	return entry->symbol_str;
 }
 
 /**

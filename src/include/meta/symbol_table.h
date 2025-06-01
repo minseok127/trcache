@@ -6,99 +6,42 @@
 
 #include "concurrent/atomsnap.h"
 #include "pipeline/candle_chunk_list.h"
+#include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
 
 #include "trcache.h"
 
 /*
- * public_symbol_entry - Metadata and candle storage for one symbol
+ * symbol_entry - Metadata and candle storage for one symbol
  *
- * @candle_chunk_list_array:  Each slot points to a candle_chunk_list that stores 
- *                            the given candle type for this symbol. 
- *                            NULL if that type is disabled.
- * @symbol_str:               Null-terminated canonical symbol string
- *                            (e.g. "AAPL").
+ * @candle_chunk_list_ptrs:   Pointer array of candle_chunk_list.
+ * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
- *
- * A public_symbol_entry represents a user-visible symbol in the symbol table.
- * It owns the per-candle-type chunk lists as well as the canonical symbol
- * string.
  */
-struct public_symbol_entry {
-	struct candle_chunk_list *candle_chunk_list_array[TRCACHE_NUM_CANDLE_TYPE];
+struct symbol_entry {
+	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
 	char *symbol_str;
 	int id;
 };
 
 /*
- * public_symbol_table - Lock-free table of public symbols.
+ * symbol_table - Structure that manages symbol id and it's entry.
  *
- * @symbol_ptr_array_gate: Gate for snapshot versioning.
- * @num_symbols:           Number of registered symbols.
- * @capacity:              Allocated array capacity.
+ * @ht_hash_table_mutex:    Protects registration path.
+ * @symbol_id_map:          Hash table that maps from string to ID.
+ * @symbol_ptr_array_gate:  Gate for snapshot versioning.
+ * @num_symbols:            Number of registered symbols.
+ * @capacity:               Allocated array capacity.
  *
  * This table holds the symbol entries accessed by both user and system threads.
  * Synchronization for table expansion is handled through atomsnap.
  */
-struct public_symbol_table {
-	struct atomsnap_gate *symbol_ptr_array_gate;
-	int num_symbols;
-	int capacity;
-};
-
-/*
- * admin_symbol_entry - Admin-only symbol entry.
- *
- * @pub_symbol_entry_ptr: Corresponding public_symbol_entry.
- *
- * This is a data structure accessed only by the admin thread. It holds
- * statistics and pointers associated with a single symbol. It also contains a
- * pointer to the corresponding public symbol entry, allowing the admin thread
- * to access the public symbol entry without additional synchronization with
- * users.
- */
-struct admin_symbol_entry {
-	struct public_symbol_entry *pub_symbol_entry_ptr;
-};
-
-/*
- * admin_symbol_table - Admin-only symbol table.
- *
- * @symbol_ptr_array: Array of admin entries.
- * @num_symbols:      Number of entries.
- * @capacity:         Allocated array capacity.
- *
- * This is a symbol table accessed only by the admin thread. The admin thread
- * continuously monitors the number of symbols in the public symbol table and
- * expands this table accordingly. Since only the admin thread accesses it, no
- * synchronization is needed during expansion.
- */
-struct admin_symbol_table {
-	struct admin_symbol_entry **symbol_ptr_array;
-	int num_symbols;
-	int capacity;
-};
-
-/*
- * symbol_table - Combined public/admin symbol table abstraction.
- *
- * @ht_hash_table_mutex: Protects registration path.
- * @symbol_id_map:       Hash table that maps from string to ID.
- * @pub_symbol_table:    Lock-free reader table.
- * @admin_symbol_table:  Admin-thread-only table.
- * @next_symbol_id:      Next ID to assign.
- *
- * This is an abstracted table that combines the public and admin symbol tables.
- * It manages symbol IDs issued during user symbol registration using a hash
- * table. Since symbol registration rarely occurs after system initialization,
- * synchronization is handled with a simple mutex.
- */
 struct symbol_table {
 	pthread_mutex_t ht_hash_table_mutex;
 	struct ht_hash_table *symbol_id_map;
-	struct public_symbol_table *pub_symbol_table;
-	struct admin_symbol_table *admin_symbol_table;
-	int next_symbol_id;
+	struct atomsnap_gate *symbol_ptr_array_gate;
+	int num_symbols;
+	int capacity;
 };
 
 /**
@@ -122,18 +65,18 @@ struct symbol_table *symbol_table_init(int initial_capacity);
 void symbol_table_destroy(struct symbol_table *symbol_table);
 
 /**
- * @brief   Lookup a public symbol by ID.
+ * @brief   Lookup a symbol entry by ID.
  *
  * Lock-free, reader-safe via atomsnap.
  *
  * @param   table:     Pointer to symbol_table.
  * @param   symbol_id: Symbol ID to lookup.
  *
- * @return  Pointer to public_symbol_entry, or NULL if out of range.
+ * @return  Pointer to #symbol_entry, or NULL if out of range.
  *
  * @thread-safety Safe for concurrent readers.
  */
-struct public_symbol_entry *symbol_table_lookup_public_entry(
+struct symbol_entry *symbol_table_lookup_entry(
 	struct symbol_table *table, int symbol_id);
 
 /**
@@ -155,7 +98,7 @@ int symbol_table_lookup_symbol_id(
  * @brief   Register a new symbol or return existing ID.
  *
  * Inserts the string into the internal hash map and expands 
- * public symbol table via copy-on-write if needed.
+ * symbol table via copy-on-write if needed.
  *
  * @param   table:      Pointer to symbol_table.
  * @param   symbol_str: NULL-terminated symbol string.

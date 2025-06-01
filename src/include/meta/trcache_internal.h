@@ -42,7 +42,7 @@ struct trcache_tls_data {
  * @tls_id_mutex:            Protects allocation/release of thread IDs.
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
  * @tls_data_ptr_arr:        Pointers to each thread’s tls_data.
- * @symbol_table:            Abstracted symbol table (public + admin).
+ * @symbol_table:            Abstracted symbol table.
  * @candle_type_flags:       Candle type configuration flags.
  * @num_candle_types:        Number of candle types.
  * @num_workers:             Number of worker threads.
