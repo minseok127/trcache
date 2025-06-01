@@ -15,11 +15,13 @@
  * symbol_entry - Metadata and candle storage for one symbol
  *
  * @candle_chunk_list_ptrs:   Pointer array of candle_chunk_list.
+ * @trd_buf:                  Buffer for holding trade data.
  * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
  */
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
+	struct trade_data_buffer *trd_buf;
 	char *symbol_str;
 	int id;
 };

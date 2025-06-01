@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdatomic.h>
 
+#include "meta/trcache_internal.h"
 #include "utils/list_head.h"
 
 #include "trcache.h"
@@ -48,15 +49,17 @@ struct trade_data_chunk {
 /*
  * trade_data_buffer_cursor - Cursor for iterating and consuming a buffer.
  *
- * @peek_chunk:    Chunk for next peek.
  * @consume_chunk: Chunk for next consume.
+ * @consume_count: Number of data items consumed from this cursor.
+ * @peek_chunk:    Chunk for next peek.
  * @peek_idx:      Index in the peek_chunk for next peek.
  *
  * Caller allocates this and passes to peek/consume.
  */
 struct trade_data_buffer_cursor {
-	struct trade_data_chunk *peek_chunk;
 	struct trade_data_chunk	*consume_chunk;
+	uint64_t consume_count;
+	struct trade_data_chunk *peek_chunk;
 	int peek_idx; 
 } __cacheline_aligned;
 
@@ -64,8 +67,9 @@ struct trade_data_buffer_cursor {
  * trade_data_buffer - Buffer managing a linked list of trade_data_chunk.
  *
  * @chunk_list:          Linked list for chunks.
- * @cursor_arr:          Cursor array.
- * @num_cursor:          Number of cursors.
+ * @produced_count:      Number of data items supplied to this buffer.
+ * @cursor_arr:          Cursor array (only valid types are initialized).
+ * @num_cursor:          Number of valid cursors.
  * @next_tail_write_idx: Next write_idx of the tail chunk.
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
@@ -75,19 +79,20 @@ struct trade_data_buffer_cursor {
  */
 struct trade_data_buffer {
 	struct list_head chunk_list;
-	struct trade_data_buffer_cursor *cursor_arr;
+	uint64_t produced_count;
+	struct trade_data_buffer_cursor cursor_arr[TRCACHE_NUM_CANDLE_TYPE];
 	int num_cursor;
 	int next_tail_write_idx;
 };
 
 /**
- * @brief   Create a new trade data buffer.
+ * @brief   Create and initialize a trade_data_buffer.
  *
- * @param   num_cursor: Number of cursors (candle types) tracked per trade.
+ * @param   tc: Pointer to the #trcache.
  *
- * @return  Pointer to buffer, or NULL on allocation failure.
+ * @return  Pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(int num_cursor);
+struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc);
 
 /**
  * @brief   Destroy a trade data buffer and free resources.
@@ -131,9 +136,10 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
  *
  * @param   buf:     Buffer to consume from.
  * @param   cursor:  Pointer to cursor used in peek.
+ * @param   count:   Number of data items fetched via peek().
  */
 void trade_data_buffer_consume(struct trade_data_buffer *buf,
-	struct trade_data_buffer_cursor *cursor);
+	struct trade_data_buffer_cursor *cursor, int count);
 
 /**
  * @brief   Move free chunks into the free list.

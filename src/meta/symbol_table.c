@@ -268,6 +268,15 @@ static struct symbol_entry *init_symbol_entry(
 		return NULL;
 	}
 
+	entry->trd_buf = trade_data_buffer_init(tc);
+
+	if (entry->trd_buf == NULL ) {
+		errmsg(stderr, "Allocation of trade_data_buffer is failed\n");
+		free(entry->symbol_str);
+		free(entry);
+		return NULL;
+	}
+
 	for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
 		bit = __builtin_ctz(m);
 		type = 1 << bit;
@@ -289,6 +298,7 @@ static struct symbol_entry *init_symbol_entry(
 				}
 			}
 
+			trade_data_buffer_destroy(entry->trd_buf);
 			free(entry->symbol_str);
 			free(entry);
 			return NULL;

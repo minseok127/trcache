@@ -7,7 +7,7 @@
  * and consume entries; when threshold reached, chunk is enqueued back
  * to free list by producer's context.
  */
-
+#define _GNU_SOURCE
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,18 +21,19 @@
 /**
  * @brief   Create and initialize a trade_data_buffer.
  *
- * @param   num_cursor: Number of cursors (candle types) to track.
+ * @param   tc: Pointer to the #trcache.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
+struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 {
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
 	struct trade_data_buffer_cursor *c = NULL;
+	int bit, num_cursor = 0;
 
-	if (num_cursor == 0) {
-		errmsg(stderr, "Invalid argument (num_cursor is 0)\n");
+	if (tc == NULL) {
+		errmsg(stderr, "Invalid argument\n");
 		return NULL;
 	}
 
@@ -43,20 +44,10 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 		return NULL;
 	}
 
-	buf->cursor_arr
-		= malloc(num_cursor * sizeof(struct trade_data_buffer_cursor));
-	
-	if (buf->cursor_arr == NULL) {
-		errmsg(stderr, "Allocation of buf->cursor_arr is failed\n");
-		free(buf);
-		return NULL;
-	}
-
 	chunk = malloc(sizeof(struct trade_data_chunk));
 
 	if (chunk == NULL) {
 		errmsg(stderr, "#trade_data_chunk allocation failed\n");
-		free(buf->cursor_arr);
 		free(buf);
 		return NULL;
 	}
@@ -70,16 +61,19 @@ struct trade_data_buffer *trade_data_buffer_init(int num_cursor)
 	list_add_tail(&chunk->list_node, &buf->chunk_list);
 
 	/* Init cursors */
-	for (int i = 0; i < num_cursor; i++) {
-		c = buf->cursor_arr + i;
+	for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
+		bit = __builtin_ctz(m);
+		c = buf->cursor_arr + bit;
+		c->consume_chunk = chunk;
+		c->consume_count = 0;
 		c->peek_chunk = chunk;
 		c->peek_idx = 0;
-		c->consume_chunk = chunk;
+		num_cursor++;
 	}
 
-	buf->num_cursor = num_cursor;
-
+	buf->produced_count = 0;
 	buf->next_tail_write_idx = 0;
+	buf->num_cursor = num_cursor;
 
 	return buf;
 }
@@ -109,7 +103,6 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 		}
 	}
 
-	free(buf->cursor_arr);
 	free(buf);
 }
 
@@ -180,6 +173,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	atomic_store_explicit(&tail->write_idx, tail->write_idx + 1,
 		memory_order_release);
 
+	buf->produced_count += 1;
+
 	return 0;
 }
 
@@ -239,9 +234,10 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
  *
  * @param   buf:	 Buffer to consume from.
  * @param   cursor:	 Caller-managed cursor (same one used for peek).
+ * @param   count:   Number of data items fetched via peek().
  */
 void trade_data_buffer_consume(struct trade_data_buffer	*buf,
-	struct trade_data_buffer_cursor *cursor)
+	struct trade_data_buffer_cursor *cursor, int count)
 {
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL;
@@ -249,6 +245,8 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 	if (!buf || !cursor) {
 		return;
 	}
+
+	cursor->consume_count += count;
 
 	assert(cursor->peek_chunk != NULL && cursor->consume_chunk != NULL);
 

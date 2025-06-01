@@ -82,7 +82,6 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
-	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
 
@@ -95,12 +94,6 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	}
 
 	if (tls_data->local_trd_databuf_vec != NULL) {
-		for (size_t i = 0; i < tls_data->local_trd_databuf_vec->size; i++) {
-			buf = (struct trade_data_buffer *) vector_at(
-				tls_data->local_trd_databuf_vec, i);
-			trade_data_buffer_destroy(buf);
-		}
-
 		vector_destroy(tls_data->local_trd_databuf_vec);
 	}
 
@@ -297,12 +290,17 @@ const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
  * @param   symbol_id: Symbol ID of trade data.
  *
  * @return  0 on success, -1 on error.
+ *
+ * XXX Currently, it is assumed that no more than one user thread receives trade
+ * data for a given symbol. If multiple users push trade data for the same
+ * symbol concurrently, the implementation must be modified accordingly.
  */
 int trcache_feed_trade_data(struct trcache *tc,
 	struct trcache_trade_data *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
-	struct trade_data_buffer *trd_databuf = NULL, *buf = NULL;
+	struct trade_data_buffer *trd_databuf, *buf;
+	struct symbol_entry *symbol_entry;
 	bool found = false;
 
 	if (data == NULL || tls_data_ptr == NULL) {
@@ -335,27 +333,28 @@ int trcache_feed_trade_data(struct trcache *tc,
 		sizeof(void *), &found);
 
 	if (!found) {
-		trd_databuf = trade_data_buffer_init(tc->num_candle_types);
-
-		if (trd_databuf == NULL) {
-			errmsg(stderr, "Failure on trade_data_buffer_init()\n");
+		symbol_entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+		if (symbol_entry == NULL) {
+			errmsg(stderr, "Invalid symbol id\n");
 			return -1;
 		}
+
+		trd_databuf = symbol_entry->trd_buf;
 		
-		/* Insert it to the hash table */
+		/* Insert it to the local hash table */
 		if (ht_insert(tls_data_ptr->local_trd_databuf_map,
 				(void *)(uintptr_t)symbol_id, sizeof(void *),
 				trd_databuf) < 0) {
-			trade_data_buffer_destroy(trd_databuf);
 			errmsg(stderr, "Failure on ht_insert()\n");
 			return -1;
 		}
 
-		/* Add it to the vector */
+		/* Add it to the local vector */
 		if (vector_push_back(tls_data_ptr->local_trd_databuf_vec,
 				trd_databuf) < 0) {
-			trade_data_buffer_destroy(trd_databuf);
 			errmsg(stderr, "Failure on vector_push_back()\n");
+			ht_remove(tls_data_ptr->local_trd_databuf_map,
+				(void *)(uintptr_t)symbol_id, sizeof(void *));
 			return -1;
 		}
 	}

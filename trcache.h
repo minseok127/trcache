@@ -252,6 +252,10 @@ const char *trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
  * @param   symbol_id:   ID obtained via trcache_register_symbol().
  *
  * @return  0 on success, -1 on error.
+ *
+ * XXX Currently, it is assumed that no more than one user thread receives trade
+ * data for a given symbol. If multiple users push trade data for the same
+ * symbol concurrently, the implementation must be modified accordingly.
  */
 int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
