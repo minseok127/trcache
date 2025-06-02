@@ -188,6 +188,21 @@ static inline uint64_t candle_chunk_calc_seq_by_ts(
 }
 
 /**
+ * @brief   Convenience wrapper to write start timestamp array.
+ *
+ * @param   chunk:    Target chunk to write start timestamp.
+ * @param   page_idx: Target candle's row page index.
+ * @param   row_idx:  Target candle's row index within the row page.
+ * @param   ts:       Start timestamp of the candle.
+ */
+static inline void candle_chunk_write_start_timestamp(
+	struct candle_chunk *chunk, int page_idx, int row_idx, uint64_t ts)
+{
+	int record_idx = candle_chunk_calc_record_index(page_idx, row_idx);
+	chunk->column_batch->start_timestamp_array[record_idx] = ts;
+}
+
+/**
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   candle_type:        Candle type of the column-batch.

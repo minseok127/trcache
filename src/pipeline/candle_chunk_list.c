@@ -251,16 +251,6 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 }
 
 /**
- * @brief   Convenience wrapper to write start timestamp array.
- */
-static inline void write_start_timestamp(struct candle_chunk *chunk,
-	int page_idx, int row_idx, uint64_t ts)
-{
-	int record_idx = candle_chunk_calc_record_index(page_idx, row_idx);
-	chunk->column_batch->start_timestamp_array[record_idx] = ts;
-}
-
-/**
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
 static int init_first_candle(struct candle_chunk_list *list,
@@ -304,7 +294,6 @@ static int init_first_candle(struct candle_chunk_list *list,
 	new_chunk->mutable_row_idx = 0;
 
 	new_chunk->seq_first = 0;
-	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
 
 	/* Register atomsnap version of head */
 	atomsnap_exchange_version(list->head_gate, head_snap_version);
@@ -327,7 +316,7 @@ static void advance_within_same_page(struct candle_chunk *chunk,
 	struct trcache_trade_data *trade)
 {
 	ops->init(&row_page->rows[++chunk->mutable_row_idx], trade);
-	write_start_timestamp(chunk, chunk->mutable_page_idx,
+	candle_chunk_write_start_timestamp(chunk, chunk->mutable_page_idx,
 		chunk->mutable_row_idx, trade->timestamp);
 }
 
@@ -347,7 +336,6 @@ static int advance_to_next_page(struct candle_chunk *chunk,
 
 	chunk->mutable_page_idx = new_page_idx;
 	chunk->mutable_row_idx = 0;
-	write_start_timestamp(chunk, new_page_idx, 0, trade->timestamp);
 	return 0;
 }
 
@@ -380,9 +368,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	new_chunk->mutable_page_idx = 0;
 	new_chunk->mutable_row_idx  = 0;
-
 	new_chunk->seq_first = prev_chunk->seq_first + list->trc->batch_candle_count;
-	write_start_timestamp(new_chunk, 0, 0, trade->timestamp);
 
 	/* Add the new chunk into the index */
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
