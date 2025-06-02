@@ -35,7 +35,6 @@ struct sched_ack {
 
 /** Message kinds recognised by the scheduler (expand as needed). */
 typedef enum sched_msg_type {
-	MSG_ADD_SYMBOL = 0,
 } sched_msg_type;
 
 /*
