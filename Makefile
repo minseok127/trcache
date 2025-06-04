@@ -18,18 +18,19 @@ PROJECT_ROOT := $(realpath .)
 SRC_DIR := src
 SUBDIRS := concurrent utils meta pipeline sched
 
-OBJS = $(wildcard $(SRC_DIR)/*/*.o)
+OBJS = \
+	$(wildcard $(SRC_DIR)/*/*.o)
 
 INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 
 STATIC_LIB = libtrcache.a
 SHARED_LIB = libtrcache.so
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all:
 	@for dir in $(SUBDIRS); do \
-		$(MAKE) -C $(SRC_DIR)/$$dir CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)"; \
+	$(MAKE) -C $(SRC_DIR)/$$dir CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)"; \
 	done
 	objs=$$(echo $(SRC_DIR)/*/*.o); \
 	$(AR) rcs $(STATIC_LIB) $$objs; \
@@ -37,6 +38,10 @@ all:
 
 clean:
 	@for dir in $(SUBDIRS); do \
-		$(MAKE) -C $(SRC_DIR)/$$dir clean; \
+	$(MAKE) -C $(SRC_DIR)/$$dir clean; \
 	done
 	rm -f $(STATIC_LIB) $(SHARED_LIB)
+
+test:
+	$(MAKE) -C tests CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)" \
+	PROJECT_ROOT="$(PROJECT_ROOT)" run
