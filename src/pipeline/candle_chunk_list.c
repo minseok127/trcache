@@ -402,8 +402,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
-	int expected_num_completed = 1 + 
-		atomic_load_explicit(&chunk->num_completed, memory_order_acquire);
+	int expected_num_completed;
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -440,6 +439,9 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 		return 0;
 	}
+
+	expected_num_completed = atomic_load_explicit(&chunk->num_completed, 
+		memory_order_acquire) + 1;
 
 	/* 
 	 * Move to the next candle and initialize it.
