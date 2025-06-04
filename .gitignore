@@ -53,3 +53,8 @@ tags
 
 # Vscode config files
 /.vscode/
+
+# Ignore test binaries
+/tests/test_*
+!/tests/test_*.c
+/tests/*.o
