@@ -10,8 +10,8 @@
  * @stat:      Performance counters split per pipeline stage.
  */
 struct worker_state {
-        int worker_id;
-        struct worker_stat_board stat;
+	int worker_id;
+	struct worker_stat_board stat;
 };
 
 #endif /* WORKER_STATE_H */
