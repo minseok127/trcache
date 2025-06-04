@@ -13,8 +13,8 @@
 #define NUM_CONSUMERS 11
 
 struct consumer_arg {
-        struct trade_data_buffer *buf;
-        trcache_candle_type type;
+	struct trade_data_buffer *buf;
+	trcache_candle_type type;
 };
 
 static _Atomic int producer_done = 0;
@@ -51,11 +51,11 @@ static void *consumer_thread(void *arg)
 
 int main(void)
 {
-        struct trcache tc = {0};
-        struct consumer_arg args[NUM_CONSUMERS];
-        pthread_t threads[NUM_CONSUMERS];
-        struct list_head free_list;
-        INIT_LIST_HEAD(&free_list);
+	struct trcache tc = {0};
+	struct consumer_arg args[NUM_CONSUMERS];
+	pthread_t threads[NUM_CONSUMERS];
+	struct list_head free_list;
+	INIT_LIST_HEAD(&free_list);
 
 	for (int i = 0; i < NUM_CONSUMERS; i++) {
 		trcache_candle_type type = (trcache_candle_type)(1u << i);
@@ -76,21 +76,21 @@ int main(void)
 		assert(ret == 0);
 	}
 
-        for (int i = 0; i < NUM_ENTRIES; i++) {
-                struct trcache_trade_data td = {0};
-                td.timestamp = i;
-                td.trade_id = i;
-                td.price = i * 1.0;
-                td.volume = i * 2.0;
+	for (int i = 0; i < NUM_ENTRIES; i++) {
+		struct trcache_trade_data td = {0};
+		td.timestamp = i;
+		td.trade_id = i;
+		td.price = i * 1.0;
+		td.volume = i * 2.0;
 
-                if (buf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
-                        list_empty(&free_list)) {
-                        trade_data_buffer_reap_free_chunks(buf, &free_list);
-                }
+		if (buf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
+			list_empty(&free_list)) {
+			trade_data_buffer_reap_free_chunks(buf, &free_list);
+		}
 
-                int ret = trade_data_buffer_push(buf, &td, &free_list);
-                assert(ret == 0);
-        }
+		int ret = trade_data_buffer_push(buf, &td, &free_list);
+		assert(ret == 0);
+	}
 
 	atomic_store(&producer_done, 1);
 
@@ -102,14 +102,14 @@ int main(void)
 
 	printf("Produced: %ld\n", buf->produced_count);
 
-        trade_data_buffer_destroy(buf);
+	trade_data_buffer_destroy(buf);
 
-        while (!list_empty(&free_list)) {
-                struct list_head *n = list_get_first(&free_list);
-                list_del(n);
-                struct trade_data_chunk *chunk = __get_trd_chunk_ptr(n);
-                free(chunk);
-        }
+	while (!list_empty(&free_list)) {
+		struct list_head *n = list_get_first(&free_list);
+		list_del(n);
+		struct trade_data_chunk *chunk = __get_trd_chunk_ptr(n);
+		free(chunk);
+	}
 
-        return 0;
+	return 0;
 }
