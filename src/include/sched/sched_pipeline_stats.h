@@ -17,7 +17,7 @@ struct sched_stage_snapshot {
 	uint64_t produced_count;
 	uint64_t num_completed;
 	uint64_t num_converted;
-	int      unflushed_batch_count;
+	int unflushed_batch_count;
 };
 
 /*
@@ -27,7 +27,7 @@ struct sched_stage_snapshot {
  * @stage_counts: Array indexed by candle type holding per-stage counters.
  */
 struct sched_pipeline_stats {
-	uint64_t                timestamp_ns;
+	uint64_t timestamp_ns;
 	struct sched_stage_snapshot stage_counts[TRCACHE_NUM_CANDLE_TYPE];
 };
 
