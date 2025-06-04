@@ -15,9 +15,9 @@ struct symbol_entry;
  * @converted_seq:  Last candle converted to column batches.
  */
 struct sched_stage_snapshot {
-        uint64_t produced_seq;
-        uint64_t completed_seq;
-        uint64_t converted_seq;
+	uint64_t produced_seq;
+	uint64_t completed_seq;
+	uint64_t converted_seq;
 };
 
 /*
@@ -28,9 +28,9 @@ struct sched_stage_snapshot {
  * @converted_per_sec: Rate of conversions to column batches.
  */
 struct sched_stage_rate {
-        double produced_per_sec;
-        double completed_per_sec;
-        double converted_per_sec;
+	double produced_per_sec;
+	double completed_per_sec;
+	double converted_per_sec;
 };
 
 /*
