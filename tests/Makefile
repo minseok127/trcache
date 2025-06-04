@@ -5,7 +5,8 @@ INCLUDES ?= -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 
 TARGETS = test_utils test_symbol_table \
           test_trade_data_buffer_no_freelist \
-          test_trade_data_buffer_free_list
+          test_trade_data_buffer_free_list \
+          test_candle_chunk_list_multithread
 
 OBJS_test_utils = test_utils.o
 SRC_test_utils = $(PROJECT_ROOT)/src/utils/vector.c \
@@ -33,6 +34,16 @@ OBJS_test_trade_data_buffer_free_list = test_trade_data_buffer_free_list.o
 SRC_test_trade_data_buffer_free_list = \
       $(PROJECT_ROOT)/src/pipeline/trade_data_buffer.c
 
+OBJS_test_candle_chunk_list_multithread = test_candle_chunk_list_multithread.o
+SRC_test_candle_chunk_list_multithread = \
+      $(PROJECT_ROOT)/src/pipeline/trade_data_buffer.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk_list.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk_index.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_update_ops.c \
+      $(PROJECT_ROOT)/src/concurrent/atomsnap.c \
+      $(PROJECT_ROOT)/src/meta/trcache_candle_batch.c
+
 .PHONY: all run clean
 
 all: $(TARGETS)
@@ -49,6 +60,9 @@ test_trade_data_buffer_no_freelist: $(SRC_test_trade_data_buffer_no_freelist) $(
 test_trade_data_buffer_free_list: $(SRC_test_trade_data_buffer_free_list) $(OBJS_test_trade_data_buffer_free_list)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trade_data_buffer_free_list) $(OBJS_test_trade_data_buffer_free_list) -o $@
 
+test_candle_chunk_list_multithread: $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread)
+	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread) -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -57,9 +71,11 @@ run: all
 	./test_symbol_table
 	./test_trade_data_buffer_no_freelist
 	./test_trade_data_buffer_free_list
+	./test_candle_chunk_list_multithread
 
 clean:
 	rm -f $(OBJS_test_utils) $(OBJS_test_symbol_table) \
-	$(OBJS_test_trade_data_buffer_no_freelist) \
-	$(OBJS_test_trade_data_buffer_free_list) \
-	$(TARGETS)
+        $(OBJS_test_trade_data_buffer_no_freelist) \
+        $(OBJS_test_trade_data_buffer_free_list) \
+        $(OBJS_test_candle_chunk_list_multithread) \
+        $(TARGETS)
