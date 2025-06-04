@@ -35,6 +35,14 @@ struct sched_ack {
 
 /** Message kinds recognised by the scheduler (expand as needed). */
 typedef enum sched_msg_type {
+        /*
+         * The implementation currently does not define any concrete
+         * message types.  However, an empty enum is illegal in C and
+         * prevents the project from building.  Provide a dummy value so
+         * that users can extend the list without hitting a compilation
+         * error.
+         */
+        SCHED_MSG_NONE = 0,
 } sched_msg_type;
 
 /*
