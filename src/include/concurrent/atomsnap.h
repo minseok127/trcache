@@ -24,10 +24,10 @@ typedef struct atomsnap_gate atomsnap_gate;
  *
  * Writers obtain a pointer to atomsnap_version through atomsnap_make_version().
  * Then the writers insert their own object into the version and set the
- * @free_context to be used in the user-defined version free fucntion.
+ * @free_context to be used in the user-defined version free function.
  *
  * Initialization of gate and opaque is performed inside
- * atomsnap_make_version(), so users dont's need to modify them explicitly.
+ * atomsnap_make_version(), so users don't need to modify them explicitly.
  */
 typedef struct atomsnap_version {
 	void *object;
@@ -47,7 +47,7 @@ typedef struct atomsnap_version {
  *
  * For this, the user must define a custom memory allocation function and a
  * custom memory deallocation function. These functions should be set in the
- * functino pointer of atmosnap_init_context and then passed to
+ * function pointer of atmosnap_init_context and then passed to
  * atomsnap_init_gate().
  *
  * By default, a gate holds a single control block. If num_extra_control_blocks
@@ -74,12 +74,12 @@ typedef struct atomsnap_init_context {
 struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx);
 
 /*
- * Destory the atomsnap_gate.
+ * Destroy the atomsnap_gate.
  */
 void atomsnap_destroy_gate(struct atomsnap_gate *gate);
 
 /*
- * Allocate memroy for an atomsnap_version. This function internally calls
+ * Allocate memory for an atomsnap_version. This function internally calls
  * the user-defined version allocation function with @alloc_arg as an argument.
  *
  * Note that the version's gate and opaque are initialized, but object and

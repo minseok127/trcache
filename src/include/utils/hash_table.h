@@ -61,7 +61,6 @@ typedef void (*ht_free_key_func)(void *key, size_t len);
  * @param cmp_func:         User compare function, or NULL for default.
  * @param dup_func:         User dup function, or NULL for default.
  * @param free_func:        User free function, or NULL for default.
- 8
  * @return Pointer to new table, or NULL on failure.
  */
 struct ht_hash_table *ht_create(size_t initial_capacity,

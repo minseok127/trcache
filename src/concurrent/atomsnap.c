@@ -177,12 +177,12 @@ struct atomsnap_version *atomsnap_make_version(struct atomsnap_gate *gate,
 static inline _Atomic uint64_t *atomsnap__slot(
 	struct atomsnap_gate *gate, int idx)
 {
-    return idx ? &gate->extra_control_blocks[idx - 1] : &gate->control_block;
+	return idx ? &gate->extra_control_blocks[idx - 1] : &gate->control_block;
 }
 
 /*
  * atomsnap_acquire_version_slot - atomically acquire the current version
- * @gate: poinetr of the atomsnap_gate
+ * @gate: pointer of the atomsnap_gate
  * @slot_idx: zero-based index of the control-block slot (0 == default cb)	
  *
  * Atomically increments the outer reference counter and get the pointer of the
@@ -220,13 +220,13 @@ void atomsnap_release_version(struct atomsnap_version *version)
 }
 
 /*
- * atomsnap_exchange_version_slot - unconditonally replace the version
- * @gate: poinetr of the atomsnap_gate
+ * atomsnap_exchange_version_slot - unconditionally replace the version
+ * @gate: pointer of the atomsnap_gate
  * @slot_idx: zero-based index of the control-block slot (0 == default cb)	
  * @new_version: new version to be registered
  *
  * If a writer wants to exchange their version into the latest version
- * unconditonally, the writer should call this function.
+ * unconditionally, the writer should call this function.
  */
 void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 	struct atomsnap_version *new_version)
@@ -244,7 +244,7 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 		return;
 	}
 
-	/* Consider wrapaound */
+	/* Consider wraparound */
 	atomic_fetch_and((int64_t *)(&old_version->opaque), WRAPAROUND_MASK);
 
 	/* Decrease inner ref counter, we expect the result is minus */
@@ -252,7 +252,7 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 	inner_refcnt = atomic_fetch_sub((int64_t *)(&old_version->opaque),
 		old_outer_refcnt) - old_outer_refcnt;
 
-	/* The outer counter has been wraparouned, adjust inner count */
+	/* The outer counter has been wraparound, adjust inner count */
 	if (inner_refcnt > 0) {
 		inner_refcnt = atomic_fetch_sub((int64_t *)(&old_version->opaque),
 			WRAPAROUND_FACTOR) - WRAPAROUND_FACTOR;
@@ -265,8 +265,8 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 }
 
 /*
- * atomsnap_compare_exchange_version_slot - conditonally replace the version
- * @gate: poinetr of the atomsnap_gate
+ * atomsnap_compare_exchange_version_slot - conditionally replace the version
+ * @gate: pointer of the atomsnap_gate
  * @slot_idx: zero-based index of the control-block slot (0 == default cb)	
  * @old_version: old version to compare
  * @new_version: new version to be registered
@@ -296,7 +296,7 @@ bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
 		return true;
 	}
 
-	/* Consider wrapaound */
+	/* Consider wraparound */
 	atomic_fetch_and((int64_t *)(&old_version->opaque), WRAPAROUND_MASK);
 
 	/* Decrease inner ref counter, we expect the result minus */
@@ -304,7 +304,7 @@ bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
 	inner_refcnt = atomic_fetch_sub((int64_t *)(&old_version->opaque),
 		old_outer_refcnt) - old_outer_refcnt;
 
-	/* The outer counter has been wraparouned, adjust inner count */
+	/* The outer counter has been wraparound, adjust inner count */
 	if (inner_refcnt > 0) {
 		inner_refcnt = atomic_fetch_sub((int64_t *)(&old_version->opaque),
 			WRAPAROUND_FACTOR) - WRAPAROUND_FACTOR;
