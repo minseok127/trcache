@@ -49,10 +49,10 @@ static inline int worker_ct_to_idx(trcache_candle_type type)
 static inline void worker_stat_add_apply(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-       int idx = worker_ct_to_idx(type);
+	int idx = worker_ct_to_idx(type);
 
-       board->apply_stat[idx].cycles += cycles;
-       board->apply_stat[idx].work_count += count;
+	board->apply_stat[idx].cycles += cycles;
+	board->apply_stat[idx].work_count += count;
 }
 
 /**
@@ -61,10 +61,10 @@ static inline void worker_stat_add_apply(struct worker_stat_board *board,
 static inline void worker_stat_add_convert(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-       int idx = worker_ct_to_idx(type);
+	int idx = worker_ct_to_idx(type);
 
-       board->convert_stat[idx].cycles += cycles;
-       board->convert_stat[idx].work_count += count;
+	board->convert_stat[idx].cycles += cycles;
+	board->convert_stat[idx].work_count += count;
 }
 
 /**
@@ -73,10 +73,10 @@ static inline void worker_stat_add_convert(struct worker_stat_board *board,
 static inline void worker_stat_add_flush(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-       int idx = worker_ct_to_idx(type);
+	int idx = worker_ct_to_idx(type);
 
-       board->flush_stat[idx].cycles += cycles;
-       board->flush_stat[idx].work_count += count;
+	board->flush_stat[idx].cycles += cycles;
+	board->flush_stat[idx].work_count += count;
 }
 
 /**
