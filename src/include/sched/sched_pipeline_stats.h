@@ -16,7 +16,7 @@ struct symbol_entry;
  * @unflushed_batch_count: Batches waiting to be flushed to storage.
  */
 struct sched_stage_snapshot {
-	uint64_t produced_count;
+  uint64_t produced_count;
 	uint64_t num_completed;
 	uint64_t num_converted;
 	int unflushed_batch_count;
@@ -38,6 +38,7 @@ struct sched_stage_rate {
 };
 
 /*
+
  * sched_pipeline_stats - Statistics for all pipeline stages of one symbol.
  *
  * @timestamp_ns: Monotonic timestamp when the stats were captured.
@@ -48,7 +49,6 @@ struct sched_pipeline_stats {
 	uint64_t timestamp_ns;
 	struct sched_stage_snapshot stage_counts[TRCACHE_NUM_CANDLE_TYPE];
 	struct sched_stage_rate stage_rates[TRCACHE_NUM_CANDLE_TYPE];
-	struct sched_pipeline_rate stage_rates;
 };
 
 /**

@@ -20,6 +20,7 @@
  * @pipeline_stats:           Snapshot of pipeline counters and throughput.
  * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
+ * @pipeline_stats:           Snapshot of pipeline stage counters.
  */
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
@@ -27,6 +28,7 @@ struct symbol_entry {
 	struct sched_pipeline_stats pipeline_stats;
 	char *symbol_str;
 	int id;
+	struct sched_pipeline_stats pipeline_stats;
 };
 
 /*
