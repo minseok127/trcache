@@ -229,9 +229,9 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
 		if (next_page_idx != cur_page_idx) {
-		/*
-		* Page is fully converted. Trigger the grace period.
-		*/
+			/*
+			 * Page is fully converted. Trigger the grace period.
+			 */
 			atomsnap_exchange_version_slot(
 				chunk->row_gate, cur_page_idx, NULL);
 			atomsnap_release_version(page_version);
