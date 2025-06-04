@@ -38,7 +38,6 @@ struct sched_stage_rate {
 };
 
 /*
-
  * sched_pipeline_stats - Statistics for all pipeline stages of one symbol.
  *
  * @timestamp_ns: Monotonic timestamp when the stats were captured.
