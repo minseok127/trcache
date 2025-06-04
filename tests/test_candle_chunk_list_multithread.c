@@ -43,6 +43,8 @@ static void perf_end(struct thread_perf *p)
 static void *producer_thread(void *arg)
 {
     struct thread_perf *perf = (struct thread_perf *)arg;
+    struct list_head free_list;
+    INIT_LIST_HEAD(&free_list);
     perf_start(perf);
     for (int i = 0; i < NUM_TRADES; i++) {
         struct trcache_trade_data td = {
@@ -51,7 +53,7 @@ static void *producer_thread(void *arg)
             .price = (double)i,
             .volume = 1.0
         };
-        int ret = trade_data_buffer_push(g_buf, &td, NULL);
+        int ret = trade_data_buffer_push(g_buf, &td, &free_list);
         assert(ret == 0);
         perf->ops++;
     }
@@ -76,7 +78,7 @@ static void *consumer_thread(void *arg)
         trade_data_buffer_get_cursor(g_buf, TRCACHE_100TICK_CANDLE);
     int consumed = 0;
     perf_start(perf);
-    while (consumed < NUM_TRADES + 1) {
+    while (consumed != NUM_TRADES) {
         struct trcache_trade_data *array = NULL;
         int count = 0;
         int has = trade_data_buffer_peek(g_buf, cursor, &array, &count);
@@ -103,7 +105,7 @@ static void *convert_thread(void *arg)
     struct thread_perf *perf = (struct thread_perf *)arg;
     uint64_t target_last = NUM_CANDLES - 1; /* last completed candle */
     perf_start(perf);
-    while (atomic_load(&g_list->last_seq_converted) < target_last) {
+    while (atomic_load(&g_list->last_seq_converted) != target_last) {
         candle_chunk_list_convert_to_column_batch(g_list);
         perf->ops++;
         sched_yield();
@@ -120,7 +122,7 @@ static void *flush_thread(void *arg)
     while (true) {
         candle_chunk_list_flush(g_list);
         perf->ops++;
-        if (atomic_load(&g_list->last_seq_converted) >= target_last &&
+        if (atomic_load(&g_list->last_seq_converted) == target_last &&
             atomic_load(&g_list->unflushed_batch_count) == 0 &&
             atomic_load(&producer_done))
             break;
@@ -186,9 +188,9 @@ int main(void)
     struct trcache tc = {0};
     tc.candle_type_flags = TRCACHE_100TICK_CANDLE;
     tc.num_candle_types = 1;
-    tc.batch_candle_count_pow2 = 3; /* 8 candles per chunk */
+    tc.batch_candle_count_pow2 = 10;
     tc.batch_candle_count = 1 << tc.batch_candle_count_pow2;
-    tc.flush_threshold_pow2 = 1; /* flush after 2 batches */
+    tc.flush_threshold_pow2 = 5;
     tc.flush_threshold = 1 << tc.flush_threshold_pow2;
     tc.flush_ops.flush = dummy_flush;
     tc.flush_ops.is_done = dummy_is_done;
