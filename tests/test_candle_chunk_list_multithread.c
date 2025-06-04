@@ -12,12 +12,13 @@
 #include "pipeline/trade_data_buffer.h"
 
 #define TRADES_PER_CANDLE 100
-#define NUM_CANDLES 10000
+#define NUM_CANDLES 100000
 #define NUM_TRADES (TRADES_PER_CANDLE * NUM_CANDLES)
 
 static struct trade_data_buffer *g_buf;
 static struct candle_chunk_list *g_list;
 static _Atomic int producer_done = 0;
+static _Atomic int done = 0;
 
 struct thread_perf {
 	struct timespec start;
@@ -68,10 +69,11 @@ static void *producer_thread(void *arg)
 		.price = (double)NUM_TRADES,
 		.volume = 1.0
 	};
-	trade_data_buffer_push(g_buf, &td, NULL);
+	trade_data_buffer_push(g_buf, &td, &free_list);
 	perf->ops++;
 	perf_end(perf);
 	atomic_store(&producer_done, 1);
+	printf("Producer is done\n");
 	return NULL;
 }
 
@@ -104,44 +106,44 @@ static void *consumer_thread(void *arg)
 		}
 	}
 	perf_end(perf);
+	printf("Consumer is done\n");
+	atomic_store(&done, 1);
 	return NULL;
 }
 
 static void *convert_thread(void *arg)
 {
 	struct thread_perf *perf = (struct thread_perf *)arg;
-	uint64_t target_last = NUM_CANDLES - 1; /* last completed candle */
+	uint64_t target_last = NUM_CANDLES - 2; /* last completed candle */
 	perf_start(perf);
 	printf("Converter thread started (tid=%lu, pid=%d)\n",
 		   (unsigned long)pthread_self(), getpid());
 	fflush(stdout);
-	while (atomic_load(&g_list->last_seq_converted) != target_last) {
+	while (atomic_load(&done) != 1) {
 		candle_chunk_list_convert_to_column_batch(g_list);
 		perf->ops++;
 		sched_yield();
 	}
 	perf_end(perf);
+	printf("Converter is done\n");
 	return NULL;
 }
 
 static void *flush_thread(void *arg)
 {
 	struct thread_perf *perf = (struct thread_perf *)arg;
-	uint64_t target_last = NUM_CANDLES - 1;
+	uint64_t target_last = NUM_CANDLES - 2;
 	perf_start(perf);
 	printf("Flusher thread started (tid=%lu, pid=%d)\n",
 		   (unsigned long)pthread_self(), getpid());
 	fflush(stdout);
-	while (true) {
+	while (atomic_load(&done) != 1) {
 		candle_chunk_list_flush(g_list);
 		perf->ops++;
-		if (atomic_load(&g_list->last_seq_converted) == target_last &&
-			atomic_load(&g_list->unflushed_batch_count) == 0 &&
-			atomic_load(&producer_done))
-			break;
 		sched_yield();
 	}
 	perf_end(perf);
+	printf("Flusher is done\n");
 	return NULL;
 }
 
@@ -166,10 +168,10 @@ static void *reader_thread(void *arg)
 	printf("Reader thread started (tid=%lu, pid=%d)\n",
 		   (unsigned long)pthread_self(), getpid());
 	fflush(stdout);
-	while (true) {
-		uint64_t last = atomic_load(&g_list->last_seq_converted);
-		if (last >= 4) {
-			int ret = candle_chunk_list_copy_backward_by_seq(g_list, last, 5,
+	while (atomic_load(&done) != 1) {
+		uint64_t last = atomic_load(&g_list->mutable_seq);
+		if (last >= 10) {
+			int ret = candle_chunk_list_copy_backward_by_seq(g_list, last-1, 5,
 					batch, mask);
 			if (ret == 0) {
 				for (int i = 0; i < batch->num_candles; i++) {
@@ -178,10 +180,6 @@ static void *reader_thread(void *arg)
 				perf->ops++;
 			}
 		}
-		if (atomic_load(&producer_done) &&
-			last >= NUM_CANDLES - 1 &&
-			atomic_load(&g_list->unflushed_batch_count) == 0)
-			break;
 		sched_yield();
 	}
 	perf_end(perf);
