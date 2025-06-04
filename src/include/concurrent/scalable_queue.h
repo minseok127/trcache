@@ -26,7 +26,7 @@ void scq_destroy(struct scalable_queue *scq);
  * @brief   Enqueue a datum into the queue.
  *
  * @param   scq:   Queue instance.
- * @param   datum: Pointer of scalar.
+ * @param   datum: Pointer of scalar to enqueue.
  */
 void scq_enqueue(struct scalable_queue *scq, void *datum);
 

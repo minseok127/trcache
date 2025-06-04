@@ -298,7 +298,7 @@ static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
  * @brief   Enqueue the given datum into the queue.
  *
  * @param   scq:   Queue instance.
- * @param   datum: Pointer to datum to enqueue.
+ * @param   datum: Pointer or scalar to enqueue.
  */
 void scq_enqueue(struct scalable_queue *scq, void *datum)
 {
