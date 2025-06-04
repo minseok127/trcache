@@ -587,7 +587,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	struct candle_chunk_list_head_version *head_version, *new_ver;
 	struct candle_chunk *chunk, *last_chunk = NULL;
 
-	if (flush_batch_count < 0) {
+	if (flush_batch_count <= 0) {
 		return;
 	}
 
