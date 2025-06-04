@@ -1,4 +1,8 @@
 #define _GNU_SOURCE
+/**
+ * @file   concurrent/scalable_queue.c
+ * @brief  Implementation of the scalable_queue data structure.
+ */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,20 +19,20 @@
 
 /*
  * scq_node - Linked list node
- * @next: pointer to the next inserted node
- * @datum: scalar or pointer
+ * @next:  Pointer to the next inserted node.
+ * @datum: Scalar or pointer value.
  *
  * When scq_enqueue is called, an scq_node is allocated and inserted into the
  * linked list queue. When scq_dequeue is called, the nodes are detached from
- * the shared linked list and attached into thread-local linked list.
+ * the shared linked list and attached into the thread-local linked list.
  */
 struct scq_node {
 	struct scq_node *next;
 	void *datum;
 };
 
-/* 
- * During initialization, the scalable_queue is assigned a unique ID. 
+/*
+ * During initialization, the scalable_queue is assigned a unique ID.
  * This ID is later used when threads access the dequeued nodes.
  */
 _Atomic int global_scq_id_flag;
@@ -45,11 +49,11 @@ struct scq_dequeued_node_list {
 };
 
 /*
- * shared_sentinel and shared_tail are used for every dequeue threads.
+ * shared_sentinel and shared_tail are used for every dequeue thread.
  * They will push the free node into the shared linked list.
  *
  * local_head and local_tail are used for enqueue thread only. The thread will
- * detach the nodes from shared linked list into the local list.
+ * detach the nodes from the shared linked list into the local list.
  */
 struct scq_free_node_list {
 	struct scq_node shared_sentinel;
@@ -60,7 +64,7 @@ struct scq_free_node_list {
 
 /*
  * New nodes are inserted into tail.
- * thread idx is used to determine the start index of round-robin.
+ * Thread idx is used to determine the start index of round-robin.
  */
 struct scq_tls_data {
 	struct scq_dequeued_node_list dequeued_node_list;
@@ -73,11 +77,11 @@ struct scq_tls_data {
 _Thread_local static struct scq_tls_data *tls_data_ptr_arr[MAX_SCQ_NUM];
 
 /*
- * scalable_queue - main data structure to manage queue
- * @tls_data_ptr_list: each thread's scq_tls_data pointers
- * @spinlock: spinlock to manage thread-local data structures
- * @scq_id: global id of the scalable_queue
- * @thread_num: number of threads
+ * scalable_queue - Main data structure to manage queue
+ * @tls_data_ptr_list: Each thread's scq_tls_data pointer.
+ * @spinlock:          Spinlock to manage thread-local data structures.
+ * @scq_id:            Global ID of the scalable_queue.
+ * @thread_num:        Number of threads.
  */
 struct scalable_queue {
 	struct scq_tls_data *tls_data_ptr_list[MAX_THREAD_NUM];
@@ -88,8 +92,10 @@ struct scalable_queue {
 
 _Thread_local static struct scalable_queue *tls_scq_ptr_arr[MAX_SCQ_NUM];
 
-/*
- * Returns pointer to an scalable_queue, or NULL on failure.
+/**
+ * @brief Create a new scalable_queue instance.
+ *
+ * @return Pointer to queue on success, NULL on failure.
  */
 struct scalable_queue *scq_init(void)
 {
@@ -134,8 +140,10 @@ struct scalable_queue *scq_init(void)
 	return scq;
 }
 
-/*
- * Destroy the given scalable_queue.
+/**
+ * @brief Destroy the given scalable_queue and free all resources.
+ *
+ * @param   scq Queue instance returned by scq_init().
  */
 void scq_destroy(struct scalable_queue *scq)
 {
@@ -207,9 +215,8 @@ void scq_destroy(struct scalable_queue *scq)
 	free(scq);
 }
 
-/*
- * Has this scalable_queue been accessed by this thread before?
- * If not, initialize thread local data.
+/**
+ * @brief Ensure thread-local data exists for the calling thread.
  */
 static void check_and_init_scq_tls_data(struct scalable_queue *scq)
 {
@@ -246,9 +253,8 @@ static void check_and_init_scq_tls_data(struct scalable_queue *scq)
 	tls_scq_ptr_arr[scq->scq_id] = scq;
 }
 
-/*
- * If there is free node, return it.
- * Otherwise call malloc().
+/**
+ * If there is a free node available, return it; otherwise allocate one.
  */
 static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
 {
@@ -288,8 +294,11 @@ static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
 	return node;
 }
 
-/*
- * Enqueue the given datum into the queue.
+/**
+ * @brief Enqueue the given datum into the queue.
+ *
+ * @param   scq   Queue instance.
+ * @param   datum Pointer to datum to enqueue.
  */
 void scq_enqueue(struct scalable_queue *scq, void *datum)
 {
@@ -312,12 +321,12 @@ void scq_enqueue(struct scalable_queue *scq, void *datum)
 	prev_tail->next = node;
 }
 
-/*
- * Return the given nodes into enqueue thread's free node list.
+/**
+ * @brief Return detached nodes back to the enqueue thread's free list.
  */
 static void scq_free_nodes(struct scalable_queue *scq,
-	struct scq_node *initial_head_node, struct scq_node *tail_node,
-	int enqueue_thread_idx)
+        struct scq_node *initial_head_node, struct scq_node *tail_node,
+        int enqueue_thread_idx)
 {
 	struct scq_tls_data *tls_data = scq->tls_data_ptr_list[enqueue_thread_idx];
 	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
@@ -332,13 +341,14 @@ static void scq_free_nodes(struct scalable_queue *scq,
 	prev_tail->next = initial_head_node;
 }
 
-/*
- * Dequeue node from thread local linked list.
- * If the list is empty, return false.
+/**
+ * @brief Dequeue a node from the thread-local list.
+ *
+ * @return true if a datum was popped.
  */
 static bool pop_from_dequeued_list(struct scalable_queue *scq,
-	struct scq_dequeued_node_list *dequeued_node_list,
-	void **datum, int enqueue_thread_idx)
+        struct scq_dequeued_node_list *dequeued_node_list,
+        void **datum, int enqueue_thread_idx)
 {
 	struct scq_node *node = NULL;
 
@@ -367,9 +377,10 @@ static bool pop_from_dequeued_list(struct scalable_queue *scq,
 	return true;
 }
 
-/*
- * Dequeue the datum from the scalable_queue.
- * Return true if there is dequeued node.
+/**
+ * @brief Dequeue a datum from the scalable_queue.
+ *
+ * @return true if an element was dequeued.
  */
 bool scq_dequeue(struct scalable_queue *scq, void **datum)
 {
