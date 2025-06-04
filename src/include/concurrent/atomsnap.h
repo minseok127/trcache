@@ -1,33 +1,29 @@
 #ifndef ATOMSNAP_H
 #define ATOMSNAP_H
-#ifdef __cplusplus
-extern "C" {
-#endif /* __cplusplus */
 
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 /*
- * A data structure inside atomsnap.c for managing versions of a specific
- * object. Readers and writers accessing the same gate handle multiple versions
- * of the same object.
+ * atomsnap_gate - Gate for atomic version read/write
+ *
+ * Readers and writers using the same gate access different versions of an
+ * object concurrently.
  */
 typedef struct atomsnap_gate atomsnap_gate;
 
 /*
- * atomsnap_version - target object's version
- * @object: pointer to the actual data of this version
- * @free_context: context to be used inside the user-defined free function
- * @gate: which object this version belongs to
- * @opaque: data structure inside atomsnap.c used for version management
+ * atomsnap_version - Target object's version
  *
- * Writers obtain a pointer to atomsnap_version through atomsnap_make_version().
- * Then the writers insert their own object into the version and set the
- * @free_context to be used in the user-defined version free function.
+ * Writers obtain a pointer to atomsnap_version through atomsnap_make_version()
+ * and populate @object and @free_context as needed.  The @gate and @opaque
+ * fields are managed internally.
  *
- * Initialization of gate and opaque is performed inside
- * atomsnap_make_version(), so users don't need to modify them explicitly.
+ * @object:       Pointer to the actual data of this version.
+ * @free_context: Context used by the user-defined free function.
+ * @gate:         Gate this version belongs to.
+ * @opaque:       Internal data for version management.
  */
 typedef struct atomsnap_version {
 	void *object;
@@ -37,30 +33,17 @@ typedef struct atomsnap_version {
 } atomsnap_version;
 
 /*
- * atomsnap_init_context - atomsnap_init_gate's argument
- * @atomsnap_alloc_impl: user-defined memory allocation function
- * @atomsnap_free_impl: user-defined memory free function
- * @num_extra_control_blocks: Number of extra control blocks
+ * atomsnap_init_context - Parameters for atomsnap_init_gate()
  *
- * To manage a specific object with multiple versions, an atomsnap_gate must be
- * created using atomsnap_init_gate().
+ * Users supply custom allocation and free callbacks and optionally request
+ * extra control blocks.
  *
- * For this, the user must define a custom memory allocation function and a
- * custom memory deallocation function. These functions should be set in the
- * function pointer of atmosnap_init_context and then passed to
- * atomsnap_init_gate().
+ * @atomsnap_alloc_impl:  User-defined version allocation function.
+ * @atomsnap_free_impl:   User-defined version free function.
+ * @num_extra_control_blocks: Number of extra control blocks to create.
  *
- * By default, a gate holds a single control block. If num_extra_control_blocks
- * is 0, the gate operates with just that one control block. Otherwise, multiple
- * control blocks are created, each referred to as a slot. Slot index 0
- * represents the default control block, while indexes starting from 1
- * correspond to the slots in the extra control block array. For gates using
- * multiple slots, functions labeled with the slot keyword should be used.
- *
- * Note that the user-defined atomsnap_alloc_impl() and atomsnap_free_impl() are
- * not limited to just allocating and freeing atomsnap_version. They can also
- * manage other elements as needed by the user. But the gate and opaque fields
- * of atomsnap_version must not be modified by users.
+ * If @num_extra_control_blocks is zero, a single control block is used. When
+ * greater than zero, slots 1..N are provided in addition to the default slot 0.
  */
 typedef struct atomsnap_init_context {
 	struct atomsnap_version *(*atomsnap_alloc_impl)(void* alloc_arg);
@@ -68,59 +51,80 @@ typedef struct atomsnap_init_context {
 	int num_extra_control_blocks;
 } atomsnap_init_context;
 
-/*
- * Returns pointer to an atomsnap_gate, or NULL on failure.
+/**
+ * @brief   Create a new atomsnap_gate instance.
+ *
+ * @param   ctx: Initialization context.
+ *
+ * @return  Pointer to an atomsnap_gate on success, NULL on failure.
  */
 struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx);
 
-/*
- * Destroy the atomsnap_gate.
+/**
+ * @brief   Destroy the given atomsnap_gate.
+ *
+ * @param   gate: Gate returned by atomsnap_init_gate().
  */
 void atomsnap_destroy_gate(struct atomsnap_gate *gate);
 
-/*
- * Allocate memory for an atomsnap_version. This function internally calls
- * the user-defined version allocation function with @alloc_arg as an argument.
+/**
+ * @brief   Allocate a new atomsnap_version via the user-defined callback.
  *
- * Note that the version's gate and opaque are initialized, but object and
- * free_context are not explicitly initialized within this function, as they may
- * have been set by the user-defined function.
+ * The returned version has its gate and internal opaque data initialized. The
+ * caller is responsible for populating the object and free_context fields.
+ *
+ * @param   gate:       Target gate returned by atomsnap_init_gate().
+ * @param   alloc_arg:  Argument forwarded to the allocation callback.
+ *
+ * @return  Pointer to a new atomsnap_version on success, NULL on failure.
  */
 struct atomsnap_version *atomsnap_make_version(struct atomsnap_gate *gate,
-	void *alloc_arg);
+        void *alloc_arg);
 
-/*
- * Atomically acquire the current version. The returned version is guaranteed
- * not to be deallocated until atomsnap_release_version() is called.
+/**
+ * @brief   Atomically acquire the current version from a slot.
+ *
+ * @param   gate:     Target gate.
+ * @param   slot_idx: Control block slot index (0 for the default slot).
+ *
+ * @return  Pointer to the acquired version.
  */
 struct atomsnap_version *atomsnap_acquire_version_slot(
-	struct atomsnap_gate *gate, int slot_idx);
+        struct atomsnap_gate *gate, int slot_idx);
 
-/*
- * This function pairs with atomsnap_acquire_version(). It must be called when
- * the usage of a version is complete. Within this version, if it is ensured
- * that no threads are referencing the given version, the user-defined version
- * free function is invoked.
+/**
+ * @brief   Release a version previously acquired with atomsnap_acquire_version().
  *
- * Note that the deallocation of memory for both the version and its object
- * pointer is entirely handled by the user-defined function.
+ * If the reference count reaches zero, the user-defined free callback is
+ * invoked. Memory for the version and its object is managed by that callback.
+ *
+ * @param   version: Version to release.
  */
 void atomsnap_release_version(struct atomsnap_version *version);
 
-/*
- * Writer's function. This function replaces the version of the gate into the
- * given version, unconditionally.
+/**
+ * @brief   Replace the version in the given slot unconditionally.
+ *
+ * @param   gate:       Target gate.
+ * @param   slot_idx:   Control block slot index.
+ * @param   new_ver:    New version to register.
  */
 void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
-	struct atomsnap_version *new_ver);
+        struct atomsnap_version *new_ver);
 
-/*
- * Writer's function. This function replaces the version of the gate into the
- * given version, only when the latest version is the given old_version.
+/**
+ * @brief   Conditionally replace the version if @old_ver matches.
+ *
+ * @param   gate:       Target gate.
+ * @param   slot_idx:   Control block slot index.
+ * @param   old_ver:    Expected current version.
+ * @param   new_ver:    New version to register.
+ *
+ * @return  true on successful exchange, false otherwise.
  */
 bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
-	int slot_idx, struct atomsnap_version *old_ver,
-	struct atomsnap_version *new_ver);
+        int slot_idx, struct atomsnap_version *old_ver,
+        struct atomsnap_version *new_ver);
 
 /*
  * Convenience wrappers that preserve perfect backward compatibility:
