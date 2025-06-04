@@ -16,7 +16,7 @@ struct symbol_entry;
  * @unflushed_batch_count: Batches waiting to be flushed to storage.
  */
 struct sched_stage_snapshot {
-  uint64_t produced_count;
+	uint64_t produced_count;
 	uint64_t num_completed;
 	uint64_t num_converted;
 	int unflushed_batch_count;
