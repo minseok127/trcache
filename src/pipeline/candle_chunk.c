@@ -40,7 +40,7 @@ static struct atomsnap_version *row_page_version_alloc(
 #endif
 
 	if (!row_page) {
-		errmsg(stderr, "#candle_row_page allocation failedn\n");
+		errmsg(stderr, "#candle_row_page allocation failed\n");
 		return NULL;
 	} else {
 		memset(row_page, 0, sizeof(struct candle_row_page));
@@ -116,7 +116,7 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 
 	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count);
 	if (chunk->column_batch == NULL) {
-		errmsg(stderr, "Failure on trcache_batch_alloc_on_head()\n");
+		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
 		pthread_spin_destroy(&chunk->spinlock);
 		atomsnap_destroy_gate(chunk->row_gate);
 		free(chunk);
@@ -229,9 +229,9 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
 		if (next_page_idx != cur_page_idx) {
-			/*
-			 * Page is fully converted. Tigger the grace period.
-			 */
+		/*
+		* Page is fully converted. Trigger the grace period.
+		*/
 			atomsnap_exchange_version_slot(
 				chunk->row_gate, cur_page_idx, NULL);
 			atomsnap_release_version(page_version);
@@ -645,5 +645,5 @@ col_copy_volume:
 	/* Fall through */
 
 col_copy_done:
-    return n;
+	return n;
 }
