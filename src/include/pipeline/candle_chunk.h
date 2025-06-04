@@ -97,7 +97,7 @@ static inline int candle_chunk_calc_page_idx(int record_index)
 }
 
 /**
- * @brief   Compute page index from a linear record index.
+ * @brief   Compute row index from a linear record index.
  *
  * @param   record_index: Linear index of the record in the chunk.
  *
