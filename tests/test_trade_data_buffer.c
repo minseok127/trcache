@@ -7,8 +7,8 @@
 #include "pipeline/trade_data_buffer.h"
 #include "trcache.h"
 
-#define NUM_ENTRIES 100
-#define NUM_CONSUMERS 2
+#define NUM_ENTRIES 10000000
+#define NUM_CONSUMERS 11
 
 struct consumer_arg {
 	struct trade_data_buffer *buf;
@@ -43,6 +43,7 @@ static void *consumer_thread(void *arg)
 	}
 
 	assert(consumed == NUM_ENTRIES);
+	printf("Consumed: %d\n", consumed);
 	return NULL;
 }
 
@@ -88,6 +89,8 @@ int main(void)
 	}
 
 	assert(buf->produced_count == NUM_ENTRIES);
+
+	printf("Produced: %ld\n", buf->produced_count);
 
 	trade_data_buffer_destroy(buf);
 	return 0;
