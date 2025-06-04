@@ -16,9 +16,9 @@ struct symbol_entry;
  * @unflushed_batch_count: Batches waiting to be flushed to storage.
  */
 struct sched_stage_snapshot {
-       uint64_t produced_count;
-       uint64_t num_completed;
-       uint64_t num_converted;
+	uint64_t produced_count;
+	uint64_t num_completed;
+	uint64_t num_converted;
 	int unflushed_batch_count;
 };
 
@@ -38,25 +38,17 @@ struct sched_stage_rate {
 };
 
 /*
- * sched_pipeline_rate - Aggregated per-stage throughput for one symbol.
- *
- * @stage_rate: Array indexed by candle type.
- */
-struct sched_pipeline_rate {
-	struct sched_stage_rate stage_rate[TRCACHE_NUM_CANDLE_TYPE];
-};
-
-/*
  * sched_pipeline_stats - Statistics for all pipeline stages of one symbol.
  *
  * @timestamp_ns: Monotonic timestamp when the stats were captured.
  * @stage_counts: Array indexed by candle type holding per-stage counters.
- * @rates:        Throughput calculated from the previous snapshot.
+ * @stage_rates:  Array indexed by candle type holding per-stage throughput.
  */
 struct sched_pipeline_stats {
 	uint64_t timestamp_ns;
 	struct sched_stage_snapshot stage_counts[TRCACHE_NUM_CANDLE_TYPE];
-	struct sched_pipeline_rate rates;
+	struct sched_stage_rate stage_rates[TRCACHE_NUM_CANDLE_TYPE];
+	struct sched_pipeline_rate stage_rates;
 };
 
 /**
@@ -66,8 +58,8 @@ struct sched_pipeline_stats {
  *
  * The function fetches the latest stage counters from the symbol's pipeline
  * data structures, computes input rates relative to @entry->pipeline_stats,
- * stores the results in @entry->pipeline_stats.rates and updates the snapshot
- * with the new values.
+ * stores the results in @entry->pipeline_stats.stage_rates and updates the 
+ * snapshot with the new values.
  */
 void sched_pipeline_calc_rates(struct symbol_entry *entry);
 
