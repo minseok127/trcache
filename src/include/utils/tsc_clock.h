@@ -6,7 +6,7 @@
 #include <unistd.h>
 
 /**
- * @brief   Fetch the current 64‑bit cycle counter value.
+ * @brief   Fetch the current 64-bit cycle counter value.
  *
  * @return  Monotonically increasing cycle count (raw hardware counter).
  */
@@ -20,9 +20,9 @@ static inline uint64_t tsc_cycles(void)
 /**
  * @brief   Obtain the counter frequency in cycles per second.
  *
- * Performs a lazy, one‑off calibration the first time it is called. Uses an
- * approximate 10 ms sleep to measure elapsed cycles against real time. The
- * result is cached in a process‑local static variable and returned on all
+ * Performs a lazy, one-off calibration the first time it is called. Uses an
+ * approximate 10 ms sleep to measure elapsed cycles against real time. The
+ * result is cached in a process-local static variable and returned on all
  * subsequent calls without locking.
  *
  * @return  Cycles per second (double precision).
@@ -32,7 +32,7 @@ static inline double tsc_cycles_per_sec(void)
 	static double cached_hz = 0.0;
 
 	if (__builtin_expect(cached_hz == 0.0, 0)) {
-		struct timespec ts0, ts1, req = {0, 10 * 1000 * 1000}; /* 10 ms */
+		struct timespec ts0, ts1, req = {0, 10 * 1000 * 1000}; /* 10 ms */
 		uint64_t c0, c1, ns;
 
 		clock_gettime(CLOCK_MONOTONIC_RAW, &ts0);
