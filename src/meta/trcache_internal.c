@@ -161,18 +161,34 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	tc->num_candle_types = trcache_candle_type_count(ctx->candle_type_flags);
-	tc->num_workers = ctx->num_worker_threads;
-	tc->candle_type_flags = ctx->candle_type_flags;
-	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
-	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
-	tc->flush_threshold_pow2 = ctx->flush_threshold_pow2;
-	tc->flush_threshold = (1 << ctx->flush_threshold_pow2);
-	tc->flush_ops = ctx->flush_ops;
+       tc->num_candle_types = trcache_candle_type_count(ctx->candle_type_flags);
+       tc->num_workers = ctx->num_worker_threads;
+       tc->candle_type_flags = ctx->candle_type_flags;
+       tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
+       tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
+       tc->flush_threshold_pow2 = ctx->flush_threshold_pow2;
+       tc->flush_threshold = (1 << ctx->flush_threshold_pow2);
+       tc->flush_ops = ctx->flush_ops;
 
-	pthread_mutex_init(&tc->tls_id_mutex, NULL);
+       pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
-	return tc;
+       tc->worker_state_arr = calloc(tc->num_workers,
+               sizeof(struct worker_state));
+       if (tc->worker_state_arr == NULL) {
+               errmsg(stderr, "worker_state_arr allocation failed\n");
+               pthread_mutex_destroy(&tc->tls_id_mutex);
+               symbol_table_destroy(tc->symbol_table);
+               pthread_key_delete(tc->pthread_trcache_key);
+               free(tc);
+               return NULL;
+       }
+
+       for (int i = 0; i < tc->num_workers; i++) {
+               tc->worker_state_arr[i].worker_id = i;
+               worker_stat_reset(&tc->worker_state_arr[i].stat);
+       }
+
+       return tc;
 }
 
 /**
@@ -195,11 +211,13 @@ void trcache_destroy(struct trcache *tc)
 		}
 	}
 
-	pthread_mutex_destroy(&tc->tls_id_mutex);
+       pthread_mutex_destroy(&tc->tls_id_mutex);
 
-	symbol_table_destroy(tc->symbol_table);
+       symbol_table_destroy(tc->symbol_table);
 
-	free(tc);
+       free(tc->worker_state_arr);
+
+       free(tc);
 }
 
 /**
