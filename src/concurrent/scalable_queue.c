@@ -1,8 +1,8 @@
-#define _GNU_SOURCE
 /**
  * @file   concurrent/scalable_queue.c
  * @brief  Implementation of the scalable_queue data structure.
  */
+#define _GNU_SOURCE
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,9 +93,9 @@ struct scalable_queue {
 _Thread_local static struct scalable_queue *tls_scq_ptr_arr[MAX_SCQ_NUM];
 
 /**
- * @brief Create a new scalable_queue instance.
+ * @brief   Create a new scalable_queue instance.
  *
- * @return Pointer to queue on success, NULL on failure.
+ * @return  Pointer to queue on success, NULL on failure.
  */
 struct scalable_queue *scq_init(void)
 {
@@ -141,9 +141,9 @@ struct scalable_queue *scq_init(void)
 }
 
 /**
- * @brief Destroy the given scalable_queue and free all resources.
+ * @brief   Destroy the given scalable_queue and free all resources.
  *
- * @param   scq Queue instance returned by scq_init().
+ * @param   scq: Queue instance returned by scq_init().
  */
 void scq_destroy(struct scalable_queue *scq)
 {
@@ -216,7 +216,7 @@ void scq_destroy(struct scalable_queue *scq)
 }
 
 /**
- * @brief Ensure thread-local data exists for the calling thread.
+ * @brief   Ensure thread-local data exists for the calling thread.
  */
 static void check_and_init_scq_tls_data(struct scalable_queue *scq)
 {
@@ -295,10 +295,10 @@ static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
 }
 
 /**
- * @brief Enqueue the given datum into the queue.
+ * @brief   Enqueue the given datum into the queue.
  *
- * @param   scq   Queue instance.
- * @param   datum Pointer to datum to enqueue.
+ * @param   scq:   Queue instance.
+ * @param   datum: Pointer to datum to enqueue.
  */
 void scq_enqueue(struct scalable_queue *scq, void *datum)
 {
@@ -322,7 +322,7 @@ void scq_enqueue(struct scalable_queue *scq, void *datum)
 }
 
 /**
- * @brief Return detached nodes back to the enqueue thread's free list.
+ * @brief   Return detached nodes back to the enqueue thread's free list.
  */
 static void scq_free_nodes(struct scalable_queue *scq,
         struct scq_node *initial_head_node, struct scq_node *tail_node,
@@ -342,9 +342,9 @@ static void scq_free_nodes(struct scalable_queue *scq,
 }
 
 /**
- * @brief Dequeue a node from the thread-local list.
+ * @brief   Dequeue a node from the thread-local list.
  *
- * @return true if a datum was popped.
+ * @return  true if a datum was popped.
  */
 static bool pop_from_dequeued_list(struct scalable_queue *scq,
         struct scq_dequeued_node_list *dequeued_node_list,
@@ -378,9 +378,9 @@ static bool pop_from_dequeued_list(struct scalable_queue *scq,
 }
 
 /**
- * @brief Dequeue a datum from the scalable_queue.
+ * @brief   Dequeue a datum from the scalable_queue.
  *
- * @return true if an element was dequeued.
+ * @return  true if an element was dequeued.
  */
 bool scq_dequeue(struct scalable_queue *scq, void **datum)
 {
