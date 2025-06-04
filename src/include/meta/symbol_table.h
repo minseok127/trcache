@@ -17,16 +17,16 @@
  *
  * @candle_chunk_list_ptrs:   Pointer array of candle_chunk_list.
  * @trd_buf:                  Buffer for holding trade data.
+ * @pipeline_stats:           Snapshot of pipeline counters and throughput.
  * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
- * @pipeline_stats:           Snapshot of pipeline counters and throughput.
  */
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
 	struct trade_data_buffer *trd_buf;
+	struct sched_pipeline_stats pipeline_stats;
 	char *symbol_str;
 	int id;
-	struct sched_pipeline_stats pipeline_stats;
 };
 
 /*
