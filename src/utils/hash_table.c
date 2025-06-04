@@ -264,6 +264,13 @@ int ht_insert(struct ht_hash_table *t, const void *key, size_t len, void *value)
 	}
 
 	node->key = t->dup_func(key, len);
+	if (node->key == NULL) {
+		/* duplication failed: avoid inserting incomplete entry */
+		free(node);
+		errmsg(stderr, "Failure on key duplication\n");
+		return -1;
+	}
+
 	node->len = len;
 	node->value = value;
 	node->next = t->buckets[idx];
