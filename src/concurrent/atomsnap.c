@@ -89,10 +89,11 @@ struct atomsnap_gate {
 };
 
 /**
- * @brief Create a new atomsnap_gate.
+ * @brief   Create a new atomsnap_gate.
  *
- * @param ctx Initialization context.
- * @return Pointer to atomsnap_gate on success, NULL on failure.
+ * @param   ctx: Initialization context.
+ *
+ * @return  Pointer to atomsnap_gate on success, NULL on failure.
  */
 struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 {
@@ -135,9 +136,9 @@ struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 }
 
 /**
- * @brief Destroy the given atomsnap_gate and all associated versions.
+ * @brief   Destroy the given atomsnap_gate and all associated versions.
  *
- * @param gate Pointer returned by atomsnap_init_gate().
+ * @param   gate: Pointer returned by atomsnap_init_gate().
  */
 void atomsnap_destroy_gate(struct atomsnap_gate *gate)
 {
@@ -159,11 +160,12 @@ void atomsnap_destroy_gate(struct atomsnap_gate *gate)
 }
 
 /**
- * @brief Allocate a new atomsnap_version using the allocation callback.
+ * @brief  Allocate a new atomsnap_version using the allocation callback.
  *
- * @param gate              Target gate.
- * @param alloc_version_arg Argument forwarded to the allocation callback.
- * @return Pointer to the newly allocated version, or NULL on failure.
+ * @param  gate:              Target gate.
+ * @param  alloc_version_arg: Argument forwarded to the allocation callback.
+ *
+ * @return  Pointer to the newly allocated version, or NULL on failure.
  *
  * The version's gate and opaque fields are initialized; the caller should
  * populate object and free_context as appropriate.
@@ -188,11 +190,12 @@ static inline _Atomic uint64_t *atomsnap__slot(
 }
 
 /**
- * @brief Atomically acquire the current version from a slot.
+ * @brief   Atomically acquire the current version from a slot.
  *
- * @param gate     Pointer to the gate.
- * @param slot_idx Zero-based slot index (0 for the default control block).
- * @return Pointer to the acquired version.
+ * @param   gate:     Pointer to the gate.
+ * @param   slot_idx: Zero-based slot index (0 for the default control block).
+ *
+ * @return  Pointer to the acquired version.
  */
 struct atomsnap_version *atomsnap_acquire_version_slot(
         struct atomsnap_gate *gate, int slot_idx)
@@ -203,13 +206,13 @@ struct atomsnap_version *atomsnap_acquire_version_slot(
 }
 
 /**
- * @brief Release a version acquired via atomsnap_acquire_version_slot().
+ * @brief   Release a version acquired via atomsnap_acquire_version_slot().
  *
  * The inner reference counter is decremented and the user-defined free
  * function is called when it reaches zero. Memory management is delegated
  * entirely to that callback.
  *
- * @param version Pointer to the version being released.
+ * @param   version: Pointer to the version being released.
  */
 void atomsnap_release_version(struct atomsnap_version *version)
 {
@@ -223,11 +226,11 @@ void atomsnap_release_version(struct atomsnap_version *version)
 }
 
 /**
- * @brief Unconditionally replace the version in a slot with @new_version.
+ * @brief   Unconditionally replace the version in a slot with @new_version.
  *
- * @param gate        Target gate.
- * @param slot_idx    Control block slot index.
- * @param new_version New version to register.
+ * @param   gate:        Target gate.
+ * @param   slot_idx:    Control block slot index.
+ * @param   new_version: New version to register.
  */
 void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
         struct atomsnap_version *new_version)
@@ -266,14 +269,14 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 }
 
 /**
- * @brief Conditionally replace the version if @old_version matches.
+ * @brief   Conditionally replace the version if @old_version matches.
  *
- * @param gate        Target gate.
- * @param slot_idx    Control block slot index.
- * @param old_version Expected current version.
- * @param new_version New version to register.
+ * @param   gate:        Target gate.
+ * @param   slot_idx:    Control block slot index.
+ * @param   old_version: Expected current version.
+ * @param   new_version: New version to register.
  *
- * @return true on success, false otherwise.
+ * @return  true on success, false otherwise.
  */
 bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
         int slot_idx, struct atomsnap_version *old_version,
