@@ -8,6 +8,7 @@
 #include "pipeline/candle_chunk_list.h"
 #include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
+#include "sched/sched_pipeline_stats.h"
 
 #include "trcache.h"
 
@@ -18,12 +19,14 @@
  * @trd_buf:                  Buffer for holding trade data.
  * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
+ * @pipeline_stats:           Snapshot of pipeline counters and throughput.
  */
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
 	struct trade_data_buffer *trd_buf;
 	char *symbol_str;
 	int id;
+	struct sched_pipeline_stats pipeline_stats;
 };
 
 /*
