@@ -20,7 +20,21 @@ struct worker_state {
 	bool done;
 };
 
+/**
+ * @brief   Initialise the worker thread state.
+ *
+ * @param   state:     Target state structure.
+ * @param   worker_id: Numeric identifier for the worker.
+ *
+ * @return  0 on success, -1 on failure.
+ */
 int worker_state_init(struct worker_state *state, int worker_id);
+
+/**
+ * @brief   Destroy resources held by @state.
+ *
+ * @param   state:   Previously initialised worker_state pointer.
+ */
 void worker_state_destroy(struct worker_state *state);
 
 /**
