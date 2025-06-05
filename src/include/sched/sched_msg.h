@@ -9,6 +9,8 @@
 #include <linux/futex.h>
 
 #include "concurrent/scalable_queue.h"
+#include "sched/worker_stat_board.h"
+#include "trcache.h"
 
 /*
  * sched_ack - Acknowledgement object for synchronous messages.
@@ -26,11 +28,11 @@
  *     'atomic_load_explicit(&done, memory_order_acquire)' to observe @res.
  */
 struct sched_ack {
-	_Atomic int done;
-	union {
-		int err;
-		void *ptr;
-	} res;
+       _Atomic int done;
+       union {
+               int err;
+               void *ptr;
+       } res;
 };
 
 /** Message kinds recognised by the scheduler (expand as needed). */
@@ -43,7 +45,22 @@ typedef enum sched_msg_type {
 	 * error.
 	 */
 	SCHED_MSG_NONE = 0,
+	SCHED_MSG_ADD_WORK,
+	SCHED_MSG_REMOVE_WORK,
 } sched_msg_type;
+
+/*
+ * sched_work_cmd - Work descriptor for scheduler messages.
+ *
+ * @symbol_id:   Identifier of the target symbol.
+ * @stage:       Pipeline stage to execute.
+ * @candle_type: Candle type parameter for apply/convert/flush.
+ */
+struct sched_work_cmd {
+       int symbol_id;
+       worker_stat_stage_type stage;
+       trcache_candle_type candle_type;
+};
 
 /*
  * sched_msg - Generic message wrapper.
@@ -57,9 +74,9 @@ typedef enum sched_msg_type {
  * recycle the object via sched_msg_recycle() .
  */
 struct sched_msg {
-	enum sched_msg_type type;
-	void *payload;
-	struct sched_ack *ack;
+       enum sched_msg_type type;
+       void *payload;
+       struct sched_ack *ack;
 };
 
 typedef struct scalable_queue sched_msg_queue;

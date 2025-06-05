@@ -9,6 +9,7 @@
 #include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
 #include "sched/sched_pipeline_stats.h"
+#include "sched/worker_stat_board.h"
 
 #include "trcache.h"
 
@@ -18,15 +19,20 @@
  * @candle_chunk_list_ptrs:   Pointer array of candle_chunk_list.
  * @trd_buf:                  Buffer for holding trade data.
  * @pipeline_stats:           Snapshot of pipeline counters and throughput.
+ * @in_progress:              Worker ownership per stage and candle type.
+ *                             Each slot holds -1 if no worker processes the
+ *                             combination or the ID of the worker that claimed
+ *                             it via CAS.
  * @symbol_str:               Null-terminated canonical symbol string.
  * @id:                       Symbol ID.
  */
 struct symbol_entry {
-	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
-	struct trade_data_buffer *trd_buf;
-	struct sched_pipeline_stats pipeline_stats;
-	char *symbol_str;
-	int id;
+        struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
+        struct trade_data_buffer *trd_buf;
+        struct sched_pipeline_stats pipeline_stats;
+        _Atomic int in_progress[WORKER_STAT_STAGE_NUM][TRCACHE_NUM_CANDLE_TYPE];
+        char *symbol_str;
+        int id;
 };
 
 /*
@@ -102,7 +108,7 @@ int symbol_table_lookup_symbol_id(
 /**
  * @brief   Register a new symbol or return existing ID.
  *
- * Inserts the string into the internal hash map and expands 
+ * Inserts the string into the internal hash map and expands
  * symbol table via copy-on-write if needed.
  *
  * @param   table:      Pointer to symbol_table.
