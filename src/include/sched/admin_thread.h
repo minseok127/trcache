@@ -18,7 +18,7 @@ struct admin_state {
 /**
  * @brief   Initialise the admin thread state.
  *
- * @param   state   Target state structure.
+ * @param   state:   Target state structure.
  *
  * @return  0 on success, -1 on failure.
  */
@@ -27,7 +27,7 @@ int admin_state_init(struct admin_state *state);
 /**
  * @brief   Destroy resources held by @state.
  *
- * @param   state   Previously initialised admin_state pointer.
+ * @param   state:   Previously initialised admin_state pointer.
  */
 void admin_state_destroy(struct admin_state *state);
 
