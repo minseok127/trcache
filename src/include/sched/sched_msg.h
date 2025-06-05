@@ -28,23 +28,15 @@
  *     'atomic_load_explicit(&done, memory_order_acquire)' to observe @res.
  */
 struct sched_ack {
-       _Atomic int done;
-       union {
-               int err;
-               void *ptr;
-       } res;
+	_Atomic int done;
+	union {
+		int err;
+		void *ptr;
+	} res;
 };
 
-/** Message kinds recognised by the scheduler (expand as needed). */
+/** Message kinds recognised by the scheduler. */
 typedef enum sched_msg_type {
-	/*
-	 * The implementation currently does not define any concrete
-	 * message types.  However, an empty enum is illegal in C and
-	 * prevents the project from building.  Provide a dummy value so
-	 * that users can extend the list without hitting a compilation
-	 * error.
-	 */
-	SCHED_MSG_NONE = 0,
 	SCHED_MSG_ADD_WORK,
 	SCHED_MSG_REMOVE_WORK,
 } sched_msg_type;
@@ -57,9 +49,9 @@ typedef enum sched_msg_type {
  * @candle_type: Candle type parameter for apply/convert/flush.
  */
 struct sched_work_cmd {
-       int symbol_id;
-       worker_stat_stage_type stage;
-       trcache_candle_type candle_type;
+	int symbol_id;
+	worker_stat_stage_type stage;
+	trcache_candle_type candle_type;
 };
 
 /*
@@ -74,9 +66,9 @@ struct sched_work_cmd {
  * recycle the object via sched_msg_recycle() .
  */
 struct sched_msg {
-       enum sched_msg_type type;
-       void *payload;
-       struct sched_ack *ack;
+	enum sched_msg_type type;
+	void *payload;
+	struct sched_ack *ack;
 };
 
 typedef struct scalable_queue sched_msg_queue;
