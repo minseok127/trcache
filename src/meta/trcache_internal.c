@@ -175,38 +175,39 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 
 	tc->sched_msg_free_list = scq_init();
 	if (tc->sched_msg_free_list == NULL) {
-	errmsg(stderr, "sched_msg_free_list allocation failed\n");
-	pthread_mutex_destroy(&tc->tls_id_mutex);
-	symbol_table_destroy(tc->symbol_table);
-	pthread_key_delete(tc->pthread_trcache_key);
-	free(tc);
-	return NULL;
-	}
-
-       tc->worker_state_arr = calloc(tc->num_workers, sizeof(struct worker_state));
-       if (tc->worker_state_arr == NULL) {
-               errmsg(stderr, "worker_state_arr allocation failed\n");
-               pthread_mutex_destroy(&tc->tls_id_mutex);
-               symbol_table_destroy(tc->symbol_table);
-               pthread_key_delete(tc->pthread_trcache_key);
-               free(tc);
-               return NULL;
-       }
-
-       for (int i = 0; i < tc->num_workers; i++) {
-	if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
-		errmsg(stderr, "worker_state_init failed\n");
-		for (int j = 0; j < i; j++)
-			worker_state_destroy(&tc->worker_state_arr[j]);
-		free(tc->worker_state_arr);
-		scq_destroy(tc->sched_msg_free_list);
+		errmsg(stderr, "sched_msg_free_list allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
 	}
-       }
+
+	tc->worker_state_arr = calloc(tc->num_workers, sizeof(struct worker_state));
+	if (tc->worker_state_arr == NULL) {
+		errmsg(stderr, "worker_state_arr allocation failed\n");
+		pthread_mutex_destroy(&tc->tls_id_mutex);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
+
+	for (int i = 0; i < tc->num_workers; i++) {
+		if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
+			errmsg(stderr, "worker_state_init failed\n");
+			for (int j = 0; j < i; j++) {
+				worker_state_destroy(&tc->worker_state_arr[j]);
+			}
+			free(tc->worker_state_arr);
+			scq_destroy(tc->sched_msg_free_list);
+			pthread_mutex_destroy(&tc->tls_id_mutex);
+			symbol_table_destroy(tc->symbol_table);
+			pthread_key_delete(tc->pthread_trcache_key);
+			free(tc);
+			return NULL;
+		}
+	}
 
 	return tc;
 }
@@ -235,9 +236,9 @@ void trcache_destroy(struct trcache *tc)
 	
 	symbol_table_destroy(tc->symbol_table);
 	
-	       for (int i = 0; i < tc->num_workers; i++) {
+	for (int i = 0; i < tc->num_workers; i++) {
 		worker_state_destroy(&tc->worker_state_arr[i]);
-	       }
+	}
 	
 	scq_destroy(tc->sched_msg_free_list);
 	
