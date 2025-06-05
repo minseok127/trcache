@@ -201,7 +201,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
-		}
+	}
 
 	for (int i = 0; i < tc->num_workers; i++) {
 		if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
