@@ -10,7 +10,7 @@
  * @sched_msg_queue: Queue of scheduler messages for admin commands.
  * @done:            Flag signalled during shutdown.
  */
-	struct admin_state {
+struct admin_state {
 	sched_msg_queue *sched_msg_queue;
 	bool done;
 };
