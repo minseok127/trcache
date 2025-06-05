@@ -21,16 +21,16 @@ struct sched_stage_snapshot {
 };
 
 /*
- * sched_stage_rate - Throughput metrics derived from stage snapshots.
+ * sched_stage_rate - Exponential moving-average throughput.
  *
- * @produced_per_sec:  Rate of trade records produced.
- * @completed_per_sec: Rate of completed row candles.
- * @converted_per_sec: Rate of conversions to column batches.
+ * @produced_rate:  EMA of trades produced per second.
+ * @completed_rate: EMA of completed row candles per second.
+ * @converted_rate: EMA of conversions to column batches per second.
  */
 struct sched_stage_rate {
-	double produced_per_sec;
-	double completed_per_sec;
-	double converted_per_sec;
+	uint64_t produced_rate;
+	uint64_t completed_rate;
+	uint64_t converted_rate;
 };
 
 /*
@@ -52,8 +52,8 @@ struct sched_pipeline_stats {
  * @param   entry: Symbol entry whose counters are polled.
  *
  * The function fetches the latest stage counters from the symbol's pipeline
- * data structures, computes input rates relative to @entry->pipeline_stats,
- * stores the results in @entry->pipeline_stats.stage_rates and updates the 
+ * data structures, computes per-stage input rates, updates the exponential
+ * moving averages in @entry->pipeline_stats.stage_rates and refreshes the
  * snapshot with the new values.
  */
 void sched_pipeline_calc_rates(struct symbol_entry *entry);
