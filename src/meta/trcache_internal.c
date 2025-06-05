@@ -183,6 +183,16 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
+	if (admin_state_init(&tc->admin_state) != 0) {
+		errmsg(stderr, "admin_state_init failed\n");
+		scq_destroy(tc->sched_msg_free_list);
+		pthread_mutex_destroy(&tc->tls_id_mutex);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
+
 	tc->worker_state_arr = calloc(tc->num_workers, sizeof(struct worker_state));
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
@@ -235,7 +245,8 @@ void trcache_destroy(struct trcache *tc)
 	pthread_mutex_destroy(&tc->tls_id_mutex);
 	
 	symbol_table_destroy(tc->symbol_table);
-	
+	admin_state_destroy(&tc->admin_state);
+
 	for (int i = 0; i < tc->num_workers; i++) {
 		worker_state_destroy(&tc->worker_state_arr[i]);
 	}
