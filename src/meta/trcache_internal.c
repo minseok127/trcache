@@ -13,6 +13,7 @@
 #include "meta/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
+#include "sched/sched_msg.h"
 
 #include "trcache.h"
 
@@ -172,6 +173,16 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
+	tc->sched_msg_free_list = scq_init();
+	if (tc->sched_msg_free_list == NULL) {
+	errmsg(stderr, "sched_msg_free_list allocation failed\n");
+	pthread_mutex_destroy(&tc->tls_id_mutex);
+	symbol_table_destroy(tc->symbol_table);
+	pthread_key_delete(tc->pthread_trcache_key);
+	free(tc);
+	return NULL;
+	}
+
 	tc->worker_state_arr = calloc(tc->num_workers, sizeof(struct worker_state));
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
@@ -183,8 +194,22 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	}
 
 	for (int i = 0; i < tc->num_workers; i++) {
-		tc->worker_state_arr[i].worker_id = i;
-		worker_stat_reset(&tc->worker_state_arr[i].stat);
+	tc->worker_state_arr[i].worker_id = i;
+	worker_stat_reset(&tc->worker_state_arr[i].stat);
+	tc->worker_state_arr[i].sched_msg_queue = scq_init();
+	if (tc->worker_state_arr[i].sched_msg_queue == NULL) {
+	errmsg(stderr, "sched_msg_queue allocation failed\n");
+	for (int j = 0; j < i; j++) {
+	scq_destroy(tc->worker_state_arr[j].sched_msg_queue);
+	}
+	free(tc->worker_state_arr);
+	scq_destroy(tc->sched_msg_free_list);
+	pthread_mutex_destroy(&tc->tls_id_mutex);
+	symbol_table_destroy(tc->symbol_table);
+	pthread_key_delete(tc->pthread_trcache_key);
+	free(tc);
+	return NULL;
+	}
 	}
 
 	return tc;
@@ -211,11 +236,17 @@ void trcache_destroy(struct trcache *tc)
 	}
 
 	pthread_mutex_destroy(&tc->tls_id_mutex);
-
+	
 	symbol_table_destroy(tc->symbol_table);
-
+	
+	for (int i = 0; i < tc->num_workers; i++) {
+	scq_destroy(tc->worker_state_arr[i].sched_msg_queue);
+	}
+	
+	scq_destroy(tc->sched_msg_free_list);
+	
 	free(tc->worker_state_arr);
-
+	
 	free(tc);
 }
 

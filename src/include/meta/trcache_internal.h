@@ -9,6 +9,7 @@
 #include "utils/hash_table.h"
 #include "utils/list_head.h"
 #include "sched/worker_state.h"
+#include "sched/sched_msg.h"
 
 #include "trcache.h"
 
@@ -50,6 +51,7 @@ struct trcache_tls_data {
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
  * @flush_ops:               User-supplied callbacks used for flush.
  * @worker_state_arr:        Per-worker state array of length @num_workers.
+ * @sched_msg_free_list:     Free list for scheduler message objects.
  */
 struct trcache {
 	pthread_key_t pthread_trcache_key;
@@ -66,6 +68,7 @@ struct trcache {
 	int flush_threshold_pow2;
 	struct trcache_flush_ops flush_ops;
 	struct worker_state *worker_state_arr;
+	sched_msg_free_list *sched_msg_free_list;
 };
 
 /**
