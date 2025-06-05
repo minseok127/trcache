@@ -4,6 +4,32 @@
 #include "trcache.h"
 #include "sched/worker_stat_board.h"
 #include "sched/sched_msg.h"
+#include "utils/list_head.h"
+#include "utils/hash_table.h"
+
+/*
+ * worker_work_key - Hashable identifier for a work item.
+ *
+ * @symbol_id: ID of the symbol associated with the work.
+ * @stage:     Worker pipeline stage.
+ * @candle_idx:Candle type index for the stage.
+ */
+struct worker_work_key {
+	int symbol_id;
+	uint8_t stage;
+	uint8_t candle_idx;
+};
+
+/*
+ * worker_work_item - Node stored in a worker's work list.
+ *
+ * @node: List linkage for iteration.
+ * @key:  Work identifier used in the hash table.
+ */
+struct worker_work_item {
+	struct list_head node;
+	struct worker_work_key key;
+};
 
 /**
  * worker_state - Per-worker runtime data.
@@ -12,12 +38,16 @@
  * @stat:            Performance counters split per pipeline stage.
  * @sched_msg_queue: Queue for scheduler messages destined to this worker.
  * @done:            Flag signalled during shutdown.
+ * @work_map:        Hash table tracking work owned by this worker.
+ * @work_list:       List of work items for iteration order.
  */
 struct worker_state {
 	int worker_id;
 	struct worker_stat_board stat;
 	sched_msg_queue *sched_msg_queue;
 	bool done;
+	struct ht_hash_table *work_map;
+	struct list_head work_list;
 };
 
 /**

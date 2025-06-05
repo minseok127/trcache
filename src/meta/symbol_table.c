@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <stdatomic.h>
 
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
@@ -271,11 +272,17 @@ static struct symbol_entry *init_symbol_entry(
 
 	entry->trd_buf = trade_data_buffer_init(tc);
 
-	if (entry->trd_buf == NULL ) {
+	if (entry->trd_buf == NULL) {
 		errmsg(stderr, "Allocation of trade_data_buffer is failed\n");
 		free(entry->symbol_str);
 		free(entry);
 		return NULL;
+	}
+
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		for (int t = 0; t < TRCACHE_NUM_CANDLE_TYPE; t++) {
+			atomic_init(&entry->in_progress[s][t], -1);
+		}
 	}
 
 	for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
@@ -292,8 +299,8 @@ static struct symbol_entry *init_symbol_entry(
 		candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
 		if (candle_chunk_list_ptr == NULL) {
 			errmsg(stderr, "Candle chunk list allocation is failed\n");
-			
-			for (int i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++ ) {
+
+			for (int i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++) {
 				if (entry->candle_chunk_list_ptrs[i] != NULL) {
 					destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[i]);
 				}
@@ -316,7 +323,7 @@ static struct symbol_entry *init_symbol_entry(
 /**
  * @brief   Register a new symbol or return existing ID.
  *
- * Inserts the string into the internal hash map and expands 
+ * Inserts the string into the internal hash map and expands
  * symbol table via copy-on-write if needed.
  *
  * @param   tc:         Pointer to the #trcache.
