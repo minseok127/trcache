@@ -15,9 +15,9 @@
  * @candle_idx:Candle type index for the stage.
  */
 struct worker_work_key {
-       int symbol_id;
-       uint8_t stage;
-       uint8_t candle_idx;
+	int symbol_id;
+	uint8_t stage;
+	uint8_t candle_idx;
 };
 
 /*
@@ -27,8 +27,8 @@ struct worker_work_key {
  * @key:  Work identifier used in the hash table.
  */
 struct worker_work_item {
-        struct list_head node;
-        struct worker_work_key key;
+	struct list_head node;
+	struct worker_work_key key;
 };
 
 /**
