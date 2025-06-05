@@ -503,10 +503,9 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		&list->mutable_seq, memory_order_acquire);
 	uint64_t last_seq_converted = atomic_load_explicit(
 		&list->last_seq_converted, memory_order_acquire);
-	struct candle_chunk *chunk = list->converting_chunk;
 	struct atomsnap_version *head_snap = NULL;
-	int num_completed, num_converted, start_idx, end_idx;
-	int num_flush_batch = 0;
+	int num_completed, num_converted, start_idx, end_idx, num_flush_batch = 0;
+	struct candle_chunk *chunk;
 
 	/* No more candles to convert */
 	if (mutable_seq == UINT64_MAX || mutable_seq - 1 == last_seq_converted) {
@@ -515,6 +514,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 
 	/* Pin the head for safe node traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
+
+	chunk = list->converting_chunk;
 
 	while (true) {
 		assert(chunk != NULL);

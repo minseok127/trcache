@@ -147,24 +147,23 @@ void worker_state_destroy(struct worker_state *state)
 int worker_thread_main(struct trcache *cache, int worker_id)
 {
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
+	struct sched_work_cmd *cmd = NULL;
 	struct sched_msg *msg = NULL;
+	struct symbol_entry *entry = NULL;
+	uint64_t key;
+	int idx, expected = -1;
 
 	while (!atomic_load(state->done)) {
 		while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
-			struct sched_work_cmd *cmd = msg->payload;
-			struct symbol_entry *entry = NULL;
-			uint64_t key;
-			int idx;
-
+			cmd = msg->payload;
 			switch (msg->type) {
 				case SCHED_MSG_ADD_WORK:
-					entry 
-						= symbol_table_lookup_entry(
-							cache->symbol_table, cmd->symbol_id);
-	if (entry) {
-	idx = worker_ct_to_idx(cmd->candle_type);
-	int expected = -1;
-	if (atomic_compare_exchange_strong(
+					entry = symbol_table_lookup_entry(cache->symbol_table,
+						cmd->symbol_id);
+					if (entry) {
+						idx = worker_ct_to_idx(cmd->candle_type);
+						expected = -1;
+						if (atomic_compare_exchange_strong(
 	&entry->in_progress[cmd->stage][idx],
 	&expected, state->worker_id)) {
 	key = pack_work_key(cmd->symbol_id,
