@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = sched_msg.o sched_pipeline_stats.o admin_thread.o worker_thread.o worker_state.o
+OBJS = sched_msg.o sched_pipeline_stats.o admin_thread.o worker_thread.o
 
 .PHONY: all clean
 

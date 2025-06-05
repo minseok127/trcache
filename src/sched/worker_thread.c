@@ -4,6 +4,35 @@
  */
 
 #include "sched/worker_thread.h"
+#include "utils/log.h"
+
+int worker_state_init(struct worker_state *state, int worker_id)
+{
+	if (!state) {
+			return -1;
+	}
+
+	state->worker_id = worker_id;
+	worker_stat_reset(&state->stat);
+	state->sched_msg_queue = scq_init();
+	if (state->sched_msg_queue == NULL) {
+			errmsg(stderr, "sched_msg_queue allocation failed\n");
+			return -1;
+	}
+	state->done = false;
+
+	return 0;
+}
+
+void worker_state_destroy(struct worker_state *state)
+{
+	if (state == NULL) {
+			return;
+	}
+
+	scq_destroy(state->sched_msg_queue);
+	state->sched_msg_queue = NULL;
+}
 
 /**
  * @brief   Entry point for a worker thread.
