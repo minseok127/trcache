@@ -6,6 +6,13 @@
 #include "sched/admin_thread.h"
 #include "utils/log.h"
 
+/**
+ * @brief   Initialise the admin thread state.
+ *
+ * @param   state:   Target state structure.
+ *
+ * @return  0 on success, -1 on failure.
+ */
 int admin_state_init(struct admin_state *state)
 {
 	if (!state) {
@@ -22,6 +29,11 @@ int admin_state_init(struct admin_state *state)
 	return 0;
 }
 
+/**
+ * @brief   Destroy resources held by @state.
+ *
+ * @param   state:   Previously initialised admin_state pointer.
+ */
 void admin_state_destroy(struct admin_state *state)
 {
 	if (state == NULL) {
