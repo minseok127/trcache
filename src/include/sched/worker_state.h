@@ -17,7 +17,22 @@ struct worker_state {
 	sched_msg_queue *sched_msg_queue;
 };
 
+/**
+ * @brief   Initialise per-worker state.
+ *
+ * @param   state:     pointer to worker_state to initialise.
+ * @param   worker_id: numeric worker ID for this state.
+ *
+ * @return  0 on success, -1 on failure.
+ */
 int worker_state_init(struct worker_state *state, int worker_id);
+
+/**
+ * @brief   Destroy a worker_state instance.
+ *
+ * @param   state: pointer returned from worker_state_init().
+ */
 void worker_state_destroy(struct worker_state *state);
+
 
 #endif /* WORKER_STATE_H */
