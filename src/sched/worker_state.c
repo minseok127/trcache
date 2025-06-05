@@ -11,8 +11,9 @@
  */
 int worker_state_init(struct worker_state *state, int worker_id)
 {
-	if (!state)
+	if (!state) {
 		return -1;
+	}
 
 	state->worker_id = worker_id;
 	worker_stat_reset(&state->stat);
@@ -32,8 +33,9 @@ int worker_state_init(struct worker_state *state, int worker_id)
  */
 void worker_state_destroy(struct worker_state *state)
 {
-	if (state == NULL)
+	if (state == NULL) {
 		return;
+	}
 
 	scq_destroy(state->sched_msg_queue);
 }
