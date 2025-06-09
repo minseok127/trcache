@@ -87,7 +87,7 @@ static void *consumer_thread(void *arg)
 	printf("Consumer thread started (tid=%lu, pid=%d)\n",
 		   (unsigned long)pthread_self(), getpid());
 	fflush(stdout);
-	while (consumed != NUM_TRADES) {
+	while (consumed != NUM_TRADES + 1) {
 		struct trcache_trade_data *array = NULL;
 		int count = 0;
 		int has = trade_data_buffer_peek(g_buf, cursor, &array, &count);
