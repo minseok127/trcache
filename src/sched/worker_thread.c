@@ -359,13 +359,17 @@ void worker_state_destroy(struct worker_state *state)
 /**
  * @brief   Entry point for a worker thread.
  *
- * @param   cache:      Pointer to the global trcache instance.
- * @param   worker_id:  Numeric identifier for the worker.
+ * Accepts a pointer to ::worker_thread_args.
  *
- * @return  0 on success, negative value on error.
+ * @param   arg: See ::worker_thread_args.
+ *
+ * @return  Always returns NULL.
  */
-int worker_thread_main(struct trcache *cache, int worker_id)
+void *worker_thread_main(void *arg)
 {
+	struct worker_thread_args *args = (struct worker_thread_args *)arg;
+	struct trcache *cache = args->cache;
+	int worker_id = args->worker_id;
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
 	struct sched_msg *msg = NULL;
 
@@ -378,6 +382,6 @@ int worker_thread_main(struct trcache *cache, int worker_id)
 		worker_run_all_work(cache, state);
 	}
 
-	return 0;
+	return NULL;
 }
 
