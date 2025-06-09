@@ -257,7 +257,7 @@ static void worker_execute_item(struct trcache *cache,
 			break;
 		case WORKER_STAT_STAGE_CONVERT:
 			worker_do_convert(state, entry, type);
-    		break;
+			break;
 		case WORKER_STAT_STAGE_FLUSH:
 			worker_do_flush(state, entry, type);
 			break;
