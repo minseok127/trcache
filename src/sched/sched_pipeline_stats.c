@@ -74,32 +74,35 @@ static void update_stage_rate(struct sched_stage_rate *r,
 /**
  * @brief   Refresh pipeline snapshot and update throughput rates.
  *
- * @param   entry: Symbol entry whose counters are polled.
+ * @param   entry:              Symbol entry whose counters are polled.
+ * @param   candle_type_flags:  Valid candle type flags.
  *
- * The function polls the symbol's pipeline counters, computes per-stage
- * throughput and updates the running exponential averages in
- * @entry->pipeline_stats.
+ * The function fetches the latest stage counters from the symbol's pipeline
+ * data structures, computes per-stage input rates, updates the exponential
+ * moving averages in @entry->pipeline_stats.stage_rates and refreshes the
+ * snapshot with the new values.
  */
-void sched_pipeline_calc_rates(struct symbol_entry *entry)
+void sched_pipeline_calc_rates(struct symbol_entry *entry,
+	trcache_candle_type_flags candle_type_flags);
 {
-	struct sched_pipeline_stats snapshot;
+	struct sched_pipeline_stats snapshot = { 0, };
 	struct sched_pipeline_stats *prev = &entry->pipeline_stats;
 	uint64_t dt_ns;
 	int i;
 
 	snapshot.timestamp_ns = tsc_cycles_to_ns(tsc_cycles());
 
-	for (i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++) {
-		snapshot_stage(entry, i, &snapshot.stage_snaps[i]);
-	}
-
 	dt_ns = snapshot.timestamp_ns - prev->timestamp_ns;
 
-	for (i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++) {
+	for (uint32_t m = candle_type_flags; m != 0; m &= m - 1) {
+		i = __builtin_ctz(m);
+		
+		snapshot_stage(entry, i, &snapshot.stage_snaps[i]);
+
 		update_stage_rate(&prev->stage_rates[i],
 			&snapshot.stage_snaps[i], &prev->stage_snaps[i],
 			(prev->timestamp_ns == 0) ? 0 : dt_ns);
-		
+
 		prev->stage_snaps[i] = snapshot.stage_snaps[i];
 	}
 

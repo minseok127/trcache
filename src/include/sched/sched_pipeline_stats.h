@@ -49,13 +49,15 @@ struct sched_pipeline_stats {
 /**
  * @brief   Refresh pipeline snapshot and update throughput rates.
  *
- * @param   entry: Symbol entry whose counters are polled.
+ * @param   entry:              Symbol entry whose counters are polled.
+ * @param   candle_type_flags:  Valid candle type flags.
  *
  * The function fetches the latest stage counters from the symbol's pipeline
  * data structures, computes per-stage input rates, updates the exponential
  * moving averages in @entry->pipeline_stats.stage_rates and refreshes the
  * snapshot with the new values.
  */
-void sched_pipeline_calc_rates(struct symbol_entry *entry);
+void sched_pipeline_calc_rates(struct symbol_entry *entry,
+	trcache_candle_type_flags candle_type_flags);
 
 #endif /* SCHED_PIPELINE_STATS_H */
