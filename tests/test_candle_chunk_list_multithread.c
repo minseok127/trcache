@@ -102,7 +102,6 @@ static void *consumer_thread(void *arg)
 		} else {
 			if (atomic_load(&producer_done) && consumed >= NUM_TRADES + 1)
 				break;
-			sched_yield();
 		}
 	}
 	perf_end(perf);
@@ -122,7 +121,6 @@ static void *convert_thread(void *arg)
 	while (atomic_load(&done) != 1) {
 		candle_chunk_list_convert_to_column_batch(g_list);
 		perf->ops++;
-		sched_yield();
 	}
 	perf_end(perf);
 	printf("Converter is done\n");
@@ -140,7 +138,6 @@ static void *flush_thread(void *arg)
 	while (atomic_load(&done) != 1) {
 		candle_chunk_list_flush(g_list);
 		perf->ops++;
-		sched_yield();
 	}
 	perf_end(perf);
 	printf("Flusher is done\n");
@@ -180,7 +177,6 @@ static void *reader_thread(void *arg)
 				perf->ops++;
 			}
 		}
-		sched_yield();
 	}
 	perf_end(perf);
 	trcache_batch_free(batch);

@@ -1,12 +1,8 @@
 #ifndef SCHED_MSG_H
 #define SCHED_MSG_H
-
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <unistd.h>
-#include <sys/syscall.h>
-#include <linux/futex.h>
 
 #include "concurrent/scalable_queue.h"
 #include "sched/worker_stat_board.h"
@@ -102,65 +98,6 @@ void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg);
  *
  * @return  0 on success, -1 on error.
  */
-int sched_post_async(sched_msg_queue *q, struct sched_msg *msg);
-
-/**
- * @brief   Post a *synchronous* message and block until completion.
- *
- * @param   q:    Destination queue.
- * @param   msg:  Fully initialised message (@msg->ack != NULL).
-
- * @return  0 on success, -1 on error.
- */
-int sched_post_sync(sched_msg_queue *q, struct sched_msg *msg);
-
-/**
- * @brief   Busy‑wait + futex‑wait loop until @ack->done becomes non‑zero.
- *
- * Caller supplies @ack pointer it previously embedded in a sync message and
- * blocks indefinitely until the receiver calls sched_ack_ok() or
- * sched_ack_err().
- *
- * @return  0 if ack.done == 1 (success), or ack->res.err.
- */
-static inline int sched_futex_wait(struct sched_ack *ack)
-{
-	while (atomic_load_explicit(&ack->done, memory_order_acquire) == 0) {
-		syscall(SYS_futex, &ack->done, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0);
-	}
-	return (ack->done == 1) ? 0 : ack->res.err;
-}
-
-/**
- * @brief   Wake **one** thread blocked on the futex word @word.
- */
-static inline void sched_futex_wake(_Atomic int *word)
-{
-	syscall(SYS_futex, word, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
-}
-
-/**
- * @brief   Receiver marks *success* and wakes waiting sender.
- */
-static inline void sched_ack_ok(struct sched_msg *m, void *ret_ptr)
-{
-	if (m && m->ack) {
-		m->ack->res.ptr = ret_ptr;
-		atomic_store_explicit(&m->ack->done, 1, memory_order_release);
-		sched_futex_wake(&m->ack->done);
-	}
-}
-
-/**
- * @brief   Receiver marks *error* (negative errno) and wakes sender.
- */
-static inline void sched_ack_err(struct sched_msg *m, int err_code)
-{
-	if (m && m->ack) {
-		m->ack->res.err = err_code;
-		atomic_store_explicit(&m->ack->done, -1, memory_order_release);
-		sched_futex_wake(&m->ack->done);
-	}
-}
+int sched_post_msg(sched_msg_queue *q, struct sched_msg *msg);
 
 #endif /* SCHED_MSG_H */

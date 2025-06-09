@@ -82,7 +82,7 @@ void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg)
  *
  * @return  0 on success, -1 on error.
  */
-int sched_post_async(sched_msg_queue *q, struct sched_msg *msg)
+int sched_post_msg(sched_msg_queue *q, struct sched_msg *msg)
 {
 	if (q == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");
@@ -92,35 +92,6 @@ int sched_post_async(sched_msg_queue *q, struct sched_msg *msg)
 	msg->ack = NULL;
 
 	scq_enqueue(q, (void *)msg);
-
-	return 0;
-}
-
-/**
- * @brief   Post a *synchronous* message and block until completion.
- *
- * @param   q:    Destination queue.
- * @param   msg:  Fully initialised message (@msg->ack != NULL).
-
- * @return  0 on success, -1 on error.
- */
-int sched_post_sync(sched_msg_queue *q, struct sched_msg *msg)
-{
-	int rc;
-
-	if (q == NULL || msg == NULL || msg->ack == NULL) {
-		errmsg(stderr, "Invalid arguments\n");
-		return -1;
-	}
-
-	scq_enqueue(q, (void *)msg);
-
-	rc = sched_futex_wait(msg->ack);
-
-	if (rc != 0) {
-		errmsg(stderr, "Ack is error number\n");
-		return -1;
-	}
 
 	return 0;
 }

@@ -3,6 +3,7 @@
  * @brief  Implementation of pipeline statistics helpers.
  */
 #define _GNU_SOURCE
+#include <assert.h>
 #include <stdatomic.h>
 
 #include "sched/sched_pipeline_stats.h"
@@ -112,7 +113,6 @@ void sched_pipeline_calc_rates(struct symbol_entry *entry,
 	int i;
 
 	snapshot.timestamp_ns = tsc_cycles_to_ns(tsc_cycles());
-	}
 
 	dt_ns = snapshot.timestamp_ns - prev->timestamp_ns;
 
