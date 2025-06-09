@@ -167,7 +167,7 @@ static void *reader_thread(void *arg)
 	fflush(stdout);
 	while (atomic_load(&done) != 1) {
 		uint64_t last = atomic_load(&g_list->mutable_seq);
-		if (last >= 10) {
+		if (last >= 10 && last != UINT64_MAX) {
 			int ret = candle_chunk_list_copy_backward_by_seq(g_list, last-1, 5,
 					batch, mask);
 			if (ret == 0) {
