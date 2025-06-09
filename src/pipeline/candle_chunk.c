@@ -191,10 +191,10 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	 */
 	ops->init(&(row_page->rows[0]), trade);
 
-	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
-
 	candle_chunk_write_start_timestamp(chunk, page_idx, 0,
 		row_page->rows[0].start_timestamp);
+
+	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
 
 	return 0;
 }
