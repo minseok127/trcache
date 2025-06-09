@@ -137,13 +137,13 @@ void worker_state_destroy(struct worker_state *state)
 }
 
 /**
-* @brief   Entry point for a worker thread.
-*
-* @param   cache:      Pointer to the global trcache instance.
-* @param   worker_id:  Numeric identifier for the worker.
-*
-* @return  0 on success, negative value on error.
-*/
+ * @brief   Entry point for a worker thread.
+ *
+ * @param   cache:      Pointer to the global trcache instance.
+ * @param   worker_id:  Numeric identifier for the worker.
+ *
+ * @return  0 on success, negative value on error.
+ */
 int worker_thread_main(struct trcache *cache, int worker_id)
 {
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
@@ -151,49 +151,48 @@ int worker_thread_main(struct trcache *cache, int worker_id)
 	struct sched_msg *msg = NULL;
 	struct symbol_entry *entry = NULL;
 	uint64_t key;
-	int idx, expected = -1;
+	int idx, cur, expected = -1;
 
 	while (!atomic_load(state->done)) {
 		while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
 			cmd = msg->payload;
 			switch (msg->type) {
 				case SCHED_MSG_ADD_WORK:
-					entry = symbol_table_lookup_entry(cache->symbol_table,
-						cmd->symbol_id);
+					entry = symbol_table_lookup_entry(
+						cache->symbol_table, cmd->symbol_id);
 					if (entry) {
 						idx = worker_ct_to_idx(cmd->candle_type);
 						expected = -1;
 						if (atomic_compare_exchange_strong(
-	&entry->in_progress[cmd->stage][idx],
-	&expected, state->worker_id)) {
-	key = pack_work_key(cmd->symbol_id,
-	cmd->stage, cmd->candle_type);
-	worker_insert_work(state, key);
-	}
-	}
-	break;
-	case SCHED_MSG_REMOVE_WORK:
-	entry = symbol_table_lookup_entry(cache->symbol_table,
-	cmd->symbol_id);
-	if (entry) {
-	idx = worker_ct_to_idx(cmd->candle_type);
-	int cur = atomic_load(&entry->in_progress[cmd->stage][idx]);
-	if (cur == state->worker_id) {
-	atomic_store(&entry->in_progress[cmd->stage][idx], -1);
-	}
-	key = pack_work_key(cmd->symbol_id,
-	cmd->stage, cmd->candle_type);
-	worker_remove_work(state, key);
-	}
-	break;
-	default:
-	break;
-	}
+							&entry->in_progress[cmd->stage][idx],
+							&expected, state->worker_id)) {
+							key = pack_work_key(cmd->symbol_id,
+								cmd->stage, cmd->candle_type);
+							worker_insert_work(state, key);
+						}
+					}
+					break;
+				case SCHED_MSG_REMOVE_WORK:
+					entry = symbol_table_lookup_entry(
+						cache->symbol_table, cmd->symbol_id);
+					if (entry) {
+						idx = worker_ct_to_idx(cmd->candle_type);
+						cur = atomic_load(&entry->in_progress[cmd->stage][idx]);
+						if (cur == state->worker_id) {
+							atomic_store(
+								&entry->in_progress[cmd->stage][idx], -1);
+						}
+						key = pack_work_key(cmd->symbol_id,
+							cmd->stage, cmd->candle_type);
+						worker_remove_work(state, key);
+					}
+					break;
+				default:
+					break;
+			}
 
-	sched_msg_recycle(cache->sched_msg_free_list, msg);
-	} else {
-	sched_yield();
-	}
+			sched_msg_recycle(cache->sched_msg_free_list, msg);
+		}
 	}
 
 	return 0;
