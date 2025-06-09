@@ -147,6 +147,31 @@ static void *flush_thread(void *arg)
 static void check_candle(const struct trcache_candle_batch *b, int idx)
 {
 	uint64_t base = b->start_trade_id_array[idx];
+	bool match = true;
+	double open = b->open_array[idx];
+	double close = b->close_array[idx];
+	double high = b->high_array[idx];
+	double low = b->low_array[idx];
+	double volume = b->volume_array[idx];
+
+	if (base % TRADES_PER_CANDLE != 0)
+		match = false;
+	if (open != (double)base)
+		match = false;
+	if (close != (double)(base + TRADES_PER_CANDLE - 1))
+		match = false;
+	if (high != close)
+		match = false;
+	if (low != open)
+		match = false;
+	if (volume != (double)TRADES_PER_CANDLE)
+		match = false;
+	if (!match) {
+		printf("Candle mismatch idx=%d base=%lu open=%f close=%f high=%f low=%f volume=%f\n",
+			idx, base, open, close, high, low, volume);
+		fflush(stdout);
+	}
+
 	assert(base % TRADES_PER_CANDLE == 0);
 	assert(b->open_array[idx] == (double)base);
 	assert(b->close_array[idx] == (double)(base + TRADES_PER_CANDLE - 1));
