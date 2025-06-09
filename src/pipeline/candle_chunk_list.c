@@ -723,7 +723,7 @@ static int candle_chunk_list_copy_backward(
 	 * chunk toward the newest chunk.
 	 */
 	while (remains > 0) {
-		if (last_converted_seq < seq_end) {
+		if (last_converted_seq < seq_end || last_converted_seq == UINT64_MAX) {
 			start_record_idx = candle_chunk_clamp_seq(chunk, seq_start);
 			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
