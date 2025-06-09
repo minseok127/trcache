@@ -6,20 +6,29 @@
 #define _GNU_SOURCE
 #include "sched/worker_thread.h"
 #include "meta/symbol_table.h"
+#include "pipeline/trade_data_buffer.h"
+#include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table.h"
 #include "utils/log.h"
+#include "utils/tsc_clock.h"
 #include <sched.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 
-/*
-* pack_work_key - Create a 64-bit identifier for a work item.
-*
-* Combines @symbol_id, @stage and @type (converted to index) so it can
-* be used as a hash table key.
-*/
+/**
+ * @brief   Create a 64-bit identifier for a work item.
+ *
+ * Combines @p symbol_id, @p stage and @p type (converted to index) so it can
+ * be used as a hash table key.
+ *
+ * @param   symbol_id:  Numeric symbol identifier.
+ * @param   stage:      Stage in which the work belongs.
+ * @param   type:       Candle type mask.
+ *
+ * @return  Packed 64-bit key.
+ */
 static uint64_t pack_work_key(int symbol_id, worker_stat_stage_type stage,
-	trcache_candle_type type)
+        trcache_candle_type type)
 {
 	int idx = worker_ct_to_idx(type);
 	return ((uint64_t)(uint32_t)symbol_id << 32) |
@@ -27,9 +36,12 @@ static uint64_t pack_work_key(int symbol_id, worker_stat_stage_type stage,
 		(uint64_t)idx;
 }
 
-/*
-* worker_insert_work - Track a newly assigned work item.
-*/
+/**
+ * @brief   Track a newly assigned work item.
+ *
+ * @param   state:  Worker owning the item.
+ * @param   key:    Packed work identifier.
+ */
 static void worker_insert_work(struct worker_state *state, uint64_t key)
 {
 	struct worker_work_item *item = malloc(sizeof(*item));
@@ -47,9 +59,12 @@ static void worker_insert_work(struct worker_state *state, uint64_t key)
 	ht_insert(state->work_map, (void *)key, sizeof(void *), item);
 }
 
-/*
-* worker_remove_work - Drop a work item from the worker's set.
-*/
+/**
+ * @brief   Drop a work item from the worker's set.
+ *
+ * @param   state:  Worker owning the item.
+ * @param   key:    Packed work identifier.
+ */
 static void worker_remove_work(struct worker_state *state, uint64_t key)
 {
 	bool found = false;
@@ -62,7 +77,206 @@ static void worker_remove_work(struct worker_state *state, uint64_t key)
 
 	list_del(&item->node);
 	ht_remove(state->work_map, (void *)key, sizeof(void *));
-	free(item);
+        free(item);
+}
+
+/**
+ * @brief   Process a SCHED_MSG_ADD_WORK message.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   state:  Worker receiving the work.
+ * @param   cmd:    Work command payload.
+ */
+static void worker_handle_add_work(struct trcache *cache,
+        struct worker_state *state, struct sched_work_cmd *cmd)
+{
+        struct symbol_entry *entry = symbol_table_lookup_entry(
+                cache->symbol_table, cmd->symbol_id);
+        int idx, expected = -1;
+        uint64_t key;
+
+        if (!entry)
+                return;
+
+        idx = worker_ct_to_idx(cmd->candle_type);
+        if (atomic_compare_exchange_strong(&entry->in_progress[cmd->stage][idx],
+                        &expected, state->worker_id)) {
+                key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
+                worker_insert_work(state, key);
+        }
+}
+
+/**
+ * @brief   Process a SCHED_MSG_REMOVE_WORK message.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   state:  Worker owning the work.
+ * @param   cmd:    Work command payload.
+ */
+static void worker_handle_remove_work(struct trcache *cache,
+        struct worker_state *state, struct sched_work_cmd *cmd)
+{
+        struct symbol_entry *entry = symbol_table_lookup_entry(
+                cache->symbol_table, cmd->symbol_id);
+        uint64_t key;
+        int idx, cur;
+
+        if (!entry)
+                return;
+
+        idx = worker_ct_to_idx(cmd->candle_type);
+        cur = atomic_load(&entry->in_progress[cmd->stage][idx]);
+        if (cur == state->worker_id)
+                atomic_store(&entry->in_progress[cmd->stage][idx], -1);
+
+        key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
+        worker_remove_work(state, key);
+}
+
+/**
+ * @brief   Dispatch scheduler message handlers.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   state:  Worker receiving the message.
+ * @param   msg:    Scheduler message to process.
+ */
+static void worker_process_msg(struct trcache *cache, struct worker_state *state,
+        struct sched_msg *msg)
+{
+        struct sched_work_cmd *cmd = msg->payload;
+
+        switch (msg->type) {
+        case SCHED_MSG_ADD_WORK:
+                worker_handle_add_work(cache, state, cmd);
+                break;
+        case SCHED_MSG_REMOVE_WORK:
+                worker_handle_remove_work(cache, state, cmd);
+                break;
+        default:
+                break;
+        }
+}
+
+/**
+ * @brief   Consume trade data and update row candles.
+ *
+ * @param   state:  Worker context.
+ * @param   entry:  Target symbol entry.
+ * @param   type:   Candle type mask.
+ */
+static void worker_do_apply(struct worker_state *state, struct symbol_entry *entry,
+        trcache_candle_type type)
+{
+        struct trade_data_buffer *buf = entry->trd_buf;
+        struct trade_data_buffer_cursor *cur =
+                trade_data_buffer_get_cursor(buf, type);
+        struct candle_chunk_list *list =
+                entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+        struct trcache_trade_data *array = NULL;
+        int count = 0;
+        uint64_t start = tsc_cycles();
+        uint64_t work_count = 0;
+
+        while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
+                for (int i = 0; i < count; i++)
+                        candle_chunk_list_apply_trade(list, &array[i]);
+
+                trade_data_buffer_consume(buf, cur, count);
+                work_count += (uint64_t)count;
+        }
+
+        worker_stat_add_apply(&state->stat, type,
+                tsc_cycles() - start, work_count);
+}
+
+/**
+ * @brief   Convert row candles to a column batch.
+ *
+ * @param   state:  Worker context.
+ * @param   entry:  Target symbol entry.
+ * @param   type:   Candle type mask.
+ */
+static void worker_do_convert(struct worker_state *state,
+        struct symbol_entry *entry, trcache_candle_type type)
+{
+        struct candle_chunk_list *list =
+                entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+        uint64_t start = tsc_cycles();
+
+        candle_chunk_list_convert_to_column_batch(list);
+
+        worker_stat_add_convert(&state->stat, type,
+                tsc_cycles() - start, 1);
+}
+
+/**
+ * @brief   Flush converted batches.
+ *
+ * @param   state:  Worker context.
+ * @param   entry:  Target symbol entry.
+ * @param   type:   Candle type mask.
+ */
+static void worker_do_flush(struct worker_state *state, struct symbol_entry *entry,
+        trcache_candle_type type)
+{
+        struct candle_chunk_list *list =
+                entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+        uint64_t start = tsc_cycles();
+
+        candle_chunk_list_flush(list);
+
+        worker_stat_add_flush(&state->stat, type,
+                tsc_cycles() - start, 1);
+}
+
+/**
+ * @brief   Run one work item according to its stage.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   state:  Worker executing the item.
+ * @param   item:   Work item descriptor.
+ */
+static void worker_execute_item(struct trcache *cache, struct worker_state *state,
+        struct worker_work_item *item)
+{
+        struct symbol_entry *entry = symbol_table_lookup_entry(cache->symbol_table,
+                item->key.symbol_id);
+        trcache_candle_type type = (1 << item->key.candle_idx);
+
+        if (!entry)
+                return;
+
+        switch (item->key.stage) {
+        case WORKER_STAT_STAGE_APPLY:
+                worker_do_apply(state, entry, type);
+                break;
+        case WORKER_STAT_STAGE_CONVERT:
+                worker_do_convert(state, entry, type);
+                break;
+        case WORKER_STAT_STAGE_FLUSH:
+                worker_do_flush(state, entry, type);
+                break;
+        default:
+                break;
+        }
+}
+
+/**
+ * @brief   Iterate over all work items once.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   state:  Worker executing the items.
+ */
+static void worker_run_all_work(struct trcache *cache, struct worker_state *state)
+{
+        struct list_head *pos = state->work_list.next;
+
+        while (pos != &state->work_list) {
+                struct worker_work_item *item =
+                        list_entry(pos, struct worker_work_item, node);
+                worker_execute_item(cache, state, item);
+                pos = pos->next;
+        }
 }
 
 /**
@@ -146,55 +360,18 @@ void worker_state_destroy(struct worker_state *state)
  */
 int worker_thread_main(struct trcache *cache, int worker_id)
 {
-	struct worker_state *state = &cache->worker_state_arr[worker_id];
-	struct sched_work_cmd *cmd = NULL;
-	struct sched_msg *msg = NULL;
-	struct symbol_entry *entry = NULL;
-	uint64_t key;
-	int idx, cur, expected = -1;
+        struct worker_state *state = &cache->worker_state_arr[worker_id];
+        struct sched_msg *msg = NULL;
 
-	while (!atomic_load(state->done)) {
-		while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
-			cmd = msg->payload;
-			switch (msg->type) {
-				case SCHED_MSG_ADD_WORK:
-					entry = symbol_table_lookup_entry(
-						cache->symbol_table, cmd->symbol_id);
-					if (entry) {
-						idx = worker_ct_to_idx(cmd->candle_type);
-						expected = -1;
-						if (atomic_compare_exchange_strong(
-							&entry->in_progress[cmd->stage][idx],
-							&expected, state->worker_id)) {
-							key = pack_work_key(cmd->symbol_id,
-								cmd->stage, cmd->candle_type);
-							worker_insert_work(state, key);
-						}
-					}
-					break;
-				case SCHED_MSG_REMOVE_WORK:
-					entry = symbol_table_lookup_entry(
-						cache->symbol_table, cmd->symbol_id);
-					if (entry) {
-						idx = worker_ct_to_idx(cmd->candle_type);
-						cur = atomic_load(&entry->in_progress[cmd->stage][idx]);
-						if (cur == state->worker_id) {
-							atomic_store(
-								&entry->in_progress[cmd->stage][idx], -1);
-						}
-						key = pack_work_key(cmd->symbol_id,
-							cmd->stage, cmd->candle_type);
-						worker_remove_work(state, key);
-					}
-					break;
-				default:
-					break;
-			}
+        while (!state->done) {
+                while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
+                        worker_process_msg(cache, state, msg);
+                        sched_msg_recycle(cache->sched_msg_free_list, msg);
+                }
 
-			sched_msg_recycle(cache->sched_msg_free_list, msg);
-		}
-	}
+                worker_run_all_work(cache, state);
+        }
 
-	return 0;
+        return 0;
 }
 
