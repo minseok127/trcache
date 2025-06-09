@@ -13,34 +13,55 @@
 
 #define RATE_EMA_SHIFT 7 /* alpha = 1 / 2^7 */
 
+/**
+ * @brief   Update 64-bit exponential moving average.
+ *
+ * @param   ema:   Previous EMA value.
+ * @param   val:   New sample value.
+ *
+ * @return  Updated EMA value.
+ */
 static uint64_t ema_update_u64(uint64_t ema, uint64_t val)
 {
 	return ema + ((val - ema) >> RATE_EMA_SHIFT);
 }
 
+/**
+ * @brief   Capture pipeline counters for one candle type.
+ *
+ * @param   entry:   Symbol entry containing the pipeline.
+ * @param   idx:     Candle type index.
+ * @param   stage:   Output snapshot structure.
+ */
 static void snapshot_stage(struct symbol_entry *entry, int idx,
 	struct sched_stage_snapshot *stage)
 {
 	struct candle_chunk_list *list = entry->candle_chunk_list_ptrs[idx];
 	uint64_t mutable_seq, last_seq_conv;
 
+	assert(entry->trd_buf != NULL);
+	assert(list != NULL);
+
 	stage->produced_seq = entry->trd_buf->produced_count;
 
-	if (list != NULL) {
-		mutable_seq = atomic_load_explicit(&list->mutable_seq, 
-			memory_order_acquire);
-		last_seq_conv = atomic_load_explicit(&list->last_seq_converted,
-			memory_order_acquire);
+	mutable_seq = atomic_load_explicit(&list->mutable_seq, 
+		memory_order_acquire);
+	last_seq_conv = atomic_load_explicit(&list->last_seq_converted,
+		memory_order_acquire);
 
-		stage->completed_seq = (mutable_seq == UINT64_MAX) ?
-			UINT64_MAX : mutable_seq - 1;
-		stage->converted_seq = last_seq_conv;
-	} else {
-		stage->completed_seq = 0;
-		stage->converted_seq = 0;
-	}
+	stage->completed_seq = (mutable_seq == UINT64_MAX) ?
+		UINT64_MAX : mutable_seq - 1;
+	stage->converted_seq = last_seq_conv;
 }
 
+/**
+ * @brief   Update throughput EMA for a pipeline stage.
+ *
+ * @param   r:       Rate structure to update.
+ * @param   newc:    New snapshot of counters.
+ * @param   oldc:    Previous snapshot of counters.
+ * @param   dt_ns:   Elapsed time between snapshots in nanoseconds.
+ */
 static void update_stage_rate(struct sched_stage_rate *r,
 	const struct sched_stage_snapshot *newc,
 	const struct sched_stage_snapshot *oldc, uint64_t dt_ns)
@@ -83,7 +104,7 @@ static void update_stage_rate(struct sched_stage_rate *r,
  * snapshot with the new values.
  */
 void sched_pipeline_calc_rates(struct symbol_entry *entry,
-	trcache_candle_type_flags candle_type_flags);
+	trcache_candle_type_flags candle_type_flags)
 {
 	struct sched_pipeline_stats snapshot = { 0, };
 	struct sched_pipeline_stats *prev = &entry->pipeline_stats;
@@ -91,6 +112,7 @@ void sched_pipeline_calc_rates(struct symbol_entry *entry,
 	int i;
 
 	snapshot.timestamp_ns = tsc_cycles_to_ns(tsc_cycles());
+	}
 
 	dt_ns = snapshot.timestamp_ns - prev->timestamp_ns;
 
