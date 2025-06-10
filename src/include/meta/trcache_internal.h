@@ -54,6 +54,9 @@ struct trcache_tls_data {
  * @worker_state_arr:        Per-worker state array of length @num_workers.
  * @admin_state:             State structure for admin thread.
  * @sched_msg_free_list:     Free list for scheduler message objects.
+ * @admin_thread:           Handle for admin thread.
+ * @worker_threads:         Array of handles for worker threads.
+ * @worker_args:            Per-worker argument array used at start.
 */
 struct trcache {
 	pthread_key_t pthread_trcache_key;
