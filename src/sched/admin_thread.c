@@ -297,6 +297,10 @@ static void schedule_symbol_work(struct trcache *cache,
 {
 	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
 	trcache_candle_type_flags flags = cache->candle_type_flags;
+	struct sched_stage_rate *stage_rate;
+	trcache_candle_type type;
+	double demand[WORKER_STAT_STAGE_NUM];
+	int idx;
 	
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 		env[s].stage = s;
@@ -306,18 +310,18 @@ static void schedule_symbol_work(struct trcache *cache,
 	}
 	
 	for (uint32_t m = flags; m != 0; m &= m - 1) {
-		int idx = __builtin_ctz(m);
-		trcache_candle_type t = 1u << idx;
-		struct sched_stage_rate *r =
-			&entry->pipeline_stats.stage_rates[idx];
-		double demand[WORKER_STAT_STAGE_NUM] = {
-			(double)r->produced_rate + 1.0,
-			(double)r->completed_rate + 1.0,
-			(double)r->converted_rate + 1.0,
-		};
-	
+		idx = __builtin_ctz(m);
+		stage_rate = &entry->pipeline_stats.stage_rates[idx];
+		demand[WORKER_STAT_STAGE_APPLY]
+			= (double)stage_rate->produced_rate + 1.0;
+		demand[WORKER_STAT_STAGE_CONVERT]
+			= (double)stage_rate->completed_rate + 1.0;
+		demand[WORKER_STAT_STAGE_FLUSH]
+			= (double)stage_rate->converted_rate + 1.0;
+		type = 1u << idx;
+
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			schedule_symbol_stage(cache, entry, idx, t,
+			schedule_symbol_stage(cache, entry, idx, type,
 				demand[s], &env[s]);
 		}
 	}
