@@ -204,89 +204,87 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	}
 
 	for (int i = 0; i < tc->num_workers; i++) {
-	        if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
-	                errmsg(stderr, "worker_state_init failed\n");
-	                for (int j = 0; j < i; j++) {
-	                        worker_state_destroy(&tc->worker_state_arr[j]);
-	                }
-	                free(tc->worker_state_arr);
-	                scq_destroy(tc->sched_msg_free_list);
-	                pthread_mutex_destroy(&tc->tls_id_mutex);
-	                symbol_table_destroy(tc->symbol_table);
-	                pthread_key_delete(tc->pthread_trcache_key);
-	                free(tc);
-	                return NULL;
-	        }
+		if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
+			errmsg(stderr, "worker_state_init failed\n");
+			for (int j = 0; j < i; j++) {
+				worker_state_destroy(&tc->worker_state_arr[j]);
+			}
+			free(tc->worker_state_arr);
+			scq_destroy(tc->sched_msg_free_list);
+			pthread_mutex_destroy(&tc->tls_id_mutex);
+			symbol_table_destroy(tc->symbol_table);
+			pthread_key_delete(tc->pthread_trcache_key);
+			free(tc);
+			return NULL;
+		}
 	}
 
 	tc->worker_threads = calloc(tc->num_workers, sizeof(pthread_t));
 	tc->worker_args = calloc(tc->num_workers,
-	        sizeof(struct worker_thread_args));
+		sizeof(struct worker_thread_args));
 	if (tc->worker_threads == NULL || tc->worker_args == NULL) {
-	        errmsg(stderr,
-	                "worker thread resources allocation failed\n");
-	        free(tc->worker_threads);
-	        free(tc->worker_args);
-	        for (int i = 0; i < tc->num_workers; i++) {
-	                worker_state_destroy(&tc->worker_state_arr[i]);
-	        }
-	        free(tc->worker_state_arr);
-	        admin_state_destroy(&tc->admin_state);
-	        scq_destroy(tc->sched_msg_free_list);
-	        pthread_mutex_destroy(&tc->tls_id_mutex);
-	        symbol_table_destroy(tc->symbol_table);
-	        pthread_key_delete(tc->pthread_trcache_key);
-	        free(tc);
-	        return NULL;
+	    errmsg(stderr, "worker thread resources allocation failed\n");
+		free(tc->worker_threads);
+		free(tc->worker_args);
+		for (int i = 0; i < tc->num_workers; i++) {
+			worker_state_destroy(&tc->worker_state_arr[i]);
+		}
+		free(tc->worker_state_arr);
+		admin_state_destroy(&tc->admin_state);
+		scq_destroy(tc->sched_msg_free_list);
+		pthread_mutex_destroy(&tc->tls_id_mutex);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
 	}
 
 	ret = pthread_create(&tc->admin_thread, NULL, admin_thread_main, tc);
 	if (ret != 0) {
-	        errmsg(stderr, "Failure on pthread_create() for admin\n");
-	        free(tc->worker_threads);
-	        free(tc->worker_args);
-	        for (int i = 0; i < tc->num_workers; i++) {
-	                worker_state_destroy(&tc->worker_state_arr[i]);
-	        }
-	        free(tc->worker_state_arr);
-	        admin_state_destroy(&tc->admin_state);
-	        scq_destroy(tc->sched_msg_free_list);
-	        pthread_mutex_destroy(&tc->tls_id_mutex);
-	        symbol_table_destroy(tc->symbol_table);
-	        pthread_key_delete(tc->pthread_trcache_key);
-	        free(tc);
-	        return NULL;
+		errmsg(stderr, "Failure on pthread_create() for admin\n");
+		free(tc->worker_threads);
+		free(tc->worker_args);
+		for (int i = 0; i < tc->num_workers; i++) {
+			worker_state_destroy(&tc->worker_state_arr[i]);
+		}
+		free(tc->worker_state_arr);
+		admin_state_destroy(&tc->admin_state);
+		scq_destroy(tc->sched_msg_free_list);
+		pthread_mutex_destroy(&tc->tls_id_mutex);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
 	}
 
 	for (int i = 0; i < tc->num_workers; i++) {
-	        tc->worker_args[i].cache = tc;
-	        tc->worker_args[i].worker_id = i;
+		tc->worker_args[i].cache = tc;
+		tc->worker_args[i].worker_id = i;
 
-	        ret = pthread_create(&tc->worker_threads[i], NULL,
-	                worker_thread_main, &tc->worker_args[i]);
-	        if (ret != 0) {
-	                errmsg(stderr,
-	                        "Failure on pthread_create() for worker\n");
-	                tc->admin_state.done = true;
-	                pthread_join(tc->admin_thread, NULL);
-	                for (int j = 0; j < i; j++) {
-	                        tc->worker_state_arr[j].done = true;
-	                        pthread_join(tc->worker_threads[j], NULL);
-	                }
-	                free(tc->worker_threads);
-	                free(tc->worker_args);
-	                for (int j = 0; j < tc->num_workers; j++) {
-	                        worker_state_destroy(&tc->worker_state_arr[j]);
-	                }
-	                free(tc->worker_state_arr);
-	                admin_state_destroy(&tc->admin_state);
-	                scq_destroy(tc->sched_msg_free_list);
-	                pthread_mutex_destroy(&tc->tls_id_mutex);
-	                symbol_table_destroy(tc->symbol_table);
-	                pthread_key_delete(tc->pthread_trcache_key);
-	                free(tc);
-	                return NULL;
-	        }
+		ret = pthread_create(&tc->worker_threads[i], NULL,
+				worker_thread_main, &tc->worker_args[i]);
+		if (ret != 0) {
+			errmsg(stderr, "Failure on pthread_create() for worker\n");
+			tc->admin_state.done = true;
+			pthread_join(tc->admin_thread, NULL);
+			for (int j = 0; j < i; j++) {
+				tc->worker_state_arr[j].done = true;
+				pthread_join(tc->worker_threads[j], NULL);
+			}
+			free(tc->worker_threads);
+			free(tc->worker_args);
+			for (int j = 0; j < tc->num_workers; j++) {
+				worker_state_destroy(&tc->worker_state_arr[j]);
+			}
+			free(tc->worker_state_arr);
+			admin_state_destroy(&tc->admin_state);
+			scq_destroy(tc->sched_msg_free_list);
+			pthread_mutex_destroy(&tc->tls_id_mutex);
+			symbol_table_destroy(tc->symbol_table);
+			pthread_key_delete(tc->pthread_trcache_key);
+			free(tc);
+			return NULL;
+		}
 	}
 
 	return tc;
@@ -306,12 +304,12 @@ void trcache_destroy(struct trcache *tc)
 	/* stop all threads */
 	tc->admin_state.done = true;
 	for (int i = 0; i < tc->num_workers; i++) {
-	        tc->worker_state_arr[i].done = true;
+		tc->worker_state_arr[i].done = true;
 	}
 
 	pthread_join(tc->admin_thread, NULL);
 	for (int i = 0; i < tc->num_workers; i++) {
-	        pthread_join(tc->worker_threads[i], NULL);
+		pthread_join(tc->worker_threads[i], NULL);
 	}
 
 	/* Return back trcache id */
