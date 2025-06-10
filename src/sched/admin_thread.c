@@ -185,68 +185,85 @@ static void post_work_msg(struct trcache *cache, int worker_id,
  */
 static int choose_best_worker(double *load, int limit)
 {
-	int best = 0;
-	double min_load = load[0];
+int best = 0;
+double min_load = load[0];
 
-	for (int w = 1; w < limit; w++) {
-		if (load[w] < min_load) {
-		min_load = load[w];
-		best = w;
-	}
-	}
-
-	return best;
-	}
-
-static void schedule_symbol_stage(struct trcache *cache,
-struct symbol_entry *entry, int idx, trcache_candle_type type,
-worker_stat_stage_type stage, double demand,
-double load[][MAX_NUM_THREADS], const int *limits,
-const int *stage_start)
-{
-	int limit = limits[stage];
-	int start = stage_start[stage];
-	double *loads = load[stage];
-	int best;
-	int cur;
-
-	if (limit <= 0)
-		return;
-
-	best = choose_best_worker(loads, limit) + start;
-	loads[best - start] += demand;
-	
-	cur = atomic_load(&entry->in_progress[stage][idx]);
-	if (cur != best) {
-		if (cur >= 0)
-		post_work_msg(cache, cur, type, stage,
-	entry->id, SCHED_MSG_REMOVE_WORK);
-		
-	post_work_msg(cache, best, type, stage,
-		entry->id, SCHED_MSG_ADD_WORK);
-	}
+for (int w = 1; w < limit; w++) {
+if (load[w] < min_load) {
+min_load = load[w];
+best = w;
+}
 }
 
-static void schedule_symbol_work(struct trcache *cache,
-struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
-const int *stage_limits, const int *stage_start)
+return best;
+}
+
+struct stage_sched_env {
+	worker_stat_stage_type stage;
+	double *load;
+	int limit;
+	int start;
+	};
+
+static void update_stage_assignment(struct trcache *cache,
+struct symbol_entry *entry, int idx,
+trcache_candle_type type, struct stage_sched_env *env,
+int worker)
+{
+	int cur = atomic_load(&entry->in_progress[env->stage][idx]);
+	if (cur == worker)
+	return;
+	
+	if (cur >= 0)
+	post_work_msg(cache, cur, type, env->stage,
+	entry->id, SCHED_MSG_REMOVE_WORK);
+	
+	post_work_msg(cache, worker, type, env->stage,
+	entry->id, SCHED_MSG_ADD_WORK);
+	}
+	
+	static void schedule_symbol_stage(struct trcache *cache,
+	struct symbol_entry *entry, int idx,
+	trcache_candle_type type, double demand,
+	struct stage_sched_env *env)
 	{
+	if (env->limit <= 0)
+	return;
+	
+	int best = choose_best_worker(env->load, env->limit) + env->start;
+	env->load[best - env->start] += demand;
+	
+	update_stage_assignment(cache, entry, idx, type, env, best);
+	}
+	
+	static void schedule_symbol_work(struct trcache *cache,
+	struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
+	const int *stage_limits, const int *stage_start)
+	{
+	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
 	trcache_candle_type_flags flags = cache->candle_type_flags;
-
+	
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+	env[s].stage = s;
+	env[s].load = load[s];
+	env[s].limit = stage_limits[s];
+	env[s].start = stage_start[s];
+	}
+	
 	for (uint32_t m = flags; m != 0; m &= m - 1) {
-		int idx = __builtin_ctz(m);
-		trcache_candle_type t = 1u << idx;
-		struct sched_stage_rate *r =
-			&entry->pipeline_stats.stage_rates[idx];
-		double demand[WORKER_STAT_STAGE_NUM] = {
-		(double)r->produced_rate + 1.0,
-		(double)r->completed_rate + 1.0,
-		(double)r->converted_rate + 1.0,
-		};
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++)
-			schedule_symbol_stage(cache, entry, idx, t, s,
-		demand[s], load, stage_limits, stage_start);
+	int idx = __builtin_ctz(m);
+	trcache_candle_type t = 1u << idx;
+	struct sched_stage_rate *r =
+	&entry->pipeline_stats.stage_rates[idx];
+	double demand[WORKER_STAT_STAGE_NUM] = {
+	(double)r->produced_rate + 1.0,
+	(double)r->completed_rate + 1.0,
+	(double)r->converted_rate + 1.0,
+	};
+	
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++)
+	schedule_symbol_stage(cache, entry, idx, t,
+	demand[s], &env[s]);
 	}
 }
 
