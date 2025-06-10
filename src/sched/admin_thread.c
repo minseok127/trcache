@@ -2,6 +2,8 @@
  * @file   admin_thread.c
  * @brief  Implementation of the admin thread main routine.
  */
+#define _GNU_SOURCE
+#include <sched.h>
 
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
@@ -10,7 +12,6 @@
 #include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
-#include <sched.h>
 
 /**
  * @brief   Initialise the admin thread state.
@@ -182,40 +183,90 @@ static void post_work_msg(struct trcache *cache, int worker_id,
  * @param   entry:  Target symbol entry.
  * @param   rr:     Round robin position for APPLY stage.
  */
-static void schedule_symbol_work(struct trcache *cache,
-       struct symbol_entry *entry, int *rr,
-       const int *stage_limits)
+static int choose_best_worker(double *load, int limit)
 {
-	trcache_candle_type_flags flags = cache->candle_type_flags;
-	int wid = 0;
+	int best = 0;
+	double min_load = load[0];
 
+	for (int w = 1; w < limit; w++) {
+		if (load[w] < min_load) {
+			min_load = load[w];
+			best = w;
+		}
+	}
+
+	return best;
+}
+
+struct stage_sched_env {
+	worker_stat_stage_type stage;
+	double *load;
+	int limit;
+	int start;
+};
+
+static void update_stage_assignment(struct trcache *cache,
+	struct symbol_entry *entry, int idx,
+	trcache_candle_type type, struct stage_sched_env *env,
+	int worker)
+{
+	int cur = atomic_load(&entry->in_progress[env->stage][idx]);
+	if (cur == worker) {
+		return;
+	}
+		
+	if (cur >= 0) {
+		post_work_msg(cache, cur, type, env->stage,
+			entry->id, SCHED_MSG_REMOVE_WORK);
+	}
+		
+	post_work_msg(cache, worker, type, env->stage,
+		entry->id, SCHED_MSG_ADD_WORK);
+}
+	
+static void schedule_symbol_stage(struct trcache *cache,
+	struct symbol_entry *entry, int idx,
+	trcache_candle_type type, double demand,
+	struct stage_sched_env *env)
+{
+	if (env->limit <= 0) {
+		return;
+	}
+		
+	int best = choose_best_worker(env->load, env->limit) + env->start;
+	env->load[best - env->start] += demand;
+	
+	update_stage_assignment(cache, entry, idx, type, env, best);
+}
+	
+static void schedule_symbol_work(struct trcache *cache,
+	struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
+	const int *stage_limits, const int *stage_start)
+{
+	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
+	trcache_candle_type_flags flags = cache->candle_type_flags;
+	
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		env[s].stage = s;
+		env[s].load = load[s];
+		env[s].limit = stage_limits[s];
+		env[s].start = stage_start[s];
+	}
+	
 	for (uint32_t m = flags; m != 0; m &= m - 1) {
 		int idx = __builtin_ctz(m);
 		trcache_candle_type t = 1u << idx;
-
-		if (atomic_load(&entry->in_progress[WORKER_STAT_STAGE_APPLY][idx])
-				== -1) {
-			wid = (*rr) % stage_limits[WORKER_STAT_STAGE_APPLY];
-			post_work_msg(cache, wid, t,
-				WORKER_STAT_STAGE_APPLY, entry->id, SCHED_MSG_ADD_WORK);
-			(*rr)++;
-		}
-
-		if (atomic_load(&entry->in_progress[WORKER_STAT_STAGE_CONVERT][idx])
-				== -1) {
-			wid = stage_limits[WORKER_STAT_STAGE_APPLY] +
-				((*rr) % stage_limits[WORKER_STAT_STAGE_CONVERT]);
-			post_work_msg(cache, wid, t,
-				WORKER_STAT_STAGE_CONVERT, entry->id, SCHED_MSG_ADD_WORK);
-		}
-
-		if (atomic_load(&entry->in_progress[WORKER_STAT_STAGE_FLUSH][idx])
-				== -1) {
-			wid = stage_limits[WORKER_STAT_STAGE_APPLY] +
-				stage_limits[WORKER_STAT_STAGE_CONVERT] +
-				((*rr) % stage_limits[WORKER_STAT_STAGE_FLUSH]);
-			post_work_msg(cache, wid, t,
-				WORKER_STAT_STAGE_FLUSH, entry->id, SCHED_MSG_ADD_WORK);
+		struct sched_stage_rate *r =
+			&entry->pipeline_stats.stage_rates[idx];
+		double demand[WORKER_STAT_STAGE_NUM] = {
+			(double)r->produced_rate + 1.0,
+			(double)r->completed_rate + 1.0,
+			(double)r->converted_rate + 1.0,
+		};
+	
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			schedule_symbol_stage(cache, entry, idx, t,
+				demand[s], &env[s]);
 		}
 	}
 }
@@ -270,17 +321,24 @@ static void balance_workers(struct trcache *cache)
 	struct atomsnap_version *ver = NULL;
 	struct symbol_entry **arr = NULL;
 	int num = 0;
-	int rr = 0;
 	int limits[WORKER_STAT_STAGE_NUM];
+	int stage_start[WORKER_STAT_STAGE_NUM];
+	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
 
 	compute_stage_limits(cache, limits);
+
+	stage_start[WORKER_STAT_STAGE_APPLY] = 0;
+	stage_start[WORKER_STAT_STAGE_CONVERT] =
+		stage_start[WORKER_STAT_STAGE_APPLY] + limits[WORKER_STAT_STAGE_APPLY];
+	stage_start[WORKER_STAT_STAGE_FLUSH] =
+    	stage_start[WORKER_STAT_STAGE_CONVERT] + limits[WORKER_STAT_STAGE_CONVERT];
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;
 	num = table->num_symbols;
 
 	for (int i = 0; i < num; i++) {
-		schedule_symbol_work(cache, arr[i], &rr, limits);
+		schedule_symbol_work(cache, arr[i], load, limits, stage_start);
 	}
 
 	atomsnap_release_version(ver);
