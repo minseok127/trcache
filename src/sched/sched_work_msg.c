@@ -1,19 +1,6 @@
 /**
  * @file   sched_work_msg.c
  * @brief  Minimal implementation of sched message primitives.
- *
- * This translation unit provides the *generic* building blocks that any
- * higher‑level scheduler component (admin thread, worker pool, user helper
- * thread) can rely on:
- *
- *   - message allocation / recycling from a free‑list
- *     queue (implemented with scalable_queue).
- *   - asynchronous message post (fire‑and‑forget).
- *   - synchronous message post (block the caller until receiver acks).
- *
- * The code purposefully avoids knowledge of concrete message semantics – it
- * only moves opaque @sched_work_msg objects through queues and uses futexes to
- * implement the sync‑ack rendezvous.
  */
 #define _GNU_SOURCE
 #include <assert.h>
@@ -65,7 +52,7 @@ memalloc:
  * @param   msg:        Message pointer to recycle.
  */
 void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
-       struct sched_work_msg *msg)
+	struct sched_work_msg *msg)
 {
 	if (freelist == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");
