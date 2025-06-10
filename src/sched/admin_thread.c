@@ -388,7 +388,7 @@ static void balance_workers(struct trcache *cache)
 		stage_start[WORKER_STAT_STAGE_APPLY]
 			+ limits[WORKER_STAT_STAGE_APPLY];
 	stage_start[WORKER_STAT_STAGE_FLUSH] =
-    	stage_start[WORKER_STAT_STAGE_CONVERT]
+		stage_start[WORKER_STAT_STAGE_CONVERT]
 			+ limits[WORKER_STAT_STAGE_CONVERT];
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
