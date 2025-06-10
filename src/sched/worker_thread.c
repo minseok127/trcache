@@ -144,9 +144,9 @@ static void worker_handle_remove_work(struct trcache *cache,
  * @param   msg:    Scheduler message to process.
  */
 static void worker_process_msg(struct trcache *cache,
-       struct worker_state *state, struct sched_work_msg *msg)
+	struct worker_state *state, struct sched_work_msg *msg)
 {
-       struct sched_work_cmd *cmd = &msg->cmd;
+	struct sched_work_cmd *cmd = &msg->cmd;
 
 	switch (msg->type) {
 		case SCHED_MSG_ADD_WORK:
@@ -155,9 +155,9 @@ static void worker_process_msg(struct trcache *cache,
 		case SCHED_MSG_REMOVE_WORK:
 			worker_handle_remove_work(cache, state, cmd);
 			break;
-               default:
-                       break;
-       }
+		default:
+			break;
+	}
 }
 
 /**
@@ -371,13 +371,13 @@ void *worker_thread_main(void *arg)
 	struct trcache *cache = args->cache;
 	int worker_id = args->worker_id;
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
-       struct sched_work_msg *msg = NULL;
+	struct sched_work_msg *msg = NULL;
 
 	while (!state->done) {
-               while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
-                       worker_process_msg(cache, state, msg);
-                       sched_work_msg_recycle(cache->sched_msg_free_list, msg);
-               }
+		while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
+			worker_process_msg(cache, state, msg);
+			sched_work_msg_recycle(cache->sched_msg_free_list, msg);
+		}
 
 		worker_run_all_work(cache, state);
 	}
