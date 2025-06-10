@@ -13,7 +13,7 @@
 #include "meta/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
-#include "sched/sched_msg.h"
+#include "sched/sched_work_msg.h"
 
 #include "trcache.h"
 

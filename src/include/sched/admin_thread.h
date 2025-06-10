@@ -2,7 +2,7 @@
 #define ADMIN_THREAD_H
 
 #include "trcache.h"
-#include "sched/sched_msg.h"
+#include "sched/sched_work_msg.h"
 
 /**
  * admin_state - Runtime state for the admin thread.
@@ -11,7 +11,7 @@
  * @done:            Flag signalled during shutdown.
  */
 struct admin_state {
-	sched_msg_queue *sched_msg_queue;
+       sched_work_msg_queue *sched_msg_queue;
 	bool done;
 };
 
@@ -38,6 +38,6 @@ void admin_state_destroy(struct admin_state *state);
  *
  * @return  0 on success, negative value on error.
  */
-int admin_thread_main(struct trcache *cache);
+void *admin_thread_main(void *arg);
 
 #endif /* ADMIN_THREAD_H */

@@ -1,5 +1,5 @@
-#ifndef SCHED_MSG_H
-#define SCHED_MSG_H
+#ifndef SCHED_WORK_MSG_H
+#define SCHED_WORK_MSG_H
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -51,24 +51,24 @@ struct sched_work_cmd {
 };
 
 /*
- * sched_msg - Generic message wrapper.
+ * sched_work_msg - Generic message wrapper.
  *
  * @type:    Dispath tag.
- * @payload: Type-specific data pointer.
+ * @cmd:  Work command payload.
  * @ack:     NULL -> async, non‑NULL -> sync‑call token.
  *
  * The message object will be managed by the global SCQ‑based free‑list. After
  * the consumer processes the message (and optionally signals an ack) it must
- * recycle the object via sched_msg_recycle() .
+ * recycle the object via sched_work_msg_recycle().
  */
-struct sched_msg {
-	enum sched_msg_type type;
-	void *payload;
-	struct sched_ack *ack;
+struct sched_work_msg {
+       enum sched_msg_type type;
+       struct sched_work_cmd cmd;
+       struct sched_ack *ack;
 };
 
-typedef struct scalable_queue sched_msg_queue;
-typedef struct scalable_queue sched_msg_free_list;
+typedef struct scalable_queue sched_work_msg_queue;
+typedef struct scalable_queue sched_work_msg_free_list;
 
 /**
  * @brief   Obtain a message object from the specified free‑list.
@@ -80,15 +80,16 @@ typedef struct scalable_queue sched_msg_free_list;
  * If the free‑list is empty the helper falls back to @c malloc; callers may
  * optionally pre‑fill the list to avoid allocations in the hot path.
  */
-struct sched_msg *sched_msg_alloc(sched_msg_free_list *freelist);
+struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist);
 
 /**
  * @brief   Return a message to its owning free‑list (exactly once).
  *
- * @param   freelist:  The same free‑list passed to sched_msg_alloc().
+ * @param   freelist:  The same free‑list passed to sched_work_msg_alloc().
  * @param   msg:       Message pointer to recycle.
  */
-void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg);
+void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
+       struct sched_work_msg *msg);
 
 /**
  * @brief   Post an *asynchronous* message – fire‑and‑forget.
@@ -98,6 +99,6 @@ void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg);
  *
  * @return  0 on success, -1 on error.
  */
-int sched_post_msg(sched_msg_queue *q, struct sched_msg *msg);
+int sched_post_work_msg(sched_work_msg_queue *q, struct sched_work_msg *msg);
 
-#endif /* SCHED_MSG_H */
+#endif /* SCHED_WORK_MSG_H */

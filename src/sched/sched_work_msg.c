@@ -1,5 +1,5 @@
 /**
- * @file   sched_msg.c
+ * @file   sched_work_msg.c
  * @brief  Minimal implementation of sched message primitives.
  *
  * This translation unit provides the *generic* building blocks that any
@@ -12,7 +12,7 @@
  *   - synchronous message post (block the caller until receiver acks).
  *
  * The code purposefully avoids knowledge of concrete message semantics – it
- * only moves opaque @sched_msg objects through queues and uses futexes to
+ * only moves opaque @sched_work_msg objects through queues and uses futexes to
  * implement the sync‑ack rendezvous.
  */
 #define _GNU_SOURCE
@@ -20,7 +20,7 @@
 #include <errno.h>
 #include <stdlib.h>
 
-#include "sched/sched_msg.h"
+#include "sched/sched_work_msg.h"
 #include "utils/log.h"
 
 /**
@@ -28,20 +28,20 @@
  *
  * @param   freelist:  free‑list owned by a particular trcache instance.
  *
- * @return  Pointer to zero‑initialised sched_msg; NULL on OOM.
+ * @return  Pointer to zero‑initialised sched_work_msg; NULL on OOM.
  *
  * If the free‑list is empty the helper falls back to @c malloc; callers may
  * optionally pre‑fill the list to avoid allocations in the hot path.
  */
-struct sched_msg *sched_msg_alloc(sched_msg_free_list *freelist)
+struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist)
 {
-	struct sched_msg *msg = NULL;
+       struct sched_work_msg *msg = NULL;
 
 	if (!freelist) {
 		goto memalloc;
 	}
 
-	if (scq_dequeue(freelist, (void **)&msg)) {
+       if (scq_dequeue(freelist, (void **)&msg)) {
 		assert(msg != NULL);
 		return msg;
 	}
@@ -49,7 +49,7 @@ struct sched_msg *sched_msg_alloc(sched_msg_free_list *freelist)
 memalloc:
 
 	/* Fallback – allocate fresh */
-	msg = malloc(sizeof(struct sched_msg));
+       msg = malloc(sizeof(struct sched_work_msg));
 	if (msg == NULL) {
 		errmsg(stderr, "Message allocation is failed\n");
 		return NULL;
@@ -61,10 +61,11 @@ memalloc:
 /**
  * @brief   Return a message to its owning free‑list (exactly once).
  *
- * @param   freelist:  The same free‑list passed to sched_msg_alloc().
+ * @param   freelist:  The same free‑list passed to sched_work_msg_alloc().
  * @param   msg:        Message pointer to recycle.
  */
-void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg)
+void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
+       struct sched_work_msg *msg)
 {
 	if (freelist == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");
@@ -82,7 +83,7 @@ void sched_msg_recycle(sched_msg_free_list *freelist, struct sched_msg *msg)
  *
  * @return  0 on success, -1 on error.
  */
-int sched_post_msg(sched_msg_queue *q, struct sched_msg *msg)
+int sched_post_work_msg(sched_work_msg_queue *q, struct sched_work_msg *msg)
 {
 	if (q == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");

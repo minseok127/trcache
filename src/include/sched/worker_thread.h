@@ -3,7 +3,7 @@
 
 #include "trcache.h"
 #include "sched/worker_stat_board.h"
-#include "sched/sched_msg.h"
+#include "sched/sched_work_msg.h"
 #include "utils/list_head.h"
 #include "utils/hash_table.h"
 
@@ -44,7 +44,7 @@ struct worker_work_item {
 struct worker_state {
 	int worker_id;
 	struct worker_stat_board stat;
-	sched_msg_queue *sched_msg_queue;
+       sched_work_msg_queue *sched_msg_queue;
 	bool done;
 	struct ht_hash_table *work_map;
 	struct list_head work_list;
