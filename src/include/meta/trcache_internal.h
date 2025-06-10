@@ -71,7 +71,7 @@ struct trcache {
 	struct trcache_flush_ops flush_ops;
 	struct worker_state *worker_state_arr;
 	struct admin_state admin_state;
-       sched_work_msg_free_list *sched_msg_free_list;
+	sched_work_msg_free_list *sched_msg_free_list;
 };
 
 /**
