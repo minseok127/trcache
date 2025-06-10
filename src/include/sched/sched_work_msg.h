@@ -64,7 +64,7 @@ struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist);
  * @param   msg:       Message pointer to recycle.
  */
 void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
-       struct sched_work_msg *msg);
+	struct sched_work_msg *msg);
 
 /**
  * @brief   Post an *asynchronous* message – fire‑and‑forget.
