@@ -35,13 +35,13 @@
  */
 struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist)
 {
-       struct sched_work_msg *msg = NULL;
+	struct sched_work_msg *msg = NULL;
 
 	if (!freelist) {
 		goto memalloc;
 	}
 
-       if (scq_dequeue(freelist, (void **)&msg)) {
+	if (scq_dequeue(freelist, (void **)&msg)) {
 		assert(msg != NULL);
 		return msg;
 	}
@@ -49,7 +49,7 @@ struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist)
 memalloc:
 
 	/* Fallback – allocate fresh */
-       msg = malloc(sizeof(struct sched_work_msg));
+	msg = malloc(sizeof(struct sched_work_msg));
 	if (msg == NULL) {
 		errmsg(stderr, "Message allocation is failed\n");
 		return NULL;
@@ -89,8 +89,6 @@ int sched_post_work_msg(sched_work_msg_queue *q, struct sched_work_msg *msg)
 		errmsg(stderr, "Invalid arguments\n");
 		return -1;
 	}
-
-	msg->ack = NULL;
 
 	scq_enqueue(q, (void *)msg);
 
