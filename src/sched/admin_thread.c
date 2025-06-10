@@ -177,11 +177,15 @@ static void post_work_msg(struct trcache *cache, int worker_id,
 }
 
 /**
- * @brief   Assign work for one symbol entry.
+ * @brief   Choose the worker with the lowest load value.
  *
- * @param   cache:  Global cache instance.
- * @param   entry:  Target symbol entry.
- * @param   rr:     Round robin position for APPLY stage.
+ * Iterates over @load and returns the index of the element with the minimal
+ * value in the range [0, @limit).
+ *
+ * @param   load:   Array of per-worker load counters.
+ * @param   limit:  Number of valid entries in @load.
+ *
+ * @return  Index of the least-loaded worker.
  */
 static int choose_best_worker(double *load, int limit)
 {
@@ -198,12 +202,35 @@ static int choose_best_worker(double *load, int limit)
 	return best;
 }
 
+/*
+ * stage_sched_env - Parameters for scheduling a pipeline stage.
+ *
+ * @stage:  Pipeline stage identifier.
+ * @load:   Pointer to the per-worker load array for this stage.
+ * @limit:  Number of workers that may handle this stage.
+ * @start:  Index of the first worker assigned to this stage.
+ */
 struct stage_sched_env {
-	worker_stat_stage_type stage;
-	double *load;
-	int limit;
-	int start;
+        worker_stat_stage_type stage;
+        double *load;
+        int limit;
+        int start;
 };
+
+/**
+ * @brief   Update the worker assignment for a symbol stage.
+ *
+ * If the stage is already assigned to @worker, nothing is done. Otherwise a
+ * remove message is sent to the current worker (if any) and an add message is
+ * posted to the new worker.
+ *
+ * @param   cache:   Global cache instance.
+ * @param   entry:   Target symbol entry.
+ * @param   idx:     Candle type index.
+ * @param   type:    Candle type mask.
+ * @param   env:     Scheduling environment for the stage.
+ * @param   worker:  Destination worker index.
+ */
 
 static void update_stage_assignment(struct trcache *cache,
 	struct symbol_entry *entry, int idx,
@@ -224,10 +251,23 @@ static void update_stage_assignment(struct trcache *cache,
 		entry->id, SCHED_MSG_ADD_WORK);
 }
 	
+/**
+ * @brief   Distribute demand for a single stage across workers.
+ *
+ * Chooses the least loaded worker, updates its load counter and adjusts the
+ * worker assignment accordingly.
+ *
+ * @param   cache:   Global cache instance.
+ * @param   entry:   Target symbol entry.
+ * @param   idx:     Candle type index.
+ * @param   type:    Candle type mask.
+ * @param   demand:  Estimated demand for this stage.
+ * @param   env:     Scheduling environment describing stage limits.
+ */
 static void schedule_symbol_stage(struct trcache *cache,
-	struct symbol_entry *entry, int idx,
-	trcache_candle_type type, double demand,
-	struct stage_sched_env *env)
+        struct symbol_entry *entry, int idx,
+        trcache_candle_type type, double demand,
+        struct stage_sched_env *env)
 {
 	if (env->limit <= 0) {
 		return;
@@ -239,9 +279,21 @@ static void schedule_symbol_stage(struct trcache *cache,
 	update_stage_assignment(cache, entry, idx, type, env, best);
 }
 	
+/**
+ * @brief   Schedule work for all stages of a symbol.
+ *
+ * Initialises per-stage scheduling environments and distributes demand for each
+ * candle type across workers.
+ *
+ * @param   cache:         Global cache instance.
+ * @param   entry:         Target symbol entry.
+ * @param   load:          Two-dimensional array storing load per stage/worker.
+ * @param   stage_limits:  Maximum number of workers allowed per stage.
+ * @param   stage_start:   Index of the first worker allocated to each stage.
+ */
 static void schedule_symbol_work(struct trcache *cache,
-	struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
-	const int *stage_limits, const int *stage_start)
+        struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
+        const int *stage_limits, const int *stage_start)
 {
 	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
 	trcache_candle_type_flags flags = cache->candle_type_flags;
