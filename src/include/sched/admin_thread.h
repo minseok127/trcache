@@ -11,7 +11,7 @@
  * @done:            Flag signalled during shutdown.
  */
 struct admin_state {
-       sched_work_msg_queue *sched_msg_queue;
+	sched_work_msg_queue *sched_msg_queue;
 	bool done;
 };
 
@@ -34,9 +34,11 @@ void admin_state_destroy(struct admin_state *state);
 /**
  * @brief   Entry point for the admin thread.
  *
- * @param   cache:   Pointer to the global trcache instance.
+ * Expects a ::trcache pointer as its argument.
  *
- * @return  0 on success, negative value on error.
+ * @param   arg: Pointer to ::trcache.
+ *
+ * @return  Always returns NULL.
  */
 void *admin_thread_main(void *arg);
 
