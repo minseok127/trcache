@@ -122,7 +122,8 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 static void compute_pipeline_demand(struct trcache *cache, double *out)
 {
 	struct symbol_table *table = cache->symbol_table;
-	struct atomsnap_version *ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
+	struct atomsnap_version *ver
+		= atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	struct symbol_entry **arr = (struct symbol_entry **)ver->object;
 	int num = table->num_symbols;
 
@@ -380,9 +381,11 @@ static void balance_workers(struct trcache *cache)
 
 	stage_start[WORKER_STAT_STAGE_APPLY] = 0;
 	stage_start[WORKER_STAT_STAGE_CONVERT] =
-		stage_start[WORKER_STAT_STAGE_APPLY] + limits[WORKER_STAT_STAGE_APPLY];
+		stage_start[WORKER_STAT_STAGE_APPLY]
+			+ limits[WORKER_STAT_STAGE_APPLY];
 	stage_start[WORKER_STAT_STAGE_FLUSH] =
-    	stage_start[WORKER_STAT_STAGE_CONVERT] + limits[WORKER_STAT_STAGE_CONVERT];
+    	stage_start[WORKER_STAT_STAGE_CONVERT]
+			+ limits[WORKER_STAT_STAGE_CONVERT];
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;
