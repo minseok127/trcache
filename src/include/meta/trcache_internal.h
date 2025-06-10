@@ -10,7 +10,7 @@
 #include "utils/list_head.h"
 #include "sched/worker_thread.h"
 #include "sched/admin_thread.h"
-#include "sched/sched_msg.h"
+#include "sched/sched_work_msg.h"
 
 #include "trcache.h"
 
@@ -71,7 +71,7 @@ struct trcache {
 	struct trcache_flush_ops flush_ops;
 	struct worker_state *worker_state_arr;
 	struct admin_state admin_state;
-	sched_msg_free_list *sched_msg_free_list;
+	sched_work_msg_free_list *sched_msg_free_list;
 };
 
 /**
