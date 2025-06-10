@@ -183,52 +183,71 @@ static void post_work_msg(struct trcache *cache, int worker_id,
  * @param   entry:  Target symbol entry.
  * @param   rr:     Round robin position for APPLY stage.
  */
-static void schedule_symbol_work(struct trcache *cache,
-       struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
-       const int *stage_limits, const int *stage_start)
+static int choose_best_worker(double *load, int limit)
 {
-        trcache_candle_type_flags flags = cache->candle_type_flags;
+	int best = 0;
+	double min_load = load[0];
 
-        for (uint32_t m = flags; m != 0; m &= m - 1) {
-                int idx = __builtin_ctz(m);
-                trcache_candle_type t = 1u << idx;
-                struct sched_stage_rate *r = &entry->pipeline_stats.stage_rates[idx];
-                double demand[WORKER_STAT_STAGE_NUM] = {
-                        (double)r->produced_rate + 1.0,
-                        (double)r->completed_rate + 1.0,
-                        (double)r->converted_rate + 1.0,
-                };
+	for (int w = 1; w < limit; w++) {
+		if (load[w] < min_load) {
+		min_load = load[w];
+		best = w;
+	}
+	}
 
-                for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-                        int limit = stage_limits[s];
-                        if (limit <= 0)
-                                continue;
+	return best;
+	}
 
-                        int start = stage_start[s];
-                        int best = start;
-                        double min_load = load[s][0];
+static void schedule_symbol_stage(struct trcache *cache,
+struct symbol_entry *entry, int idx, trcache_candle_type type,
+worker_stat_stage_type stage, double demand,
+double load[][MAX_NUM_THREADS], const int *limits,
+const int *stage_start)
+{
+	int limit = limits[stage];
+	int start = stage_start[stage];
+	double *loads = load[stage];
+	int best;
+	int cur;
 
-                        for (int w = 1; w < limit; w++) {
-                                if (load[s][w] < min_load) {
-                                        min_load = load[s][w];
-                                        best = start + w;
-                                }
-                        }
+	if (limit <= 0)
+		return;
 
-                        load[s][best - start] += demand[s];
+	best = choose_best_worker(loads, limit) + start;
+	loads[best - start] += demand;
+	
+	cur = atomic_load(&entry->in_progress[stage][idx]);
+	if (cur != best) {
+		if (cur >= 0)
+		post_work_msg(cache, cur, type, stage,
+	entry->id, SCHED_MSG_REMOVE_WORK);
+		
+	post_work_msg(cache, best, type, stage,
+		entry->id, SCHED_MSG_ADD_WORK);
+	}
+}
 
-                        int cur = atomic_load(&entry->in_progress[s][idx]);
-                        if (cur != best) {
-                                if (cur >= 0) {
-                                        post_work_msg(cache, cur, t, s,
-                                                entry->id, SCHED_MSG_REMOVE_WORK);
-                                }
+static void schedule_symbol_work(struct trcache *cache,
+struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
+const int *stage_limits, const int *stage_start)
+	{
+	trcache_candle_type_flags flags = cache->candle_type_flags;
 
-                                post_work_msg(cache, best, t, s,
-                                        entry->id, SCHED_MSG_ADD_WORK);
-                        }
-                }
-        }
+	for (uint32_t m = flags; m != 0; m &= m - 1) {
+		int idx = __builtin_ctz(m);
+		trcache_candle_type t = 1u << idx;
+		struct sched_stage_rate *r =
+			&entry->pipeline_stats.stage_rates[idx];
+		double demand[WORKER_STAT_STAGE_NUM] = {
+		(double)r->produced_rate + 1.0,
+		(double)r->completed_rate + 1.0,
+		(double)r->converted_rate + 1.0,
+		};
+
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++)
+			schedule_symbol_stage(cache, entry, idx, t, s,
+		demand[s], load, stage_limits, stage_start);
+	}
 }
 
 /**
