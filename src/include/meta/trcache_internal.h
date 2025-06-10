@@ -72,6 +72,9 @@ struct trcache {
 	struct worker_state *worker_state_arr;
 	struct admin_state admin_state;
 	sched_work_msg_free_list *sched_msg_free_list;
+	pthread_t admin_thread;
+	pthread_t *worker_threads;
+	struct worker_thread_args *worker_args;
 };
 
 /**
