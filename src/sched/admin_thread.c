@@ -211,10 +211,10 @@ static int choose_best_worker(double *load, int limit)
  * @start:  Index of the first worker assigned to this stage.
  */
 struct stage_sched_env {
-        worker_stat_stage_type stage;
-        double *load;
-        int limit;
-        int start;
+	worker_stat_stage_type stage;
+	double *load;
+	int limit;
+	int start;
 };
 
 /**
@@ -231,7 +231,6 @@ struct stage_sched_env {
  * @param   env:     Scheduling environment for the stage.
  * @param   worker:  Destination worker index.
  */
-
 static void update_stage_assignment(struct trcache *cache,
 	struct symbol_entry *entry, int idx,
 	trcache_candle_type type, struct stage_sched_env *env,
@@ -265,9 +264,9 @@ static void update_stage_assignment(struct trcache *cache,
  * @param   env:     Scheduling environment describing stage limits.
  */
 static void schedule_symbol_stage(struct trcache *cache,
-        struct symbol_entry *entry, int idx,
-        trcache_candle_type type, double demand,
-        struct stage_sched_env *env)
+	struct symbol_entry *entry, int idx,
+	trcache_candle_type type, double demand,
+	struct stage_sched_env *env)
 {
 	if (env->limit <= 0) {
 		return;
@@ -292,8 +291,8 @@ static void schedule_symbol_stage(struct trcache *cache,
  * @param   stage_start:   Index of the first worker allocated to each stage.
  */
 static void schedule_symbol_work(struct trcache *cache,
-        struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
-        const int *stage_limits, const int *stage_start)
+	struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
+	const int *stage_limits, const int *stage_start)
 {
 	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
 	trcache_candle_type_flags flags = cache->candle_type_flags;
