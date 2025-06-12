@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
 
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
@@ -35,14 +36,19 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	uint64_t newcap = (uint64_t)cap;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
+		errmsg(stderr,
+			"#atomsnap_version allocation failed (cap=%" PRIu64 ")\n",
+			newcap);
 		return NULL;
 	}
 
 	idx_ver = malloc(sizeof(struct candle_chunk_index_version));
 
 	if (idx_ver == NULL) {
-		errmsg(stderr, "#candle_chunk_index_version allocation failed\n");
+		errmsg(stderr,
+			"#candle_chunk_index_version allocation failed "
+			"(cap=%" PRIu64 ")\n",
+			newcap);
 		free(snap_ver);
 		return NULL;
 	}
@@ -53,7 +59,9 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN,
 		newcap * sizeof(struct candle_chunk_index_entry));
 	if (idx_ver->array == NULL) {
-		errmsg(stderr, "Failure on aligned_alloc() for array\n");
+		errmsg(stderr,
+			"Failure on aligned_alloc() for array (newcap=%" PRIu64 ")\n",
+			newcap);
 		free(snap_ver);
 		free(idx_ver);
 		return NULL;
@@ -61,7 +69,9 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 #else
 	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN,
 			newcap * sizeof(struct candle_chunk_index_entry)) != 0) {
-		errmsg(stderr, "Failure on posix_memalign() for array\n");
+		errmsg(stderr,
+			"Failure on posix_memalign() for array (newcap=%" PRIu64 ")\n",
+			newcap);
 		free(snap_ver);
 		free(idx_ver);
 		return NULL;
@@ -177,7 +187,10 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	uint64_t new_mask, count1, count2;
 
 	if (new_snap == NULL ) {
-		errmsg(stderr, "Failure on atomsnap_make_version()\n");
+		errmsg(stderr,
+			"Failure on atomsnap_make_version() (new_cap=%" PRIu64 ", "
+			"head=%" PRIu64 ")\n",
+			new_cap, head);
 		return -1;
 	}
 
@@ -225,7 +238,11 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 
 	if (new_tail != 0 && head_pos == new_tail_pos) {
 		if (candle_chunk_index_grow(idx, idx_ver, head) == -1) {
-			errmsg(stderr, "Failure on candle_chunk_index_grow()\n");
+			errmsg(stderr,
+				"Failure on candle_chunk_index_grow() "
+				"(head=%" PRIu64 ", tail=%" PRIu64 ", "
+				"new_tail=%" PRIu64 ", mask=%" PRIu64 ")\n",
+				head, tail, new_tail, idx_ver->mask);
 			return -1;
 		}
 
@@ -298,10 +315,12 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk *out;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		errmsg(stderr,
+			"Failure on atomsnap_acquire_version() (target_seq=%" PRIu64 ")\n",
+			target_seq);
 		return NULL;
 	}
-
+	
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
 	mask = idx_ver->mask;
 	batch = idx->batch_candle_count;
@@ -345,13 +364,16 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		errmsg(stderr,
+			"Failure on atomsnap_acquire_version() "
+			"(target_ts=%" PRIu64 ")\n",
+			target_ts);
 		return NULL;
 	}
-
+	
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
 	mask = idx_ver->mask;
-
+	
 	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
 		atomsnap_release_version(snap_ver);
 		return NULL;
