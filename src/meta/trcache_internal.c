@@ -336,16 +336,16 @@ void trcache_destroy(struct trcache *tc)
 	free(tc->worker_threads);
 	free(tc->worker_args);
 
-free(tc);
+	free(tc);
 }
 
 
 /**
  * @brief   Resolve symbol ID from string using TLS cache and shared table.
  *
- * @param   tc:         Pointer to trcache instance.
- * @param   tls:        Thread local storage pointer.
- * @param   symbol_str: NULL-terminated symbol string.
+ * @param   tc:          Pointer to trcache instance.
+ * @param   tls:         Thread local storage pointer.
+ * @param   symbol_str:  NULL-terminated symbol string.
  *
  * @return  Symbol ID on success, -1 on failure.
  */
@@ -356,30 +356,32 @@ static int resolve_symbol_id(struct trcache *tc, struct trcache_tls_data *tls,
 	int symbol_id = -1;
 
 	if (tls->local_symbol_id_map == NULL) {
-	       tls->local_symbol_id_map = ht_create(1024, 0xDEADBEEFULL,
-	               murmur_hash, compare_symbol_str, duplicate_symbol_str,
-	               free_symbol_str);
-	       if (tls->local_symbol_id_map == NULL) {
-	               errmsg(stderr, "Failure on ht_create()\n");
-	               return -1;
-	       }
+		tls->local_symbol_id_map = ht_create(1024, 0xDEADBEEFULL,
+			murmur_hash, compare_symbol_str, duplicate_symbol_str,
+			free_symbol_str);
+		if (tls->local_symbol_id_map == NULL) {
+			errmsg(stderr, "Failure on ht_create()\n");
+			return -1;
+		}
 	}
 
 	symbol_id = (int)(uintptr_t)ht_find(tls->local_symbol_id_map, symbol_str,
-	       strlen(symbol_str) + 1, &found);
+		strlen(symbol_str) + 1, &found);
 
 	if (!found) {
-	       symbol_id = symbol_table_lookup_symbol_id(tc->symbol_table,
-	               symbol_str);
-	       if (symbol_id == -1) {
-	               return -1;
-	       }
-	       if (ht_insert(tls->local_symbol_id_map, symbol_str,
-	                       strlen(symbol_str) + 1,
-	                       (void *)(uintptr_t)symbol_id) < 0) {
-	               errmsg(stderr, "Failure on ht_insert()\n");
-	               return -1;
-	       }
+		symbol_id = symbol_table_lookup_symbol_id(
+			tc->symbol_table, symbol_str);
+	       
+		if (symbol_id == -1) {
+			return -1;
+		}
+	       
+		if (ht_insert(tls->local_symbol_id_map, symbol_str,
+				strlen(symbol_str) + 1,
+				(void *)(uintptr_t)symbol_id) < 0) {
+			errmsg(stderr, "Failure on ht_insert()\n");
+			return -1;
+		}
 	}
 
 	return symbol_id;
@@ -513,21 +515,21 @@ int trcache_feed_trade_data(struct trcache *tc,
  * @brief   Obtain candle chunk list for given symbol and type.
  */
 static struct candle_chunk_list *get_chunk_list(struct trcache *tc, int symbol_id,
-trcache_candle_type type)
+	trcache_candle_type type)
 {
 	struct symbol_entry *entry;
 	int bit;
 
 	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 	if (entry == NULL) {
-	       errmsg(stderr, "Invalid symbol id\n");
-	       return NULL;
+		errmsg(stderr, "Invalid symbol id\n");
+		return NULL;
 	}
 
 	bit = __builtin_ctz(type);
 	if (bit < 0 || bit >= TRCACHE_NUM_CANDLE_TYPE) {
-	       errmsg(stderr, "Invalid candle type\n");
-	       return NULL;
+		errmsg(stderr, "Invalid candle type\n");
+		return NULL;
 	}
 
 	return entry->candle_chunk_list_ptrs[bit];
@@ -553,14 +555,14 @@ int trcache_get_candles_by_symbol_id_with_ts(struct trcache *tc, int symbol_id,
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
 
 	if (list == NULL) {
-	       return -1;
+		return -1;
 	}
 
 	dst->symbol_id = symbol_id;
 	dst->candle_type = type;
 
-	return candle_chunk_list_copy_backward_by_ts(list, ts_end, count, dst,
-	       field_mask);
+	return candle_chunk_list_copy_backward_by_ts(list, ts_end, count, 
+		dst, field_mask);
 }
 
 /**
@@ -584,17 +586,17 @@ int trcache_get_candles_by_symbol_str_with_ts(struct trcache *tc, const char *sy
 	int symbol_id;
 
 	if (tls == NULL) {
-	       return -1;
+		return -1;
 	}
 
 	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
 	if (symbol_id == -1) {
-	       errmsg(stderr, "Invalid symbol string\n");
-	       return -1;
+		errmsg(stderr, "Invalid symbol string\n");
+		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_with_ts(tc, symbol_id, type, field_mask,
-	       ts_end, count, dst);
+	return trcache_get_candles_by_symbol_id_with_ts(tc, symbol_id, type, 
+		field_mask, ts_end, count, dst);
 }
 
 /**
@@ -619,7 +621,7 @@ int trcache_get_candles_by_symbol_id_with_offset(struct trcache *tc, int symbol_
 	uint64_t seq_end;
 
 	if (list == NULL) {
-	       return -1;
+		return -1;
 	}
 
 	seq_end = atomic_load_explicit(&list->mutable_seq, memory_order_acquire);
@@ -628,8 +630,8 @@ int trcache_get_candles_by_symbol_id_with_offset(struct trcache *tc, int symbol_
 	dst->symbol_id = symbol_id;
 	dst->candle_type = type;
 
-	return candle_chunk_list_copy_backward_by_seq(list, seq_end, count, dst,
-	       field_mask);
+	return candle_chunk_list_copy_backward_by_seq(list, seq_end, count, 
+		dst, field_mask);
 }
 
 /**
@@ -654,15 +656,15 @@ int trcache_get_candles_by_symbol_str_with_offset(struct trcache *tc, const char
 	int symbol_id;
 
 	if (tls == NULL) {
-	       return -1;
+		return -1;
 	}
 
 	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
 	if (symbol_id == -1) {
-	       errmsg(stderr, "Invalid symbol string\n");
-	       return -1;
+		errmsg(stderr, "Invalid symbol string\n");
+		return -1;
 	}
 
 	return trcache_get_candles_by_symbol_id_with_offset(tc, symbol_id, type,
-	        field_mask, offset, count, dst);
+		field_mask, offset, count, dst);
 }
