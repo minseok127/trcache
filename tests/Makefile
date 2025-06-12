@@ -6,7 +6,8 @@ INCLUDES ?= -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 TARGETS = test_utils test_symbol_table \
           test_trade_data_buffer_no_freelist \
           test_trade_data_buffer_free_list \
-          test_candle_chunk_list_multithread
+          test_candle_chunk_list_multithread \
+          test_trcache_init_destroy
 
 OBJS_test_utils = test_utils.o
 SRC_test_utils = $(PROJECT_ROOT)/src/utils/vector.c \
@@ -44,6 +45,9 @@ SRC_test_candle_chunk_list_multithread = \
       $(PROJECT_ROOT)/src/concurrent/atomsnap.c \
       $(PROJECT_ROOT)/src/meta/trcache_candle_batch.c
 
+OBJS_test_trcache_init_destroy = test_trcache_init_destroy.o
+SRC_test_trcache_init_destroy = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
+
 .PHONY: all run clean
 
 all: $(TARGETS)
@@ -63,19 +67,24 @@ test_trade_data_buffer_free_list: $(SRC_test_trade_data_buffer_free_list) $(OBJS
 test_candle_chunk_list_multithread: $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread) -o $@
 
+test_trcache_init_destroy: $(SRC_test_trcache_init_destroy) $(OBJS_test_trcache_init_destroy)
+	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trcache_init_destroy) $(OBJS_test_trcache_init_destroy) -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 run: all
-	./test_utils
-	./test_symbol_table
-	./test_trade_data_buffer_no_freelist
-	./test_trade_data_buffer_free_list
-	./test_candle_chunk_list_multithread
+	       ./test_utils
+	       ./test_symbol_table
+	       ./test_trade_data_buffer_no_freelist
+	       ./test_trade_data_buffer_free_list
+	       ./test_candle_chunk_list_multithread
+	       ./test_trcache_init_destroy
 
 clean:
-	rm -f $(OBJS_test_utils) $(OBJS_test_symbol_table) \
-        $(OBJS_test_trade_data_buffer_no_freelist) \
-        $(OBJS_test_trade_data_buffer_free_list) \
-        $(OBJS_test_candle_chunk_list_multithread) \
-        $(TARGETS)
+	       rm -f $(OBJS_test_utils) $(OBJS_test_symbol_table) \
+	       $(OBJS_test_trade_data_buffer_no_freelist) \
+	       $(OBJS_test_trade_data_buffer_free_list) \
+	       $(OBJS_test_candle_chunk_list_multithread) \
+	       $(OBJS_test_trcache_init_destroy) \
+	       $(TARGETS)
