@@ -336,9 +336,54 @@ void trcache_destroy(struct trcache *tc)
 	free(tc->worker_threads);
 	free(tc->worker_args);
 
-	free(tc);
+free(tc);
 }
 
+
+/**
+ * @brief   Resolve symbol ID from string using TLS cache and shared table.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   tls:        Thread local storage pointer.
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Symbol ID on success, -1 on failure.
+ */
+static int resolve_symbol_id(struct trcache *tc, struct trcache_tls_data *tls,
+	const char *symbol_str)
+{
+	bool found = false;
+	int symbol_id = -1;
+
+	if (tls->local_symbol_id_map == NULL) {
+	       tls->local_symbol_id_map = ht_create(1024, 0xDEADBEEFULL,
+	               murmur_hash, compare_symbol_str, duplicate_symbol_str,
+	               free_symbol_str);
+	       if (tls->local_symbol_id_map == NULL) {
+	               errmsg(stderr, "Failure on ht_create()\n");
+	               return -1;
+	       }
+	}
+
+	symbol_id = (int)(uintptr_t)ht_find(tls->local_symbol_id_map, symbol_str,
+	       strlen(symbol_str) + 1, &found);
+
+	if (!found) {
+	       symbol_id = symbol_table_lookup_symbol_id(tc->symbol_table,
+	               symbol_str);
+	       if (symbol_id == -1) {
+	               return -1;
+	       }
+	       if (ht_insert(tls->local_symbol_id_map, symbol_str,
+	                       strlen(symbol_str) + 1,
+	                       (void *)(uintptr_t)symbol_id) < 0) {
+	               errmsg(stderr, "Failure on ht_insert()\n");
+	               return -1;
+	       }
+	}
+
+	return symbol_id;
+}
 /**
  * @brief   Register symbol string via TLS cache or shared table.
  *
@@ -350,49 +395,27 @@ void trcache_destroy(struct trcache *tc)
 int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
-	bool found = false;
-	int symbol_id = -1;
+	int symbol_id;
 
-	if (tls_data_ptr->local_symbol_id_map == NULL) {
-		tls_data_ptr->local_symbol_id_map
-			= ht_create(1024, /* initial capacity */
-				0xDEADBEEFULL, /* seed */
-				murmur_hash, /* hash function */
-				compare_symbol_str, /* cmp_func */
-				duplicate_symbol_str, /* dup_func */
-				free_symbol_str /* free_func */
-			);
-	}
-
-	/* First, find it from the thread local cache */
-	symbol_id = (int)(uintptr_t) ht_find(tls_data_ptr->local_symbol_id_map,
-		symbol_str,
-		strlen(symbol_str) + 1, /* string + NULL */
-		&found);
-
-	if (found) {
+	symbol_id = resolve_symbol_id(tc, tls_data_ptr, symbol_str);
+	if (symbol_id != -1) {
 		return symbol_id;
 	}
 
-	/* 
-	 * If this symbol does not exists in local cache, find it from shared
-	 * symbol table.
-	 */
-	symbol_id = symbol_table_lookup_symbol_id(tc->symbol_table, symbol_str);
-
+	symbol_id = symbol_table_register(tc, tc->symbol_table, symbol_str);
 	if (symbol_id == -1) {
-		symbol_id = symbol_table_register(tc, tc->symbol_table, symbol_str);
+		return -1;
+	}
 
-		/* Add it into local cache */
-		if (ht_insert(tls_data_ptr->local_symbol_id_map, symbol_str,
-				strlen(symbol_str) + 1, (void *)(uintptr_t)symbol_id) < 0) {
-			errmsg(stderr, "Failure on ht_insert()\n");
-			return -1;
-		}
+	if (ht_insert(tls_data_ptr->local_symbol_id_map, symbol_str,
+			strlen(symbol_str) + 1, (void *)(uintptr_t)symbol_id) < 0) {
+		errmsg(stderr, "Failure on ht_insert()\n");
+		return -1;
 	}
 
 	return symbol_id;
 }
+
 
 /**
  * @brief   Lookup symbol string by its symbol id.
@@ -482,6 +505,164 @@ int trcache_feed_trade_data(struct trcache *tc,
 			&tls_data_ptr->local_free_list);
 	}
 
-	return trade_data_buffer_push(trd_databuf, data, 
-		&tls_data_ptr->local_free_list);
+	return trade_data_buffer_push(trd_databuf, data,
+	        &tls_data_ptr->local_free_list);
+}
+
+/**
+ * @brief   Obtain candle chunk list for given symbol and type.
+ */
+static struct candle_chunk_list *get_chunk_list(struct trcache *tc, int symbol_id,
+trcache_candle_type type)
+{
+	struct symbol_entry *entry;
+	int bit;
+
+	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+	if (entry == NULL) {
+	       errmsg(stderr, "Invalid symbol id\n");
+	       return NULL;
+	}
+
+	bit = __builtin_ctz(type);
+	if (bit < 0 || bit >= TRCACHE_NUM_CANDLE_TYPE) {
+	       errmsg(stderr, "Invalid candle type\n");
+	       return NULL;
+	}
+
+	return entry->candle_chunk_list_ptrs[bit];
+}
+
+/**
+ * @brief   Copy @p count candles ending at @p ts_end.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_id_with_ts(struct trcache *tc, int symbol_id,
+	trcache_candle_type type, trcache_candle_field_flags field_mask,
+	uint64_t ts_end, int count, struct trcache_candle_batch *dst)
+{
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
+
+	if (list == NULL) {
+	       return -1;
+	}
+
+	dst->symbol_id = symbol_id;
+	dst->candle_type = type;
+
+	return candle_chunk_list_copy_backward_by_ts(list, ts_end, count, dst,
+	       field_mask);
+}
+
+/**
+ * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_str_with_ts(struct trcache *tc, const char *symbol_str,
+	trcache_candle_type type, trcache_candle_field_flags field_mask,
+	uint64_t ts_end, int count, struct trcache_candle_batch *dst)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+	int symbol_id;
+
+	if (tls == NULL) {
+	       return -1;
+	}
+
+	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
+	if (symbol_id == -1) {
+	       errmsg(stderr, "Invalid symbol string\n");
+	       return -1;
+	}
+
+	return trcache_get_candles_by_symbol_id_with_ts(tc, symbol_id, type, field_mask,
+	       ts_end, count, dst);
+}
+
+/**
+ * @brief   Copy @p count candles ending at the candle located @p offset from
+ *  the most recent candle.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   offset:     Offset from the most recent candle (0 == most recent).
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_id_with_offset(struct trcache *tc, int symbol_id,
+	trcache_candle_type type, trcache_candle_field_flags field_mask,
+	int offset, int count, struct trcache_candle_batch *dst)
+{
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
+	uint64_t seq_end;
+
+	if (list == NULL) {
+	       return -1;
+	}
+
+	seq_end = atomic_load_explicit(&list->mutable_seq, memory_order_acquire);
+	seq_end -= offset;
+
+	dst->symbol_id = symbol_id;
+	dst->candle_type = type;
+
+	return candle_chunk_list_copy_backward_by_seq(list, seq_end, count, dst,
+	       field_mask);
+}
+
+/**
+ * @brief   Copy @p count candles ending at the candle located @p offset from
+ *  the most recent candle for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   offset:     Offset from the most recent candle (0 == most recent).
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_str_with_offset(struct trcache *tc, const char *symbol_str,
+	trcache_candle_type type, trcache_candle_field_flags field_mask,
+	int offset, int count, struct trcache_candle_batch *dst)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+	int symbol_id;
+
+	if (tls == NULL) {
+	       return -1;
+	}
+
+	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
+	if (symbol_id == -1) {
+	       errmsg(stderr, "Invalid symbol string\n");
+	       return -1;
+	}
+
+	return trcache_get_candles_by_symbol_id_with_offset(tc, symbol_id, type,
+	        field_mask, offset, count, dst);
 }
