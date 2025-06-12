@@ -135,6 +135,14 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 
 /**
+ * @brief    Finalize the current mutable candle and convert all remaining
+ *           candles to column format.
+ *
+ * @param    list: Pointer to the candle chunk list.
+ */
+void candle_chunk_list_finalize(struct candle_chunk_list *list);
+
+/**
  * @brief    Flush finalized column batches from the chunk list.
  *
  * @param    list:  Pointer to the candle chunk list.

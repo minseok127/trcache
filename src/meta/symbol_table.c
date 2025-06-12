@@ -161,11 +161,12 @@ void symbol_table_destroy(struct symbol_table *table)
 	for (int i = 0; i < table->num_symbols; i++) {
 		entry = symbol_ptr_array[i];
 
-		for (int j = 0; j < TRCACHE_NUM_CANDLE_TYPE; j++) {
-			if (entry->candle_chunk_list_ptrs[j] != NULL) {
-				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
-			}
-		}
+                for (int j = 0; j < TRCACHE_NUM_CANDLE_TYPE; j++) {
+                        if (entry->candle_chunk_list_ptrs[j] != NULL) {
+                                candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j]);
+                                destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
+                        }
+                }
 
 		trade_data_buffer_destroy(entry->trd_buf);
 		free(entry->symbol_str);

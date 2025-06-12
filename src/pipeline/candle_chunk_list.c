@@ -565,8 +565,62 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 	atomic_store_explicit(&list->last_seq_converted, last_seq_converted,
 		memory_order_release);
 
-	atomic_fetch_add_explicit(&list->unflushed_batch_count, num_flush_batch,
-		memory_order_release);
+        atomic_fetch_add_explicit(&list->unflushed_batch_count, num_flush_batch,
+                memory_order_release);
+}
+
+void candle_chunk_list_finalize(struct candle_chunk_list *list)
+{
+        struct candle_chunk *chunk = NULL;
+        uint64_t mutable_seq;
+        int rec_idx, start_idx;
+
+        if (list == NULL) {
+                return;
+        }
+
+        /*
+         * Convert all immutable candles first. The candle currently pointed
+         * to by mutable_seq remains in row form after this call.
+         */
+        candle_chunk_list_convert_to_column_batch(list);
+
+        chunk = list->candle_mutable_chunk;
+        mutable_seq = atomic_load_explicit(&list->mutable_seq,
+                        memory_order_acquire);
+        if (chunk == NULL || mutable_seq == UINT64_MAX) {
+                return;
+        }
+
+        rec_idx = candle_chunk_calc_record_index(chunk->mutable_page_idx,
+                        chunk->mutable_row_idx);
+
+        /*
+         * Finalize the last candle and convert it to column format. At destroy
+         * time the candle is effectively immutable, so it is safe to convert.
+         */
+        if (atomic_load_explicit(&chunk->num_completed,
+                        memory_order_acquire) == rec_idx) {
+                start_idx = rec_idx;
+                candle_chunk_convert_to_batch(chunk, start_idx, start_idx);
+                atomic_store_explicit(&chunk->num_completed, rec_idx + 1,
+                                memory_order_release);
+                atomic_store_explicit(&chunk->num_converted, rec_idx + 1,
+                                memory_order_release);
+                chunk->converting_page_idx =
+                        candle_chunk_calc_page_idx(rec_idx + 1);
+                chunk->converting_row_idx =
+                        candle_chunk_calc_row_idx(rec_idx + 1);
+                atomic_fetch_add_explicit(&list->last_seq_converted, 1,
+                                memory_order_release);
+                if (rec_idx == list->trc->batch_candle_count - 1) {
+                        atomic_fetch_add_explicit(&list->unflushed_batch_count,
+                                        1, memory_order_release);
+                }
+                list->candle_mutable_chunk = NULL;
+                atomic_store_explicit(&list->mutable_seq, UINT64_MAX,
+                                memory_order_release);
+        }
 }
 
 /**
