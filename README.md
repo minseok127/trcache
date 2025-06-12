@@ -155,6 +155,8 @@ int aapl_id = trcache_register_symbol(cache, "AAPL");
 const char *name = trcache_lookup_symbol_str(cache, aapl_id); /* "AAPL" */
 ```
 
+Before inserting real-time trade data into trcache, the user must register the symbol associated with the trade in the system. The `trcache_register_symbol()` API is used to register a symbol string and retrieve the corresponding ID. This ID must be included in the real-time trade data.
+
 ### 6. Feed trade data
 
 ```c
@@ -169,6 +171,7 @@ trcache_feed_trade_data(cache, &td, aapl_id);
 ```
 
 Only one user thread should push trades for a symbol at any given moment.
+
 ### 7. Destroy the engine
 
 ```c
