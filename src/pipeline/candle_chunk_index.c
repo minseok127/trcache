@@ -375,6 +375,10 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	mask = idx_ver->mask;
 	
 	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
+		errmsg(stderr,
+			"Target ts is less than head's timestamp "
+			"(target_ts=%" PRIu64 "), (head_ts=%" PRIu64 ")\n",
+			target_ts, idx_ver->array[head &mask].timestamp_first);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
@@ -399,6 +403,8 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	 * to that candle, and the chunk is considered not found.
 	 */
 	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
+		errmsg(stderr,
+			"Target ts is greater than the start ts of the recent candle\n");
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
