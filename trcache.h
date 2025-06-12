@@ -95,6 +95,9 @@ typedef enum {
 
 typedef uint32_t trcache_candle_field_flags;
 
+#define TRCACHE_FIELD_MASK_ALL \ 
+	(((trcache_candle_field_flags)1 << TRCACHE_NUM_CANDLE_FIELD) - 1)
+
 /*
  * trcache_candle - Single candle data structured in row-oriented format.
  *
@@ -337,14 +340,16 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *cache,
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
+ * @param   capacity:   Number of OHLCV rows to allocate (must be > 0).
+ * @param   field_mask: OR-ed set of required fields.
  *
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
  *
  * @note The returned pointer must be released via trcache_batch_free().
  */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
+	trcache_candle_field_flags field_mask);
 
 /**
  * @brief   Release a heap-allocated candle batch.
@@ -380,36 +385,60 @@ static inline void *trcache_align_up_ptr(void *p, size_t a)
  *
  * @param   dst [out]:  Pre-declared #trcache_candle_batch object to populate.
  * @param   capacity:   Number of candle rows to allocate (must be > 0).
+ * @param   field_mask: OR-ed set of required fields.
  *
  * @note All pointers inside @p dst point into the caller's stack frame.
  */
 static inline void trcache_batch_alloc_on_stack(
-	struct trcache_candle_batch *dst, int capacity)
+	struct trcache_candle_batch *dst, int capacity,
+	trcache_candle_field_flags field_mask)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
 	size_t u64b = (size_t)capacity * sizeof(uint64_t);
 	size_t dblb = (size_t)capacity * sizeof(double);
 
-	uint8_t *buf_ts = alloca(u64b + a - 1);
-	uint8_t *buf_tid = alloca(u64b + a - 1);
-	uint8_t *buf_op = alloca(dblb + a - 1);
-	uint8_t *buf_hi = alloca(dblb + a - 1);
-	uint8_t *buf_lo = alloca(dblb + a - 1);
-	uint8_t *buf_cl = alloca(dblb + a - 1);
-	uint8_t *buf_vol = alloca(dblb + a - 1);
+	uint8_t *buf_ts = NULL;
+	uint8_t *buf_tid = NULL;
+	uint8_t *buf_op = NULL;
+	uint8_t *buf_hi = NULL;
+	uint8_t *buf_lo = NULL;
+	uint8_t *buf_cl = NULL;
+	uint8_t *buf_vol = NULL;
+
+	if (field_mask & TRCACHE_START_TIMESTAMP)
+		buf_ts = alloca(u64b + a - 1);
+	if (field_mask & TRCACHE_START_TRADE_ID)
+		buf_tid = alloca(u64b + a - 1);
+	if (field_mask & TRCACHE_OPEN)
+		buf_op = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_HIGH)
+		buf_hi = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_LOW)
+		buf_lo = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_CLOSE)
+		buf_cl = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_VOLUME)
+		buf_vol = alloca(dblb + a - 1);
 
 	dst->capacity = capacity;
 	dst->num_candles = 0;
 	dst->candle_type = -1;
 	dst->symbol_id = -1;
 
-	dst->start_timestamp_array = (uint64_t *)trcache_align_up_ptr(buf_ts, a);
-	dst->start_trade_id_array = (uint64_t *)trcache_align_up_ptr(buf_tid, a);
-	dst->open_array = (double *)trcache_align_up_ptr(buf_op, a);
-	dst->high_array = (double *)trcache_align_up_ptr(buf_hi, a);
-	dst->low_array = (double *)trcache_align_up_ptr(buf_lo, a);
-	dst->close_array = (double *)trcache_align_up_ptr(buf_cl, a);
-	dst->volume_array = (double *)trcache_align_up_ptr(buf_vol, a);
+	dst->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
+		(uint64_t *)trcache_align_up_ptr(buf_ts, a) : NULL;
+	dst->start_trade_id_array = (field_mask & TRCACHE_START_TRADE_ID) ?
+		(uint64_t *)trcache_align_up_ptr(buf_tid, a) : NULL;
+	dst->open_array = (field_mask & TRCACHE_OPEN) ?
+		(double *)trcache_align_up_ptr(buf_op, a) : NULL;
+	dst->high_array = (field_mask & TRCACHE_HIGH) ?
+		(double *)trcache_align_up_ptr(buf_hi, a) : NULL;
+	dst->low_array = (field_mask & TRCACHE_LOW) ?
+		(double *)trcache_align_up_ptr(buf_lo, a) : NULL;
+	dst->close_array = (field_mask & TRCACHE_CLOSE) ?
+		(double *)trcache_align_up_ptr(buf_cl, a) : NULL;
+	dst->volume_array = (field_mask & TRCACHE_VOLUME) ?
+		(double *)trcache_align_up_ptr(buf_vol, a) : NULL;
 }
 
 /**
@@ -418,17 +447,18 @@ static inline void trcache_batch_alloc_on_stack(
  * Example:
  * 
  * func() {
- *     TRCACHE_DEFINE_BATCH_ON_STACK(batch, 1024);
+ *     TRCACHE_DEFINE_BATCH_ON_STACK(batch, 1024, TRCACHE_FIELD_MASK_ALL);
  *     // batch.open_array … 1024 aligned doubles
  *     ...
  * }
  *
- * @param   var: User-chosen variable name of type #trcache_candle_batch.
- * @param   cap: Number of candles to allocate (runtime value allowed).
+ * @param   var:  User-chosen variable name of type #trcache_candle_batch.
+ * @param   cap:  Number of candles to allocate (runtime value allowed).
+ * @param   mask: OR-ed set of required fields.
  */
-#define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap) \
+#define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap, mask) \
 	trcache_candle_batch var; \
-	trcache_batch_alloc_on_stack(&(var), (cap))
+	trcache_batch_alloc_on_stack(&(var), (cap), (mask))
 
 #ifdef __cplusplus
 }
