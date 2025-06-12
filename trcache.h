@@ -95,7 +95,7 @@ typedef enum {
 
 typedef uint32_t trcache_candle_field_flags;
 
-#define TRCACHE_FIELD_MASK_ALL \ 
+#define TRCACHE_FIELD_MASK_ALL \
 	(((trcache_candle_field_flags)1 << TRCACHE_NUM_CANDLE_FIELD) - 1)
 
 /*
