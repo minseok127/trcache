@@ -114,7 +114,8 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 		return NULL;
 	}
 
-	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count);
+       chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count,
+TRCACHE_FIELD_MASK_ALL);
 	if (chunk->column_batch == NULL) {
 		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
 		pthread_spin_destroy(&chunk->spinlock);

@@ -140,10 +140,11 @@ worker threads automatically.
 
 ```c
 /* heap allocation */
-struct trcache_candle_batch *hb = trcache_batch_alloc_on_heap(512);
+struct trcache_candle_batch *hb =
+    trcache_batch_alloc_on_heap(512, TRCACHE_FIELD_MASK_ALL);
 
 /* stack allocation */
-TRCACHE_DEFINE_BATCH_ON_STACK(sb, 512);
+TRCACHE_DEFINE_BATCH_ON_STACK(sb, 512, TRCACHE_FIELD_MASK_ALL);
 ```
 
 The heap batch must be released with `trcache_batch_free()` when no longer needed.
