@@ -514,8 +514,8 @@ int trcache_feed_trade_data(struct trcache *tc,
 /**
  * @brief   Obtain candle chunk list for given symbol and type.
  */
-static struct candle_chunk_list *get_chunk_list(struct trcache *tc, int symbol_id,
-	trcache_candle_type type)
+static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
+	int symbol_id, trcache_candle_type type)
 {
 	struct symbol_entry *entry;
 	int bit;
@@ -548,9 +548,10 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc, int symbol_i
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_with_ts(struct trcache *tc, int symbol_id,
-	trcache_candle_type type, trcache_candle_field_flags field_mask,
-	uint64_t ts_end, int count, struct trcache_candle_batch *dst)
+int trcache_get_candles_by_symbol_id_and_ts(struct trcache *tc,
+	int symbol_id, trcache_candle_type type,
+	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	struct trcache_candle_batch *dst)
 {
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
 
@@ -578,9 +579,10 @@ int trcache_get_candles_by_symbol_id_with_ts(struct trcache *tc, int symbol_id,
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_with_ts(struct trcache *tc, const char *symbol_str,
-	trcache_candle_type type, trcache_candle_field_flags field_mask,
-	uint64_t ts_end, int count, struct trcache_candle_batch *dst)
+int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
+	const char *symbol_str, trcache_candle_type type,
+	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 	int symbol_id;
@@ -595,7 +597,7 @@ int trcache_get_candles_by_symbol_str_with_ts(struct trcache *tc, const char *sy
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_with_ts(tc, symbol_id, type, 
+	return trcache_get_candles_by_symbol_id_and_ts(tc, symbol_id, type, 
 		field_mask, ts_end, count, dst);
 }
 
@@ -613,9 +615,10 @@ int trcache_get_candles_by_symbol_str_with_ts(struct trcache *tc, const char *sy
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_with_offset(struct trcache *tc, int symbol_id,
-	trcache_candle_type type, trcache_candle_field_flags field_mask,
-	int offset, int count, struct trcache_candle_batch *dst)
+int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
+	int symbol_id, trcache_candle_type type,
+	trcache_candle_field_flags field_mask, int offset, int count,
+	struct trcache_candle_batch *dst)
 {
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
 	uint64_t seq_end;
@@ -648,9 +651,10 @@ int trcache_get_candles_by_symbol_id_with_offset(struct trcache *tc, int symbol_
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_with_offset(struct trcache *tc, const char *symbol_str,
-	trcache_candle_type type, trcache_candle_field_flags field_mask,
-	int offset, int count, struct trcache_candle_batch *dst)
+int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
+	const char *symbol_str, trcache_candle_type type,
+	trcache_candle_field_flags field_mask, int offset, int count,
+	struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 	int symbol_id;
@@ -665,6 +669,6 @@ int trcache_get_candles_by_symbol_str_with_offset(struct trcache *tc, const char
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_with_offset(tc, symbol_id, type,
+	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id, type,
 		field_mask, offset, count, dst);
 }
