@@ -570,6 +570,46 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 }
 
 /**
+ * @brief    Finalize the current mutable candle and convert all remaining
+ *           candles to column format.
+ *
+ * @param    list: Pointer to the candle chunk list.
+ */
+void candle_chunk_list_finalize(struct candle_chunk_list *list)
+{
+	struct candle_chunk *chunk = NULL;
+	uint64_t mutable_seq;
+	int rec_idx;
+
+	if (list == NULL) {
+		return;
+	}
+
+	/*
+	 * Convert all immutable candles first. The candle currently pointed
+	 * to by mutable_seq remains in row form after this call.
+	 */
+	candle_chunk_list_convert_to_column_batch(list);
+
+	chunk = list->candle_mutable_chunk;
+	mutable_seq = atomic_load_explicit(&list->mutable_seq,
+		memory_order_acquire);
+        
+	if (chunk == NULL || mutable_seq == UINT64_MAX) {
+		return;
+	}
+
+	rec_idx = candle_chunk_calc_record_index(chunk->mutable_page_idx,
+		chunk->mutable_row_idx);
+
+	/*
+	 * Finalize the last candle and convert it to column format. At destroy
+	 * time the candle is effectively immutable, so it is safe to convert.
+	 */
+	candle_chunk_convert_to_batch(chunk, rec_idx, rec_idx);
+}
+
+/**
  * @brief    Flush finalized column batches from the chunk list.
  *
  * @param    list:  Pointer to the candle chunk list.

@@ -163,6 +163,7 @@ void symbol_table_destroy(struct symbol_table *table)
 
 		for (int j = 0; j < TRCACHE_NUM_CANDLE_TYPE; j++) {
 			if (entry->candle_chunk_list_ptrs[j] != NULL) {
+				candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j]);
 				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
 			}
 		}
