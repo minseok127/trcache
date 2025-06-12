@@ -136,7 +136,7 @@ worker threads automatically.
 
 ### 4. Allocate candle batches
 
-`trcache_candle_batch` represents a column‑oriented array of OHLCV candles. The engine writes into these batches when flushing or when users copy candle data out. Batches can live on the heap or on the caller's stack:
+`trcache_candle_batch` represents a column‑oriented array of OHLCV candles. These batches serve as flush targets for the engine, or are used when users copy candle data out. Batches can reside either on the heap or on the caller's stack:
 
 ```c
 /* heap allocation */
