@@ -178,8 +178,7 @@ The user can buffer real-time trade data into trcache using `trcache_feed_trade_
 trcache_destroy(cache);
 ```
 
-`trcache_destroy()` stops all worker threads, joins the admin thread and flushes
-any batches still held in memory before releasing resources.
+`trcache_destroy()` stops all worker threads, joins the admin thread and flushes all batches still held in memory before releasing resources.
 
 ## Architecture overview
 
