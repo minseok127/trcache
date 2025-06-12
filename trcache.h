@@ -424,7 +424,6 @@ static inline void trcache_batch_alloc_on_stack(
 	dst->num_candles = 0;
 	dst->candle_type = -1;
 	dst->symbol_id = -1;
-	dst->field_mask = field_mask;
 
 	dst->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
 		(uint64_t *)trcache_align_up_ptr(buf_ts, a) : NULL;
