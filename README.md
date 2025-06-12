@@ -44,7 +44,7 @@ A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_
 
 Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues ([`scalable_queue`](https://github.com/minseok127/scalable-queue)).
 
-The library stores symbols in a lock‑free table built on the [`atomsnap`](https://github.com/minseok127/atomsnap) snapshot mechanism.  Thread‑local caches accelerate symbol lookup and buffer access.
+Lock‑free structures rely on the [`atomsnap`](https://github.com/minseok127/atomsnap) snapshot mechanism.  The symbol table is an atomsnap table so entries can be added or removed while readers traverse it.  Each `candle_chunk` row page publishes a `NULL` snapshot when it becomes obsolete.  Workers across all pipeline stages take snapshots and advance epochs so pages are freed only after every worker exits the grace period.  The head pointer of each `candle_chunk_list` is snapshotted as well; obsolete chunks are unlinked without halting list iteration and reclaimed once the grace period passes.
 
 ## Basic usage
 
