@@ -113,7 +113,9 @@ void async_destroy(void *handle, void *ctx)
 
 Supply these callbacks to `trcache_init()`.  When using the asynchronous
 variant, also set `ops.is_done` and `ops.destroy_handle`.
-
+See `examples/flush_templates/` for flush templates using SQLite,
+PostgreSQL, MySQL, DuckDB, Parquet and Arrow.
+Each directory shows how to link against the required client libraries.
 ### 3. Initialise the engine
 
 ```c
