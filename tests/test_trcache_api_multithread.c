@@ -298,7 +298,7 @@ int main(int argc, char **argv)
         tc.num_candle_types = 2;
         tc.batch_candle_count_pow2 = 10;
         tc.batch_candle_count = 1 << tc.batch_candle_count_pow2;
-        tc.flush_threshold_pow2 = 5;
+        tc.flush_threshold_pow2 = 1;
         tc.flush_threshold = 1 << tc.flush_threshold_pow2;
         tc.flush_ops.flush = dummy_flush;
         tc.flush_ops.is_done = dummy_is_done;
