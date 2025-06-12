@@ -295,11 +295,8 @@ void trcache_batch_free(struct trcache_candle_batch *batch);
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_with_ts(struct trcache *cache,
-	int symbol_id,
-	trcache_candle_type candle_type,
-	trcache_candle_field_flags field_mask,
-	uint64_t ts_end,
-	int count,
+	int symbol_id, trcache_candle_type candle_type,
+	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
 	struct trcache_candle_batch *batch);
 
 /**
@@ -316,11 +313,8 @@ int trcache_get_candles_by_symbol_id_with_ts(struct trcache *cache,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_with_ts(struct trcache *cache,
-	const char *symbol_str,
-	trcache_candle_type candle_type,
-	trcache_candle_field_flags field_mask,
-	uint64_t ts_end,
-	int count,
+	const char *symbol_str, trcache_candle_type candle_type,
+	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
 	struct trcache_candle_batch *batch);
 
 /**
@@ -338,11 +332,8 @@ int trcache_get_candles_by_symbol_str_with_ts(struct trcache *cache,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_with_offset(struct trcache *cache,
-	int symbol_id,
-	trcache_candle_type candle_type,
-	trcache_candle_field_flags field_mask,
-	int offset,
-	int count,
+	int symbol_id, trcache_candle_type candle_type,
+	trcache_candle_field_flags field_mask, int offset, int count,
 	struct trcache_candle_batch *batch);
 
 /**
@@ -360,11 +351,8 @@ int trcache_get_candles_by_symbol_id_with_offset(struct trcache *cache,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_with_offset(struct trcache *cache,
-	const char *symbol_str,
-	trcache_candle_type candle_type,
-	trcache_candle_field_flags field_mask,
-	int offset,
-	int count,
+	const char *symbol_str, trcache_candle_type candle_type,
+	trcache_candle_field_flags field_mask, int offset, int count,
 	struct trcache_candle_batch *batch);
 
 /**
