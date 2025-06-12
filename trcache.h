@@ -284,13 +284,13 @@ void trcache_batch_free(struct trcache_candle_batch *batch);
 /**
  * @brief   Copy @p count candles ending at @p ts_end.
  *
- * @param   cache:      Handle from trcache_init().
- * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   candle_type:        Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
- * @param   count:      Number of candles to copy.
- * @param   batch:      Pre-allocated destination batch.
+ * @param   cache:       Handle from trcache_init().
+ * @param   symbol_id:   Symbol ID from trcache_register_symbol().
+ * @param   candle_type: Candle type to query.
+ * @param   field_mask:  Bitmask of desired candle fields.
+ * @param   ts_end:      Timestamp belonging to the last candle.
+ * @param   count:       Number of candles to copy.
+ * @param   batch:       Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
@@ -302,13 +302,13 @@ int trcache_get_candles_by_symbol_id_with_ts(struct trcache *cache,
 /**
  * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
  *
- * @param   cache:      Handle from trcache_init().
- * @param   symbol_str: NULL-terminated symbol string.
- * @param   candle_type:        Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
- * @param   count:      Number of candles to copy.
- * @param   batch:      Pre-allocated destination batch.
+ * @param   cache:       Handle from trcache_init().
+ * @param   symbol_str:  NULL-terminated symbol string.
+ * @param   candle_type: Candle type to query.
+ * @param   field_mask:  Bitmask of desired candle fields.
+ * @param   ts_end:      Timestamp belonging to the last candle.
+ * @param   count:       Number of candles to copy.
+ * @param   batch:       Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
@@ -321,13 +321,13 @@ int trcache_get_candles_by_symbol_str_with_ts(struct trcache *cache,
  * @brief   Copy @p count candles ending at the candle located @p offset from
  *          the most recent candle.
  *
- * @param   cache:      Handle from trcache_init().
- * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   candle_type:        Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
- * @param   offset:     Offset from the most recent candle (0 == most recent).
- * @param   count:      Number of candles to copy.
- * @param   batch:      Pre-allocated destination batch.
+ * @param   cache:       Handle from trcache_init().
+ * @param   symbol_id:   Symbol ID from trcache_register_symbol().
+ * @param   candle_type: Candle type to query.
+ * @param   field_mask:  Bitmask of desired candle fields.
+ * @param   offset:      Offset from the most recent candle (0 == most recent).
+ * @param   count:       Number of candles to copy.
+ * @param   batch:       Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
@@ -340,13 +340,13 @@ int trcache_get_candles_by_symbol_id_with_offset(struct trcache *cache,
  * @brief   Copy @p count candles ending at the candle located @p offset from
  *          the most recent candle for a symbol string.
  *
- * @param   cache:      Handle from trcache_init().
- * @param   symbol_str: NULL-terminated symbol string.
- * @param   candle_type:        Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
- * @param   offset:     Offset from the most recent candle (0 == most recent).
- * @param   count:      Number of candles to copy.
- * @param   batch:      Pre-allocated destination batch.
+ * @param   cache:       Handle from trcache_init().
+ * @param   symbol_str:  NULL-terminated symbol string.
+ * @param   candle_type: Candle type to query.
+ * @param   field_mask:  Bitmask of desired candle fields.
+ * @param   offset:      Offset from the most recent candle (0 == most recent).
+ * @param   count:       Number of candles to copy.
+ * @param   batch:       Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
