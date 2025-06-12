@@ -45,7 +45,8 @@ static size_t align_up(size_t x, size_t a)
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
+ * @param   capacity:   Number of OHLCV rows to allocate (must be > 0).
+ * @param   field_mask: OR-ed set of required fields.
  *
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
@@ -53,14 +54,14 @@ static size_t align_up(size_t x, size_t a)
  * @note    The returned pointer must be released via trcache_batch_free().
  */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
-trcache_candle_field_flags field_mask)
+	trcache_candle_field_flags field_mask)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
-       size_t off_start_ts = 0, off_start_tid = 0;
-       size_t off_open = 0, off_high = 0, off_low = 0, off_close = 0, off_vol = 0;
-       size_t off_struct, total_sz, u64b, dblb;
-       struct trcache_candle_batch *b;
-       void *base;
+	size_t off_start_ts = 0, off_start_tid = 0;
+	size_t off_open = 0, off_high = 0, off_low = 0, off_close = 0, off_vol = 0;
+	size_t off_struct, total_sz, u64b, dblb;
+	struct trcache_candle_batch *b;
+	void *base;
 
 	if (capacity <= 0) {
 		errmsg(stderr, "Invalid argument (capacity <= 0)\n");
@@ -73,37 +74,44 @@ trcache_candle_field_flags field_mask)
 	dblb = (size_t)capacity * sizeof(double);
 
 	/* Compute offsets for each array, respecting alignment padding. */
-       size_t cur = off_struct;
+	size_t cur = off_struct;
 
-       if (field_mask & TRCACHE_START_TIMESTAMP) {
-   off_start_ts = cur;
-   cur = align_up(cur + u64b, a);
-       }
-       if (field_mask & TRCACHE_START_TRADE_ID) {
-   off_start_tid = cur;
-   cur = align_up(cur + u64b, a);
-       }
-       if (field_mask & TRCACHE_OPEN) {
-   off_open = cur;
-   cur = align_up(cur + dblb, a);
-       }
-       if (field_mask & TRCACHE_HIGH) {
-   off_high = cur;
-   cur = align_up(cur + dblb, a);
-       }
-       if (field_mask & TRCACHE_LOW) {
-   off_low = cur;
-   cur = align_up(cur + dblb, a);
-       }
-       if (field_mask & TRCACHE_CLOSE) {
-   off_close = cur;
-   cur = align_up(cur + dblb, a);
-       }
-       if (field_mask & TRCACHE_VOLUME) {
-   off_vol = cur;
-   cur = align_up(cur + dblb, a);
-       }
-       total_sz = align_up(cur, a);
+	if (field_mask & TRCACHE_START_TIMESTAMP) {
+		off_start_ts = cur;
+		cur = align_up(cur + u64b, a);
+	}
+
+	if (field_mask & TRCACHE_START_TRADE_ID) {
+		off_start_tid = cur;
+		cur = align_up(cur + u64b, a);
+	}
+
+	if (field_mask & TRCACHE_OPEN) {
+		off_open = cur;
+		cur = align_up(cur + dblb, a);
+	}
+	
+	if (field_mask & TRCACHE_HIGH) {
+		off_high = cur;
+		cur = align_up(cur + dblb, a);
+	}
+	
+	if (field_mask & TRCACHE_LOW) {
+		off_low = cur;
+		cur = align_up(cur + dblb, a);
+	}
+	
+	if (field_mask & TRCACHE_CLOSE) {
+		off_close = cur;
+		cur = align_up(cur + dblb, a);
+	}
+	
+	if (field_mask & TRCACHE_VOLUME) {
+		off_vol = cur;
+		cur = align_up(cur + dblb, a);
+	}
+
+	total_sz = align_up(cur, a);
 
 	/* Single aligned block for struct + all arrays. */
 	base = simd_aligned_alloc(a, total_sz);
@@ -117,25 +125,24 @@ trcache_candle_field_flags field_mask)
 	b = (struct trcache_candle_batch *)base;
 
 	b->num_candles = 0;
-       b->capacity = capacity;
-       b->symbol_id = -1;
-       b->candle_type = -1;
-       b->field_mask = field_mask;
+	b->capacity = capacity;
+	b->symbol_id = -1;
+	b->candle_type = -1;
 
-       b->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
-(uint64_t *)((uint8_t *)base + off_start_ts) : NULL;
-       b->start_trade_id_array = (field_mask & TRCACHE_START_TRADE_ID) ?
-(uint64_t *)((uint8_t *)base + off_start_tid) : NULL;
-       b->open_array = (field_mask & TRCACHE_OPEN) ?
-(double *)((uint8_t *)base + off_open) : NULL;
-       b->high_array = (field_mask & TRCACHE_HIGH) ?
-(double *)((uint8_t *)base + off_high) : NULL;
-       b->low_array = (field_mask & TRCACHE_LOW) ?
-(double *)((uint8_t *)base + off_low) : NULL;
-       b->close_array = (field_mask & TRCACHE_CLOSE) ?
-(double *)((uint8_t *)base + off_close) : NULL;
-       b->volume_array = (field_mask & TRCACHE_VOLUME) ?
-(double *)((uint8_t *)base + off_vol) : NULL;
+	b->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
+		(uint64_t *)((uint8_t *)base + off_start_ts) : NULL;
+	b->start_trade_id_array = (field_mask & TRCACHE_START_TRADE_ID) ?
+		(uint64_t *)((uint8_t *)base + off_start_tid) : NULL;
+	b->open_array = (field_mask & TRCACHE_OPEN) ?
+		(double *)((uint8_t *)base + off_open) : NULL;
+	b->high_array = (field_mask & TRCACHE_HIGH) ?
+		(double *)((uint8_t *)base + off_high) : NULL;
+	b->low_array = (field_mask & TRCACHE_LOW) ?
+		(double *)((uint8_t *)base + off_low) : NULL;
+	b->close_array = (field_mask & TRCACHE_CLOSE) ?
+		(double *)((uint8_t *)base + off_close) : NULL;
+	b->volume_array = (field_mask & TRCACHE_VOLUME) ?
+		(double *)((uint8_t *)base + off_vol) : NULL;
 
 	return b;
 }
