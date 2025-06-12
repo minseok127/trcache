@@ -12,6 +12,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdatomic.h>
+#include <inttypes.h>
 
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
@@ -690,9 +691,12 @@ static int candle_chunk_list_copy_backward(
 		memory_order_acquire);
 
 	if (mutable_seq < seq_end) {
-		errmsg(stderr, "End sequence number is out of range\n");
-		return -1;
-	}
+	        errmsg(stderr,
+	                "End sequence number is out of range (seq_end=%" PRIu64 ", "
+	                "mutable_seq=%" PRIu64 ")\n",
+				                seq_end, mutable_seq);
+        return -1;
+}
 
 	/*
 	 * Exceptional case where a spinlock must be acquired.
@@ -781,27 +785,35 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	uint64_t seq_start = seq_end - count + 1;
 	int ret;
 
-	if (dst == NULL || dst->capacity < count) {
-		errmsg(stderr, "Invalid #trcache_candle_batch\n");
-		return -1;
-	}
+if (dst == NULL || dst->capacity < count) {
+        errmsg(stderr,
+                "Invalid #trcache_candle_batch (capacity=%d, requested=%d)\n",
+                dst ? dst->capacity : -1, count);
+        return -1;
+}
 
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
-		errmsg(stderr, "Head of candle chunk list is not yet initialized\n");
-		return -1;
-	}
-
+		        errmsg(stderr,
+		                "Head of candle chunk list is not yet initialized "
+		                "(seq_end=%" PRIu64 ")\n",
+		                seq_end);
+		        return -1;
+		}
+	
 	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
 	head_chunk = head_ver->head_node;
 
-	if (seq_start < head_chunk->seq_first) {
-		errmsg(stderr, "Start sequence number is out of range\n");
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
-
+if (seq_start < head_chunk->seq_first) {
+        errmsg(stderr,
+                "Start sequence number is out of range "
+                "(seq_start=%" PRIu64 ", head_first=%" PRIu64 ")\n",
+                seq_start, head_chunk->seq_first);
+        atomsnap_release_version(head_snap);
+        return -1;
+}
+	
 	/* Search the last chunk after pinning the head */
 	chunk = candle_chunk_index_find_seq(idx, seq_end);
 	assert(chunk != NULL);
@@ -838,12 +850,14 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	struct candle_chunk_list_head_version *head_ver;
 	uint64_t seq_start, seq_end;
 	int ret;
-
-	if (dst == NULL || dst->capacity < count) {
-		errmsg(stderr, "Invalid #trcache_candle_batch\n");
-		return -1;
-	}
-
+	
+		if (dst == NULL || dst->capacity < count) {
+		        errmsg(stderr,
+		                "Invalid #trcache_candle_batch (capacity=%d, requested=%d)\n",
+		                dst ? dst->capacity : -1, count);
+				        return -1;
+			}
+	
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
@@ -852,21 +866,26 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	/* Search the last chunk after pinning the head */
 	chunk = candle_chunk_index_find_ts(idx, ts_end);
 
-	if (chunk == NULL) {
-		errmsg(stderr, "Target timestamp is out of range\n");
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
+if (chunk == NULL) {
+	        errmsg(stderr,
+		                "Target timestamp is out of range (ts_end=%" PRIu64 ")\n",
+		                ts_end);
+		        atomsnap_release_version(head_snap);
+	        return -1;
+}
 
 	seq_end = candle_chunk_calc_seq_by_ts(chunk, ts_end);
 	seq_start = seq_end - count + 1;
 	assert(seq_end != UINT64_MAX);
 
-	if (seq_start < head_chunk->seq_first) {
-		errmsg(stderr, "Start sequence number is out of range\n");
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
+if (seq_start < head_chunk->seq_first) {
+        errmsg(stderr,
+                "Start sequence number is out of range "
+                "(seq_start=%" PRIu64 ", head_first=%" PRIu64 ")\n",
+                seq_start, head_chunk->seq_first);
+        atomsnap_release_version(head_snap);
+        return -1;
+}
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
 		count, dst, field_mask);

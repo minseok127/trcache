@@ -1,33 +1,34 @@
 /**
- * @file   candle_chunk_index.c
- * @brief  Public interface for the lock-free candle-chunk index.
- *
- * Only **one writer thread** and **one deleter thread** are allowed to
- * mutate the index concurrently; any number of reader threads may call
- * the lookup helpers.
- *
- * Memory-ordering rules:
- *   - Writer / deleter store @tail / @head with
- *     'memory_order_release'.
- *   - Readers load them with 'memory_order_acquire', *before* acquiring
- *     the atomsnap version (see struct comment in the implementation).
- */
+	* @file   candle_chunk_index.c
+	* @brief  Public interface for the lock-free candle-chunk index.
+	*
+	* Only **one writer thread** and **one deleter thread** are allowed to
+	* mutate the index concurrently; any number of reader threads may call
+	* the lookup helpers.
+	*
+	* Memory-ordering rules:
+	*   - Writer / deleter store @tail / @head with
+	*     'memory_order_release'.
+	*   - Readers load them with 'memory_order_acquire', *before* acquiring
+	*     the atomsnap version (see struct comment in the implementation).
+	*/
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
 
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
 
 /**
- * @brief   Allocate atomsnap version and index version.
- *
- * @param   newcap: New capacity of the index's array (must be a power of 2).
- *
- * @return  Pointer to the atomsnap version, NULL on failure.
- */
+	* @brief   Allocate atomsnap version and index version.
+	*
+	* @param   newcap: New capacity of the index's array (must be a power of 2).
+	*
+	* @return  Pointer to the atomsnap version, NULL on failure.
+	*/
 static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 {
 	struct atomsnap_version *snap_ver = malloc(sizeof(struct atomsnap_version));
@@ -35,17 +36,22 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	uint64_t newcap = (uint64_t)cap;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
-		return NULL;
+	       errmsg(stderr,
+	               "#atomsnap_version allocation failed (cap=%" PRIu64 ")\n",
+	               newcap);
+	       return NULL;
 	}
 
 	idx_ver = malloc(sizeof(struct candle_chunk_index_version));
 
-	if (idx_ver == NULL) {
-		errmsg(stderr, "#candle_chunk_index_version allocation failed\n");
-		free(snap_ver);
-		return NULL;
-	}
+if (idx_ver == NULL) {
+	errmsg(stderr,
+	        "#candle_chunk_index_version allocation failed "
+	        "(cap=%" PRIu64 ")\n",
+	        newcap);
+	free(snap_ver);
+	return NULL;
+}
 
 	idx_ver->array = NULL;
 
@@ -53,18 +59,22 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN,
 		newcap * sizeof(struct candle_chunk_index_entry));
 	if (idx_ver->array == NULL) {
-		errmsg(stderr, "Failure on aligned_alloc() for array\n");
-		free(snap_ver);
-		free(idx_ver);
-		return NULL;
+	       errmsg(stderr,
+	               "Failure on aligned_alloc() for array (newcap=%" PRIu64 ")\n",
+	               newcap);
+	       free(snap_ver);
+	       free(idx_ver);
+	       return NULL;
 	}
 #else
 	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN,
-			newcap * sizeof(struct candle_chunk_index_entry)) != 0) {
-		errmsg(stderr, "Failure on posix_memalign() for array\n");
-		free(snap_ver);
-		free(idx_ver);
-		return NULL;
+	               newcap * sizeof(struct candle_chunk_index_entry)) != 0) {
+	       errmsg(stderr,
+	               "Failure on posix_memalign() for array (newcap=%" PRIu64 ")\n",
+	               newcap);
+	       free(snap_ver);
+	       free(idx_ver);
+	       return NULL;
 	}
 #endif
 
@@ -75,10 +85,10 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 }
 
 /**
- * @brief   Free the atomsnap version and it's index version.
- *
- * @param   snap_ver: An atomsnap version to free.
- */
+	* @brief   Free the atomsnap version and it's index version.
+	*
+	* @param   snap_ver: An atomsnap version to free.
+	*/
 static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 {
 	struct candle_chunk_index_version *idx_ver
@@ -90,13 +100,13 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 }
 
 /**
- * @brief   Allocate and initialise an empty index.
- *
- * @param   init_cap_pow2:           Equals to log2(array_capacity).
- * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
- *
- * @return  Pointer to the new index, or NULL on allocation failure.
- */
+	* @brief   Allocate and initialise an empty index.
+	*
+	* @param   init_cap_pow2:           Equals to log2(array_capacity).
+	* @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
+	*
+	* @return  Pointer to the new index, or NULL on allocation failure.
+	*/
 struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 	int batch_candle_count_pow2)
 {
@@ -139,10 +149,10 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 }
 
 /**
- * @brief   Gracefully destroy the index and all internal arrays.
- *
- * @param   idx: Pointer from the candle_chunk_index_create().
- */
+	* @brief   Gracefully destroy the index and all internal arrays.
+	*
+	* @param   idx: Pointer from the candle_chunk_index_create().
+	*/
 void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 {
 	if (idx == NULL) {
@@ -154,17 +164,17 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 }
 
 /**
- * @brief   Grow the index's ring buffer.
- *
- * @param   idx:         Pointer of the #candle_chunk_index.
- * @param   cur_idx_ver: Version of the array with no available space.
- * @param   head:        Head at the moment when no slots are available.
- *
- * @return  0 on success, -1 on failure.
- *
- * count1 is the number of entries from the head to the end of the old array,
- * and count2 is the number from the beginning of the old array to (head-1).
- */
+	* @brief   Grow the index's ring buffer.
+	*
+	* @param   idx:         Pointer of the #candle_chunk_index.
+	* @param   cur_idx_ver: Version of the array with no available space.
+	* @param   head:        Head at the moment when no slots are available.
+	*
+	* @return  0 on success, -1 on failure.
+	*
+	* count1 is the number of entries from the head to the end of the old array,
+	* and count2 is the number from the beginning of the old array to (head-1).
+	*/
 static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	struct candle_chunk_index_version *cur_idx_ver, uint64_t head)
 {
@@ -177,8 +187,11 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	uint64_t new_mask, count1, count2;
 
 	if (new_snap == NULL ) {
-		errmsg(stderr, "Failure on atomsnap_make_version()\n");
-		return -1;
+	errmsg(stderr,
+	"Failure on atomsnap_make_version() (new_cap=%" PRIu64 ", "
+	"head=%" PRIu64 ")\n",
+	new_cap, head);
+	return -1;
 	}
 
 	new_mask = new_cap - 1;
@@ -201,15 +214,15 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 }
 
 /**
- * @brief   Append a *newly allocated* chunk to the tail.
- *
- * @param   idx:        Pointer of the #candle_chunk_index.
- * @param   chunk:      Pointer of the newly appended #candle_chunk.
- * @param   seq_first:  First sequence number of the new chunk.
- * @param   ts_first:   First timestamp of the new chunk.
- *
- * @return  0 on success, -1 on failure.
- */
+	* @brief   Append a *newly allocated* chunk to the tail.
+	*
+	* @param   idx:        Pointer of the #candle_chunk_index.
+	* @param   chunk:      Pointer of the newly appended #candle_chunk.
+	* @param   seq_first:  First sequence number of the new chunk.
+	* @param   ts_first:   First timestamp of the new chunk.
+	*
+	* @return  0 on success, -1 on failure.
+	*/
 int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first)
 {
@@ -224,10 +237,14 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	struct candle_chunk_index_entry *entry;
 
 	if (new_tail != 0 && head_pos == new_tail_pos) {
-		if (candle_chunk_index_grow(idx, idx_ver, head) == -1) {
-			errmsg(stderr, "Failure on candle_chunk_index_grow()\n");
-			return -1;
-		}
+	if (candle_chunk_index_grow(idx, idx_ver, head) == -1) {
+	        errmsg(stderr,
+	                "Failure on candle_chunk_index_grow() "
+	                "(head=%" PRIu64 ", tail=%" PRIu64 ", "
+	                "new_tail=%" PRIu64 ", mask=%" PRIu64 ")\n",
+	                head, tail, new_tail, idx_ver->mask);
+	        return -1;
+	}
 
 		atomsnap_release_version(snap_ver);
 		snap_ver = atomsnap_acquire_version(idx->gate);
@@ -246,15 +263,15 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 }
 
 /**
- * @brief   Remove the oldest chunk if its lifetime has ended.
- *
- * @param   idx: Pointer of the #candle_chunk_index.
- *
- * The caller is responsible for deciding whether the chunk is no longer
- * needed and is not referenced by any thread.
- *
- * @return  Pointer to the popped chunk only for debugging purpose.
- */
+	* @brief   Remove the oldest chunk if its lifetime has ended.
+	*
+	* @param   idx: Pointer of the #candle_chunk_index.
+	*
+	* The caller is responsible for deciding whether the chunk is no longer
+	* needed and is not referenced by any thread.
+	*
+	* @return  Pointer to the popped chunk only for debugging purpose.
+	*/
 #ifdef TRCACHE_DEBUG
 struct candle_chunk *candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 {
@@ -278,15 +295,15 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 #endif /* TRCACHE_DEBUG */
 
 /**
- * @brief   Find the chunk that contains @seq.
- *
- * The caller must ensure that the head does not move.
- *
- * @param   idx:        Pointer of the #candle_chunk_index.
- * @param   target_seq: Target sequence number to search.
- *
- * @return  Pointer to the chunk, or NULL if @seq is outside the index.
- */
+	* @brief   Find the chunk that contains @seq.
+	*
+	* The caller must ensure that the head does not move.
+	*
+	* @param   idx:        Pointer of the #candle_chunk_index.
+	* @param   target_seq: Target sequence number to search.
+	*
+	* @return  Pointer to the chunk, or NULL if @seq is outside the index.
+	*/
 struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk_index *idx, uint64_t target_seq)
 {
@@ -298,13 +315,15 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk *out;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		errmsg(stderr,
+		"Failure on atomsnap_acquire_version() (target_seq=%" PRIu64 ")\n",
+		target_seq);
 		return NULL;
 	}
-
-	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
-	mask = idx_ver->mask;
-	batch = idx->batch_candle_count;
+	
+		idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+		mask = idx_ver->mask;
+		batch = idx->batch_candle_count;
 	pow2 = idx->batch_candle_count_pow2;
 
 	first_seq = idx_ver->array[head & mask].seq_first;
@@ -325,15 +344,15 @@ struct candle_chunk *candle_chunk_index_find_seq(
 }
 
 /**
- * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
- *
- * The caller must ensure that the head does not move.
- *
- * @param   idx:       Pointer of the #candle_chunk_index.
- * @param   target_ts: Target timestamp to search.
- *
- * @return  Pointer to the chunk, or NULL if @ts is outside the index.
- */
+	* @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
+	*
+	* The caller must ensure that the head does not move.
+	*
+	* @param   idx:       Pointer of the #candle_chunk_index.
+	* @param   target_ts: Target timestamp to search.
+	*
+	* @return  Pointer to the chunk, or NULL if @ts is outside the index.
+	*/
 struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk_index *idx, uint64_t target_ts)
 {
@@ -345,14 +364,17 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
 
 	if (snap_ver == NULL) {
-		errmsg(stderr, "Failure on atomsnap_acquire_version()\n");
+		errmsg(stderr,
+		"Failure on atomsnap_acquire_version() "
+		"(target_ts=%" PRIu64 ")\n",
+		target_ts);
 		return NULL;
-	}
-
-	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
-	mask = idx_ver->mask;
-
-	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
+		}
+	
+		idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
+		mask = idx_ver->mask;
+	
+		if (idx_ver->array[head & mask].timestamp_first > target_ts) {
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
