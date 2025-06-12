@@ -42,9 +42,9 @@ A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_
 2. **Convert** – once a row page becomes immutable it is converted to a column‑oriented batch (`trcache_candle_batch`).  Each batch spans a power‑of‑two number of candles for SIMD friendly access.
 3. **Flush** – completed batches are handed to user‑defined flush callbacks when the per‑list threshold is reached.  Flushes can be synchronous or asynchronous via the `trcache_flush_ops` interface.
 
-Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues (`scalable_queue`).
+Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues ([`scalable_queue`](https://github.com/minseok127/scalable-queue)).
 
-The library stores symbols in a lock‑free table built on the `atomsnap` snapshot mechanism.  Thread‑local caches accelerate symbol lookup and buffer access.
+The library stores symbols in a lock‑free table built on the [`atomsnap`](https://github.com/minseok127/atomsnap) snapshot mechanism.  Thread‑local caches accelerate symbol lookup and buffer access.
 
 ## Basic usage
 
