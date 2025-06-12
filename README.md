@@ -34,18 +34,6 @@ make test
 
 which will produce several test binaries and run them automatically.
 
-## Architecture overview
-
-A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_buffer` and one `candle_chunk_list` per enabled candle type. Incoming trades are pushed into the symbol's buffer; the same trade is aggregated into every candle list for that symbol. The buffered data flows through a three-stage pipeline:
-
-1. **Apply** – trade entries are consumed from the buffer and aggregated into mutable row‑oriented candles inside a `candle_chunk`.
-2. **Convert** – once a row page becomes immutable it is converted to a column‑oriented batch (`trcache_candle_batch`).  Each batch spans a power‑of‑two number of candles for SIMD friendly access.
-3. **Flush** – completed batches are handed to user‑defined flush callbacks when the per‑list threshold is reached.  Flushes can be synchronous or asynchronous via the `trcache_flush_ops` interface.
-
-Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues ([`scalable_queue`](https://github.com/minseok127/scalable-queue)).
-
-Lock‑free structures rely on the [`atomsnap`](https://github.com/minseok127/atomsnap) snapshot mechanism. For example, it enables operations such as symbol registration in the symbol table, memory reclamation of row-oriented candle pages that have been fully converted to column-oriented batches, and freeing candle chunks that no longer need to reside in memory after flush—all without blocking readers.
-
 ## Basic usage
 
 ### 1. Candle and field types
@@ -190,6 +178,14 @@ trcache_destroy(cache);
 `trcache_destroy()` stops all worker threads, joins the admin thread and flushes
 any batches still held in memory before releasing resources.
 
-## License
+## Architecture overview
 
-This project is distributed under the MIT license.  See the source tree for details.
+A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_buffer` and one `candle_chunk_list` per enabled candle type. Incoming trades are pushed into the symbol's buffer; the same trade is aggregated into every candle list for that symbol. The buffered data flows through a three-stage pipeline:
+
+1. **Apply** – trade entries are consumed from the buffer and aggregated into mutable row‑oriented candles inside a `candle_chunk`.
+2. **Convert** – once a row page becomes immutable it is converted to a column‑oriented batch (`trcache_candle_batch`).  Each batch spans a power‑of‑two number of candles for SIMD friendly access.
+3. **Flush** – completed batches are handed to user‑defined flush callbacks when the per‑list threshold is reached.  Flushes can be synchronous or asynchronous via the `trcache_flush_ops` interface.
+
+Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues ([`scalable_queue`](https://github.com/minseok127/scalable-queue)).
+
+Lock‑free structures rely on the [`atomsnap`](https://github.com/minseok127/atomsnap) snapshot mechanism. For example, it enables operations such as symbol registration in the symbol table, memory reclamation of row-oriented candle pages that have been fully converted to column-oriented batches, and freeing candle chunks that no longer need to reside in memory after flush—all without blocking readers.
