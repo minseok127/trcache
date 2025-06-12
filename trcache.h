@@ -261,27 +261,6 @@ int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
 /**
- * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
- *
- * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
- *
- * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
- *          'NULL' on allocation failure or invalid *capacity*.
- *
- * @note The returned pointer must be released via trcache_batch_free().
- */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
-
-/**
- * @brief   Release a heap-allocated candle batch.
- *
- * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
- *
- * Safe to pass 'NULL'; the function becomes a no-op.
- */
-void trcache_batch_free(struct trcache_candle_batch *batch);
-
-/**
  * @brief   Copy @p count candles ending at @p ts_end.
  *
  * @param   cache:       Handle from trcache_init().
@@ -354,6 +333,27 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *cache,
 	const char *symbol_str, trcache_candle_type candle_type,
 	trcache_candle_field_flags field_mask, int offset, int count,
 	struct trcache_candle_batch *batch);
+
+/**
+ * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
+ *
+ * @param   capacity: Number of OHLCV rows to allocate (must be > 0).
+ *
+ * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
+ *          'NULL' on allocation failure or invalid *capacity*.
+ *
+ * @note The returned pointer must be released via trcache_batch_free().
+ */
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity);
+
+/**
+ * @brief   Release a heap-allocated candle batch.
+ *
+ * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ *
+ * Safe to pass 'NULL'; the function becomes a no-op.
+ */
+void trcache_batch_free(struct trcache_candle_batch *batch);
 
 /**
  * @brief   Align a pointer upward to the next @p a-byte boundary.
