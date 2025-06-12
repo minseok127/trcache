@@ -222,7 +222,8 @@ static void check_sec_candle(const struct trcache_candle_batch *b, int idx)
 static void *reader_tick_thread(void *arg)
 {
         struct thread_perf *perf = (struct thread_perf *)arg;
-        struct trcache_candle_batch *batch = trcache_batch_alloc_on_heap(5);
+       struct trcache_candle_batch *batch =
+                trcache_batch_alloc_on_heap(5, TRCACHE_FIELD_MASK_ALL);
         trcache_candle_field_flags mask = TRCACHE_START_TRADE_ID |
                 TRCACHE_START_TIMESTAMP | TRCACHE_OPEN | TRCACHE_HIGH |
                 TRCACHE_LOW | TRCACHE_CLOSE | TRCACHE_VOLUME;
@@ -247,7 +248,8 @@ static void *reader_tick_thread(void *arg)
 static void *reader_sec_thread(void *arg)
 {
         struct thread_perf *perf = (struct thread_perf *)arg;
-        struct trcache_candle_batch *batch = trcache_batch_alloc_on_heap(5);
+       struct trcache_candle_batch *batch =
+                trcache_batch_alloc_on_heap(5, TRCACHE_FIELD_MASK_ALL);
         trcache_candle_field_flags mask = TRCACHE_START_TRADE_ID |
                 TRCACHE_START_TIMESTAMP | TRCACHE_OPEN | TRCACHE_HIGH |
                 TRCACHE_LOW | TRCACHE_CLOSE | TRCACHE_VOLUME;
