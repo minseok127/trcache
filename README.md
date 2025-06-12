@@ -5,9 +5,9 @@ Trcache is a high‑performance C library for ingesting real-time trade data and
 ## Features
 
  - **Lock-free pipeline** – Apply, convert, and flush stages run concurrently on dedicated threads without locks.
-  - **Apply** – aggregates trades into row-oriented candles.
-  - **Convert** – reshapes row pages into SIMD-friendly column batches.
-  - **Flush** – hands batches to user-defined callbacks for persistence.
+ 	- **Apply** – aggregates trades into row-oriented candles.
+ 	- **Convert** – reshapes row pages into SIMD-friendly column batches.
+ 	- **Flush** – hands batches to user-defined callbacks for persistence.
 - **Adaptive worker scheduling** – an admin thread monitors throughput and assigns work to worker threads dynamically.
 - **Pluggable flushing** – applications supply synchronous or asynchronous callbacks to persist finished batches.
 - **Multiple candle types** – time- and tick-based candles can be enabled simultaneously.
