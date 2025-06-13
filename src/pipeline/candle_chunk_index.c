@@ -34,6 +34,7 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	struct atomsnap_version *snap_ver = malloc(sizeof(struct atomsnap_version));
 	struct candle_chunk_index_version *idx_ver = NULL;
 	uint64_t newcap = (uint64_t)cap;
+	size_t sz;
 
 	if (snap_ver == NULL) {
 		errmsg(stderr,
@@ -54,10 +55,11 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	}
 
 	idx_ver->array = NULL;
+	sz = newcap * sizeof(struct candle_chunk_index_entry);
+	sz = (sz + TRCACHE_SIMD_ALIGN - 1) & ~(TRCACHE_SIMD_ALIGN - 1);
 
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
-	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN,
-		newcap * sizeof(struct candle_chunk_index_entry));
+	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN, sz);
 	if (idx_ver->array == NULL) {
 		errmsg(stderr,
 			"Failure on aligned_alloc() for array (newcap=%" PRIu64 ")\n",
@@ -67,8 +69,7 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 		return NULL;
 	}
 #else
-	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN,
-			newcap * sizeof(struct candle_chunk_index_entry)) != 0) {
+	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN, sz) != 0) {
 		errmsg(stderr,
 			"Failure on posix_memalign() for array (newcap=%" PRIu64 ")\n",
 			newcap);
@@ -243,6 +244,7 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 				"(head=%" PRIu64 ", tail=%" PRIu64 ", "
 				"new_tail=%" PRIu64 ", mask=%" PRIu64 ")\n",
 				head, tail, new_tail, idx_ver->mask);
+			atomsnap_release_version(snap_ver);
 			return -1;
 		}
 
