@@ -69,7 +69,21 @@ typedef enum {
 ```
 These constants are combined with bitwise OR when specifying which candle types to build or which fields to copy.
 
-### 2. Implement flush operations
+### 2. Allocate candle batches
+
+`trcache_candle_batch` represents a column‑oriented array of OHLCV candles. The user can specify the capacity of the batch and the set of fields to be used. These batches serve as flush targets for the engine, or are used when users copy candle data out. Batches can reside either on the heap or on the caller's stack:
+
+```c
+/* heap allocation */
+struct trcache_candle_batch *hb = trcache_batch_alloc_on_heap(512, TRCACHE_HIGH | TRCACHE_CLOSE);
+
+/* stack allocation */
+TRCACHE_DEFINE_BATCH_ON_STACK(sb, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
+```
+
+The heap batch must be released with `trcache_batch_free()` when no longer needed.
+
+### 3. Implement flush operations
 
 `trcache_flush_ops` lets applications decide how completed candle batches are
 persisted.  A synchronous flush performs the work inside the callback and returns
@@ -111,12 +125,9 @@ void async_destroy(void *handle, void *ctx)
 }
 ```
 
-Supply these callbacks to `trcache_init()`.  When using the asynchronous
-variant, also set `ops.is_done` and `ops.destroy_handle`.
-See `examples/flush_templates/` for flush templates using SQLite,
-PostgreSQL, MySQL, DuckDB, Parquet and Arrow.
-Each directory shows how to link against the required client libraries.
-### 3. Initialise the engine
+Supply these callbacks to `trcache_init()`.  When using the asynchronous variant, also set `ops.is_done` and `ops.destroy_handle`. See `examples/flush_templates/` for flush templates using SQLite, PostgreSQL, MySQL, DuckDB, Parquet and Arrow. Each directory shows how to link against the required client libraries.
+
+### 4. Initialise the engine
 
 ```c
 struct trcache_flush_ops ops = { .flush = sync_flush };
@@ -135,20 +146,6 @@ if (!cache)
 
 Calling `trcache_init()` spawns one admin thread and the specified number of
 worker threads automatically.
-
-### 4. Allocate candle batches
-
-`trcache_candle_batch` represents a column‑oriented array of OHLCV candles. These batches serve as flush targets for the engine, or are used when users copy candle data out. Batches can reside either on the heap or on the caller's stack:
-
-```c
-/* heap allocation */
-struct trcache_candle_batch *hb = trcache_batch_alloc_on_heap(512, TRCACHE_HIGH | TRCACHE_CLOSE);
-
-/* stack allocation */
-TRCACHE_DEFINE_BATCH_ON_STACK(sb, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
-```
-
-The heap batch must be released with `trcache_batch_free()` when no longer needed.
 
 ### 5. Register and query symbols
 
