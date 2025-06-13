@@ -226,6 +226,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	snap = atomsnap_acquire_version(chunk_list->head_gate);
 	if (snap == NULL) {
+		errmsg(stderr, "Unused candle chunk list, "
+			"type: %d, symbol_id: %d\n",
+			chunk_list->candle_type, chunk_list->symbol_id);
 		atomsnap_destroy_gate(chunk_list->head_gate);
 		candle_chunk_index_destroy(chunk_list->chunk_index);
 		free(chunk_list);
