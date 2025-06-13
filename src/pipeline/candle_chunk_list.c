@@ -855,6 +855,15 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
 	head_chunk = head_ver->head_node;
 
+	if (seq_end + 1 < (uint64_t)count) {
+		errmsg(stderr,
+			"Requested too many candles (seq_end=%" PRIu64 ", "
+			"count=%d)\n",
+			seq_end, count);
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
+
 	if (seq_start < head_chunk->seq_first) {
 		errmsg(stderr,
 			"Start sequence number is out of range "
@@ -925,6 +934,16 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	}
 
 	seq_end = candle_chunk_calc_seq_by_ts(chunk, ts_end);
+
+	if (seq_end + 1 < (uint64_t)count) {
+		errmsg(stderr,
+			"Requested too many candles (seq_end=%" PRIu64 ", "
+			"count=%d)\n",
+			seq_end, count);
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
+
 	seq_start = seq_end - count + 1;
 	assert(seq_end != UINT64_MAX);
 
