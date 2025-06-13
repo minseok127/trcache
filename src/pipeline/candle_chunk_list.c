@@ -875,7 +875,13 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	
 	/* Search the last chunk after pinning the head */
 	chunk = candle_chunk_index_find_seq(idx, seq_end);
-	assert(chunk != NULL);
+	if (chunk == NULL) {
+		errmsg(stderr,
+			"Target sequence is out of range (seq_end=%" PRIu64 ")\n",
+				seq_end);
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
 		count, dst, field_mask);
