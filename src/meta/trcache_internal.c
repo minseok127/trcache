@@ -14,6 +14,7 @@
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 #include "sched/sched_work_msg.h"
+#include "sched/admin_thread.h"
 
 #include "trcache.h"
 
@@ -652,9 +653,9 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
-	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, int offset, int count,
-	struct trcache_candle_batch *dst)
+        const char *symbol_str, trcache_candle_type type,
+        trcache_candle_field_flags field_mask, int offset, int count,
+        struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 	int symbol_id;
@@ -669,6 +670,44 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id, type,
-		field_mask, offset, count, dst);
+        return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id, type,
+                field_mask, offset, count, dst);
+}
+
+/**
+ * @brief   Print current worker distribution per pipeline stage.
+ *
+ * Gathers pipeline statistics and computes how many workers the admin
+ * scheduler would allocate to each stage. The ranges are printed to stdout.
+ *
+ * @param   tc: Handle from trcache_init().
+ */
+void trcache_print_worker_distribution(struct trcache *tc)
+{
+        int limits[WORKER_STAT_STAGE_NUM];
+        int start[WORKER_STAT_STAGE_NUM];
+        int end;
+
+        if (tc == NULL)
+                return;
+
+       update_all_pipeline_stats(tc);
+       compute_stage_limits(tc, limits);
+       compute_stage_starts(tc, limits, start);
+
+        printf("Worker distribution:\n");
+        end = start[WORKER_STAT_STAGE_APPLY] +
+                limits[WORKER_STAT_STAGE_APPLY] - 1;
+        printf("  APPLY   : %d..%d\n",
+                start[WORKER_STAT_STAGE_APPLY], end);
+
+        end = start[WORKER_STAT_STAGE_CONVERT] +
+                limits[WORKER_STAT_STAGE_CONVERT] - 1;
+        printf("  CONVERT : %d..%d\n",
+                start[WORKER_STAT_STAGE_CONVERT], end);
+
+        end = start[WORKER_STAT_STAGE_FLUSH] +
+                limits[WORKER_STAT_STAGE_FLUSH] - 1;
+        printf("  FLUSH   : %d..%d\n",
+                start[WORKER_STAT_STAGE_FLUSH], end);
 }

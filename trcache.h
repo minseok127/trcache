@@ -361,6 +361,16 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
 /**
+ * @brief   Print current worker distribution per pipeline stage.
+ *
+ * Updates pipeline statistics and computes the number of workers allocated
+ * to each pipeline stage according to the admin scheduler.
+ *
+ * @param   cache:  Handle from trcache_init().
+ */
+void trcache_print_worker_distribution(struct trcache *cache);
+
+/**
  * @brief   Align a pointer upward to the next @p a-byte boundary.
  *
  * @param   p: Raw pointer to be aligned.
