@@ -12,7 +12,7 @@
 #include "pipeline/trade_data_buffer.h"
 
 #define TRADES_PER_CANDLE 100
-#define NUM_CANDLES 100000
+#define NUM_CANDLES 1000000
 #define NUM_TRADES (TRADES_PER_CANDLE * NUM_CANDLES)
 
 static struct trade_data_buffer *g_buf;
@@ -58,6 +58,12 @@ static void *producer_thread(void *arg)
 			.price = (double)i,
 			.volume = 1.0
 		};
+		
+		if (g_buf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
+				list_empty(&free_list)) {
+			trade_data_buffer_reap_free_chunks(g_buf, &free_list);
+		}
+
 		int ret = trade_data_buffer_push(g_buf, &td, &free_list);
 		assert(ret == 0);
 		perf->ops++;
@@ -69,6 +75,11 @@ static void *producer_thread(void *arg)
 		.price = (double)NUM_TRADES,
 		.volume = 1.0
 	};
+
+	if (g_buf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
+			list_empty(&free_list)) {
+		trade_data_buffer_reap_free_chunks(g_buf, &free_list);
+	}
 	trade_data_buffer_push(g_buf, &td, &free_list);
 	perf->ops++;
 	perf_end(perf);
