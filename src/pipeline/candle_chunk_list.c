@@ -873,7 +873,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		return -1;
 	}
 	
-    /* Search the last chunk after pinning the head */
+	/* Search the last chunk after pinning the head */
 	chunk = candle_chunk_index_find_seq(idx, seq_end);
 	if (chunk == NULL) {
 		errmsg(stderr,
