@@ -159,10 +159,6 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 	atomsnap_destroy_gate(chunk->row_gate);
 	trcache_batch_free(chunk->column_batch);
 	free(chunk);
-
-#ifdef TRCACHE_DEBUG
-	errmsg(stderr, "Chunk is freed\n");
-#endif /* TRCACHE_DEBUG */
 }
 
 /**
