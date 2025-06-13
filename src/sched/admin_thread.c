@@ -378,22 +378,22 @@ void compute_stage_limits(struct trcache *cache, int *limits)
  */
 void compute_stage_starts(struct trcache *cache, int *limits, int *start)
 {
-        if (cache->num_workers > WORKER_STAT_STAGE_NUM) {
-                start[WORKER_STAT_STAGE_APPLY] = 0;
-                start[WORKER_STAT_STAGE_CONVERT] =
-                        start[WORKER_STAT_STAGE_APPLY] +
-                        limits[WORKER_STAT_STAGE_APPLY];
-                start[WORKER_STAT_STAGE_FLUSH] =
-                        start[WORKER_STAT_STAGE_CONVERT] +
-                        limits[WORKER_STAT_STAGE_CONVERT];
-        } else {
-                limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers;
-                limits[WORKER_STAT_STAGE_CONVERT] = 1;
-                limits[WORKER_STAT_STAGE_FLUSH] = 1;
-                start[WORKER_STAT_STAGE_APPLY] = 0;
-                start[WORKER_STAT_STAGE_CONVERT] = cache->num_workers - 1;
-                start[WORKER_STAT_STAGE_FLUSH] = cache->num_workers - 1;
-        }
+	if (cache->num_workers > WORKER_STAT_STAGE_NUM) {
+		start[WORKER_STAT_STAGE_APPLY] = 0;
+		start[WORKER_STAT_STAGE_CONVERT] =
+			start[WORKER_STAT_STAGE_APPLY] +
+				limits[WORKER_STAT_STAGE_APPLY];
+		start[WORKER_STAT_STAGE_FLUSH] =
+			start[WORKER_STAT_STAGE_CONVERT] +
+				limits[WORKER_STAT_STAGE_CONVERT];
+	} else {
+		limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers;
+		limits[WORKER_STAT_STAGE_CONVERT] = 1;
+		limits[WORKER_STAT_STAGE_FLUSH] = 1;
+		start[WORKER_STAT_STAGE_APPLY] = 0;
+		start[WORKER_STAT_STAGE_CONVERT] = cache->num_workers - 1;
+		start[WORKER_STAT_STAGE_FLUSH] = cache->num_workers - 1;
+	}
 }
 
 /**
@@ -411,8 +411,8 @@ static void balance_workers(struct trcache *cache)
 	int stage_start[WORKER_STAT_STAGE_NUM];
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
 
-       compute_stage_limits(cache, limits);
-       compute_stage_starts(cache, limits, stage_start);
+	compute_stage_limits(cache, limits);
+	compute_stage_starts(cache, limits, stage_start);
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;
