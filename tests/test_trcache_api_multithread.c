@@ -53,8 +53,6 @@ static void perf_end(struct thread_perf *p)
 static void *producer_thread(void *arg)
 {
         struct thread_perf *perf = (struct thread_perf *)arg;
-        struct list_head free_list;
-        INIT_LIST_HEAD(&free_list);
         perf_start(perf);
 
         int i = 0;
@@ -74,7 +72,7 @@ static void *producer_thread(void *arg)
                         .price = PRICE_BASE + i,
                         .volume = 1.0
                 };
-                int ret = trade_data_buffer_push(g_buf, &td, &free_list);
+                int ret = trcache_feed_trade_data(&tc, &td, g_symbol_id);
                 assert(ret == 0);
                 perf->ops++;
                 i++;
@@ -89,7 +87,7 @@ static void *producer_thread(void *arg)
                 .price = PRICE_BASE + i,
                 .volume = 1.0
         };
-        trade_data_buffer_push(g_buf, &td, &free_list);
+        trcache_feed_trade_data(&tc, &td, g_symbol_id);
         perf->ops++;
         perf_end(perf);
         atomic_store(&producer_done, 1);
@@ -302,6 +300,9 @@ int main(int argc, char **argv)
         g_end_time = now;
         g_end_time.tv_sec += g_total_seconds;
 
+        pthread_key_create(&tc.pthread_trcache_key, NULL);
+        pthread_mutex_init(&tc.tls_id_mutex, NULL);
+
 
 
         tc.candle_type_flags = TRCACHE_100TICK_CANDLE | TRCACHE_1SEC_CANDLE;
@@ -316,6 +317,8 @@ int main(int argc, char **argv)
 
         tc.symbol_table = symbol_table_init(8);
         assert(tc.symbol_table != NULL);
+        int dummy_id = symbol_table_register(&tc, tc.symbol_table, "dummy");
+        (void)dummy_id;
         g_symbol_id = symbol_table_register(&tc, tc.symbol_table, "sym0");
         assert(g_symbol_id >= 0);
         g_sym = symbol_table_lookup_entry(tc.symbol_table, g_symbol_id);
@@ -346,6 +349,8 @@ int main(int argc, char **argv)
         pthread_join(read_sec_t, NULL);
 
         symbol_table_destroy(tc.symbol_table);
+        pthread_key_delete(tc.pthread_trcache_key);
+        pthread_mutex_destroy(&tc.tls_id_mutex);
 
         double prod_time = timespec_to_sec(&prod_perf.end) - timespec_to_sec(&prod_perf.start);
         double cons_tick_time = timespec_to_sec(&cons_tick_perf.end) - timespec_to_sec(&cons_tick_perf.start);
