@@ -6,6 +6,7 @@ INCLUDES ?= -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 TARGETS = test_utils test_symbol_table \
           test_trade_data_buffer_no_freelist \
           test_trade_data_buffer_free_list \
+          test_copy_backward_by_seq_error \
           test_candle_chunk_list_multithread \
           test_trcache_api_multithread \
           test_trcache_api_single_worker \
@@ -36,6 +37,15 @@ SRC_test_trade_data_buffer_no_freelist = \
 OBJS_test_trade_data_buffer_free_list = test_trade_data_buffer_free_list.o
 SRC_test_trade_data_buffer_free_list = \
       $(PROJECT_ROOT)/src/pipeline/trade_data_buffer.c
+
+OBJS_test_copy_backward_by_seq_error = test_copy_backward_by_seq_error.o
+SRC_test_copy_backward_by_seq_error = \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk_list.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_chunk_index.c \
+      $(PROJECT_ROOT)/src/pipeline/candle_update_ops.c \
+      $(PROJECT_ROOT)/src/concurrent/atomsnap.c \
+      $(PROJECT_ROOT)/src/meta/trcache_candle_batch.c
 
 OBJS_test_candle_chunk_list_multithread = test_candle_chunk_list_multithread.o
 SRC_test_candle_chunk_list_multithread = \
@@ -72,6 +82,9 @@ test_trade_data_buffer_no_freelist: $(SRC_test_trade_data_buffer_no_freelist) $(
 test_trade_data_buffer_free_list: $(SRC_test_trade_data_buffer_free_list) $(OBJS_test_trade_data_buffer_free_list)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trade_data_buffer_free_list) $(OBJS_test_trade_data_buffer_free_list) -o $@
 
+test_copy_backward_by_seq_error: $(SRC_test_copy_backward_by_seq_error) $(OBJS_test_copy_backward_by_seq_error)
+	$(CC) $(CFLAGS) $(INCLUDES) $(SRC_test_copy_backward_by_seq_error) $(OBJS_test_copy_backward_by_seq_error) -o $@
+
 test_candle_chunk_list_multithread: $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_candle_chunk_list_multithread) $(OBJS_test_candle_chunk_list_multithread) -o $@
 
@@ -100,7 +113,8 @@ run: all
 clean:
 	       rm -f $(OBJS_test_utils) $(OBJS_test_symbol_table) \
 	       $(OBJS_test_trade_data_buffer_no_freelist) \
-	               $(OBJS_test_trade_data_buffer_free_list) \
+               $(OBJS_test_trade_data_buffer_free_list) \
+                       $(OBJS_test_copy_backward_by_seq_error) \
                        $(OBJS_test_candle_chunk_list_multithread) \
                        $(OBJS_test_trcache_api_multithread) \
                        $(OBJS_test_trcache_api_single_worker) \
