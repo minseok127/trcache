@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -8,12 +9,10 @@
 #include "trcache.h"
 
 #define TRADES_PER_CANDLE 100
-#define TRADES_PER_SEC 1000
 #define PRICE_BASE 100.0
 
 static int g_total_seconds = 10;
-static int g_num_trades;
-static int g_num_candles;
+static struct timespec g_end_time;
 
 static trcache *g_tc;
 static int g_symbol_id;
@@ -46,7 +45,14 @@ static void *producer_thread(void *arg)
         struct thread_perf *perf = (struct thread_perf *)arg;
         perf_start(perf);
 
-        for (int i = 0; i < g_num_trades; i++) {
+        int i = 0;
+        while (1) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                if (now.tv_sec > g_end_time.tv_sec ||
+                    (now.tv_sec == g_end_time.tv_sec && now.tv_nsec >= g_end_time.tv_nsec))
+                        break;
+
                 struct timespec ts;
                 clock_gettime(CLOCK_REALTIME, &ts);
                 uint64_t now_ms = ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL;
@@ -59,7 +65,7 @@ static void *producer_thread(void *arg)
                 int ret = trcache_feed_trade_data(g_tc, &td, g_symbol_id);
                 assert(ret == 0);
                 perf->ops++;
-                usleep(1000);
+                i++;
         }
 
         struct timespec ts;
@@ -67,8 +73,8 @@ static void *producer_thread(void *arg)
         uint64_t now_ms = ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL;
         struct trcache_trade_data td = {
                 .timestamp = now_ms,
-                .trade_id = g_num_trades,
-                .price = PRICE_BASE + g_num_trades,
+                .trade_id = i,
+                .price = PRICE_BASE + i,
                 .volume = 1.0
         };
         trcache_feed_trade_data(g_tc, &td, g_symbol_id);
@@ -149,7 +155,6 @@ static void *reader_tick_thread(void *arg)
                         perf->ops++;
                         break;
                 }
-                usleep(1000);
         }
 
         perf_end(perf);
@@ -196,7 +201,6 @@ static void *reader_sec_thread(void *arg)
                         perf->ops++;
                         break;
                 }
-                usleep(1000);
         }
 
         perf_end(perf);
@@ -214,8 +218,11 @@ int main(int argc, char **argv)
 {
         if (argc > 1)
                 g_total_seconds = atoi(argv[1]);
-        g_num_trades = g_total_seconds * TRADES_PER_SEC;
-        g_num_candles = g_num_trades / TRADES_PER_CANDLE;
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        g_end_time = now;
+        g_end_time.tv_sec += g_total_seconds;
 
         struct trcache_init_ctx init_ctx = {
                 .num_worker_threads = 1,
