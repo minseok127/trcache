@@ -85,8 +85,9 @@ The heap batch must be released with `trcache_batch_free()` when no longer neede
 
 ### 3. Implement flush operations
 
-`trcache_flush_ops` lets applications decide how completed candle batches are
-persisted.  A synchronous flush performs the work inside the callback and returns
+`trcache_flush_ops` lets applications decide how completed candle batches are persisted. Internally, trcache converts immutable candles into column-oriented batches and passes them as arguments to user-defined flush operations.
+
+A synchronous flush performs the work inside the callback and returns
 `NULL`:
 
 ```c
