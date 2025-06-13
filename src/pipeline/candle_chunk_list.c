@@ -225,6 +225,13 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 * Close current head version's tail to free entire chunk list.
 	 */
 	snap = atomsnap_acquire_version(chunk_list->head_gate);
+	if (snap == NULL) {
+		atomsnap_destroy_gate(chunk_list->head_gate);
+		candle_chunk_index_destroy(chunk_list->chunk_index);
+		free(chunk_list);
+		return;
+	}
+
 	head_version = (struct candle_chunk_list_head_version *)snap->object;
 	head_version->tail_node = chunk_list->tail;
 
