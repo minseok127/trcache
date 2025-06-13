@@ -12,7 +12,7 @@
 #include "pipeline/trade_data_buffer.h"
 
 #define TRADES_PER_CANDLE 100
-#define NUM_CANDLES 100000
+#define NUM_CANDLES 10000000
 #define NUM_TRADES (TRADES_PER_CANDLE * NUM_CANDLES)
 
 static struct trade_data_buffer *g_buf;
