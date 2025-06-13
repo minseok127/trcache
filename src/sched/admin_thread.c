@@ -381,15 +381,27 @@ static void balance_workers(struct trcache *cache)
 	int stage_start[WORKER_STAT_STAGE_NUM];
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
 
-	compute_stage_limits(cache, limits);
+	if (cache->num_workers > WORKER_STAT_STAGE_NUM) {
+		compute_stage_limits(cache, limits);
 
-	stage_start[WORKER_STAT_STAGE_APPLY] = 0;
-	stage_start[WORKER_STAT_STAGE_CONVERT] =
-		stage_start[WORKER_STAT_STAGE_APPLY]
-			+ limits[WORKER_STAT_STAGE_APPLY];
-	stage_start[WORKER_STAT_STAGE_FLUSH] =
-		stage_start[WORKER_STAT_STAGE_CONVERT]
-			+ limits[WORKER_STAT_STAGE_CONVERT];
+		stage_start[WORKER_STAT_STAGE_APPLY] = 0;
+
+		stage_start[WORKER_STAT_STAGE_CONVERT] =
+			stage_start[WORKER_STAT_STAGE_APPLY]
+				+limits[WORKER_STAT_STAGE_APPLY];
+
+		stage_start[WORKER_STAT_STAGE_FLUSH] =
+			stage_start[WORKER_STAT_STAGE_CONVERT]
+				+ limits[WORKER_STAT_STAGE_CONVERT];
+	} else {
+		limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers;
+		limits[WORKER_STAT_STAGE_CONVERT] = 1;
+		limits[WORKER_STAT_STAGE_FLUSH] = 1;
+
+		stage_start[WORKER_STAT_STAGE_APPLY] = 0;
+		stage_start[WORKER_STAT_STAGE_CONVERT] = cache->num_workers - 1;
+		stage_start[WORKER_STAT_STAGE_FLUSH] = cache->num_workers - 1;
+	}
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;

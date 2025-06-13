@@ -239,24 +239,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	ret = pthread_create(&tc->admin_thread, NULL, admin_thread_main, tc);
-	if (ret != 0) {
-		errmsg(stderr, "Failure on pthread_create() for admin\n");
-		free(tc->worker_threads);
-		free(tc->worker_args);
-		for (int i = 0; i < tc->num_workers; i++) {
-			worker_state_destroy(&tc->worker_state_arr[i]);
-		}
-		free(tc->worker_state_arr);
-		admin_state_destroy(&tc->admin_state);
-		scq_destroy(tc->sched_msg_free_list);
-		pthread_mutex_destroy(&tc->tls_id_mutex);
-		symbol_table_destroy(tc->symbol_table);
-		pthread_key_delete(tc->pthread_trcache_key);
-		free(tc);
-		return NULL;
-	}
-
 	for (int i = 0; i < tc->num_workers; i++) {
 		tc->worker_args[i].cache = tc;
 		tc->worker_args[i].worker_id = i;
@@ -285,6 +267,24 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			free(tc);
 			return NULL;
 		}
+	}
+
+	ret = pthread_create(&tc->admin_thread, NULL, admin_thread_main, tc);
+	if (ret != 0) {
+		errmsg(stderr, "Failure on pthread_create() for admin\n");
+		free(tc->worker_threads);
+		free(tc->worker_args);
+		for (int i = 0; i < tc->num_workers; i++) {
+			worker_state_destroy(&tc->worker_state_arr[i]);
+		}
+		free(tc->worker_state_arr);
+		admin_state_destroy(&tc->admin_state);
+		scq_destroy(tc->sched_msg_free_list);
+		pthread_mutex_destroy(&tc->tls_id_mutex);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
 	}
 
 	return tc;

@@ -1,4 +1,4 @@
-CC = gcc -O2
+CC = gcc -O0 -g
 PROJECT_ROOT ?= ..
 
 INCLUDES ?= -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
