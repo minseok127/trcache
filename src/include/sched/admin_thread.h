@@ -42,4 +42,32 @@ void admin_state_destroy(struct admin_state *state);
  */
 void *admin_thread_main(void *arg);
 
+/**
+ * @brief   Refresh pipeline statistics for all symbols.
+ *
+ * @param   cache:  Global cache instance.
+ */
+void update_all_pipeline_stats(struct trcache *cache);
+
+/**
+ * @brief   Estimate worker limits per pipeline stage.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   limits: Output array sized WORKER_STAT_STAGE_NUM.
+ */
+void compute_stage_limits(struct trcache *cache, int *limits);
+
+/**
+ * @brief   Derive worker start indices for each pipeline stage.
+ *
+ * Uses @limits to position stage worker ranges within the total worker pool.
+ * When the worker count is too small, @limits is overwritten with fallback
+ * values.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   limits: Per-stage worker limits.
+ * @param   start:  Output array sized WORKER_STAT_STAGE_NUM.
+ */
+void compute_stage_starts(struct trcache *cache, int *limits, int *start);
+
 #endif /* ADMIN_THREAD_H */

@@ -56,7 +56,7 @@ void admin_state_destroy(struct admin_state *state)
  *
  * @param   cache:  Global cache instance.
  */
-static void update_all_pipeline_stats(struct trcache *cache)
+void update_all_pipeline_stats(struct trcache *cache)
 {
 	struct symbol_table *table = cache->symbol_table;
 	struct atomsnap_version *ver = NULL;
@@ -333,7 +333,7 @@ static void schedule_symbol_work(struct trcache *cache,
  * @param   cache:  Global cache instance.
  * @param   limits: Output array sized WORKER_STAT_STAGE_NUM.
  */
-static void compute_stage_limits(struct trcache *cache, int *limits)
+void compute_stage_limits(struct trcache *cache, int *limits)
 {
 	double speed[WORKER_STAT_STAGE_NUM];
 	double demand[WORKER_STAT_STAGE_NUM];
@@ -367,6 +367,36 @@ static void compute_stage_limits(struct trcache *cache, int *limits)
 }
 
 /**
+ * @brief   Derive worker start indices for each pipeline stage.
+ *
+ * When worker count is insufficient, adjusts @limits accordingly and places
+ * CONVERT and FLUSH at the last worker.
+ *
+ * @param   cache:  Global cache instance.
+ * @param   limits: Per-stage worker limits.
+ * @param   start:  Output array sized WORKER_STAT_STAGE_NUM.
+ */
+void compute_stage_starts(struct trcache *cache, int *limits, int *start)
+{
+	if (cache->num_workers > WORKER_STAT_STAGE_NUM) {
+		start[WORKER_STAT_STAGE_APPLY] = 0;
+		start[WORKER_STAT_STAGE_CONVERT] =
+			start[WORKER_STAT_STAGE_APPLY] +
+				limits[WORKER_STAT_STAGE_APPLY];
+		start[WORKER_STAT_STAGE_FLUSH] =
+			start[WORKER_STAT_STAGE_CONVERT] +
+				limits[WORKER_STAT_STAGE_CONVERT];
+	} else {
+		limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers;
+		limits[WORKER_STAT_STAGE_CONVERT] = 1;
+		limits[WORKER_STAT_STAGE_FLUSH] = 1;
+		start[WORKER_STAT_STAGE_APPLY] = 0;
+		start[WORKER_STAT_STAGE_CONVERT] = cache->num_workers - 1;
+		start[WORKER_STAT_STAGE_FLUSH] = cache->num_workers - 1;
+	}
+}
+
+/**
  * @brief   Balance work assignments across workers.
  *
  * @param   cache:  Global cache instance.
@@ -381,27 +411,8 @@ static void balance_workers(struct trcache *cache)
 	int stage_start[WORKER_STAT_STAGE_NUM];
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
 
-	if (cache->num_workers > WORKER_STAT_STAGE_NUM) {
-		compute_stage_limits(cache, limits);
-
-		stage_start[WORKER_STAT_STAGE_APPLY] = 0;
-
-		stage_start[WORKER_STAT_STAGE_CONVERT] =
-			stage_start[WORKER_STAT_STAGE_APPLY]
-				+limits[WORKER_STAT_STAGE_APPLY];
-
-		stage_start[WORKER_STAT_STAGE_FLUSH] =
-			stage_start[WORKER_STAT_STAGE_CONVERT]
-				+ limits[WORKER_STAT_STAGE_CONVERT];
-	} else {
-		limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers;
-		limits[WORKER_STAT_STAGE_CONVERT] = 1;
-		limits[WORKER_STAT_STAGE_FLUSH] = 1;
-
-		stage_start[WORKER_STAT_STAGE_APPLY] = 0;
-		stage_start[WORKER_STAT_STAGE_CONVERT] = cache->num_workers - 1;
-		stage_start[WORKER_STAT_STAGE_FLUSH] = cache->num_workers - 1;
-	}
+	compute_stage_limits(cache, limits);
+	compute_stage_starts(cache, limits, stage_start);
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;
