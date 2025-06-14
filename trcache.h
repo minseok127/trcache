@@ -248,6 +248,19 @@ int trcache_register_symbol(struct trcache *cache, const char *symbol_str);
 const char *trcache_lookup_symbol_str(struct trcache *cache, int symbol_id);
 
 /**
+ * @brief   Lookup symbol ID by its symbol string.
+ *
+ * Uses a per-thread cache for fast lookups and falls back to the
+ * shared symbol table if necessary.
+ *
+ * @param   cache:      Handle from trcache_init().
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Symbol-ID on success or -1 if not found.
+ */
+int trcache_lookup_symbol_id(struct trcache *cache, const char *symbol_str);
+
+/**
  * @brief   Push a single trade into the internal pipeline.
  *
  * @param   cache:       Handle from trcache_init().

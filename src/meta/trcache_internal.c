@@ -430,14 +430,33 @@ int trcache_register_symbol(struct trcache *tc, const char *symbol_str)
  */
 const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
 {
-	struct symbol_entry *entry
-		= symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+        struct symbol_entry *entry
+                = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 
-	if (entry == NULL) {
-		return NULL;
-	}
+        if (entry == NULL) {
+                return NULL;
+        }
 
-	return entry->symbol_str;
+        return entry->symbol_str;
+}
+
+/**
+ * @brief   Lookup symbol ID by its symbol string using TLS cache.
+ *
+ * @param   tc:         Handle from trcache_init().
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Symbol ID on success, -1 on failure.
+ */
+int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
+{
+        struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+
+        if (tls == NULL) {
+                return -1;
+        }
+
+        return resolve_symbol_id(tc, tls, symbol_str);
 }
 
 /**
