@@ -441,6 +441,25 @@ const char *trcache_lookup_symbol_str(struct trcache *tc, int symbol_id)
 }
 
 /**
+ * @brief   Lookup symbol ID by its symbol string using TLS cache.
+ *
+ * @param   tc:         Handle from trcache_init().
+ * @param   symbol_str: NULL-terminated symbol string.
+ *
+ * @return  Symbol ID on success, -1 on failure.
+ */
+int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+
+	if (tls == NULL) {
+		return -1;
+	}
+
+	return resolve_symbol_id(tc, tls, symbol_str);
+}
+
+/**
  * @brief   Push a single trade into the internal pipeline.
  *
  * @param   tc:        Pointer to trcache instance.

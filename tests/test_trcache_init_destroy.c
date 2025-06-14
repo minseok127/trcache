@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <string.h>
 #include "trcache.h"
 
 static void *dummy_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
@@ -24,9 +25,16 @@ int main(void) {
 	    }
 	};
 
-	trcache *cache = trcache_init(&ctx);
-	assert(cache != NULL);
+        trcache *cache = trcache_init(&ctx);
+        assert(cache != NULL);
 
-	trcache_destroy(cache);
-	return 0;
+        int id = trcache_register_symbol(cache, "TESTSYM");
+        assert(id >= 0);
+        const char *sym = trcache_lookup_symbol_str(cache, id);
+        assert(sym && strcmp(sym, "TESTSYM") == 0);
+        int id2 = trcache_lookup_symbol_id(cache, "TESTSYM");
+        assert(id2 == id);
+
+        trcache_destroy(cache);
+        return 0;
 }

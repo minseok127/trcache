@@ -153,9 +153,10 @@ worker threads automatically.
 ```c
 int aapl_id = trcache_register_symbol(cache, "AAPL");
 const char *name = trcache_lookup_symbol_str(cache, aapl_id); /* "AAPL" */
+int again = trcache_lookup_symbol_id(cache, "AAPL");       /* same ID */
 ```
 
-Before inserting real-time trade data into trcache, the user must register the symbol associated with the trade in the system. The `trcache_register_symbol()` API is used to register a symbol string.
+Before inserting real-time trade data into trcache, the user must register the symbol associated with the trade in the system. The `trcache_register_symbol()` API is used to register a symbol string.  `trcache_lookup_symbol_str()` resolves an ID back to its string, while `trcache_lookup_symbol_id()` performs the reverse lookup.
 
 ### 6. Feed trade data
 
