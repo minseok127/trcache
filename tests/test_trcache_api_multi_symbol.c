@@ -38,6 +38,12 @@ struct thread_perf {
         unsigned long ops;
 };
 
+struct consumer_arg {
+        struct thread_perf *perf;
+        int start;
+        int count;
+};
+
 static double timespec_to_sec(const struct timespec *ts)
 {
         return ts->tv_sec + ts->tv_nsec / 1e9;
@@ -106,27 +112,35 @@ static void *producer_thread(void *arg)
 
 static void *consumer_tick_thread(void *arg)
 {
-        struct thread_perf *perf = (struct thread_perf *)arg;
+        struct consumer_arg *carg = (struct consumer_arg *)arg;
+        struct thread_perf *perf = carg->perf;
+        int count = carg->count;
+
         struct trade_data_buffer_cursor **cursors =
-                malloc(sizeof(*cursors) * g_num_symbols);
-        for (int s = 0; s < g_num_symbols; s++)
-                cursors[s] = trade_data_buffer_get_cursor(g_bufs[s],
+                malloc(sizeof(*cursors) * count);
+        int *syms = malloc(sizeof(*syms) * count);
+        for (int j = 0; j < count; j++) {
+                int s = carg->start + j;
+                syms[j] = s;
+                cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
                                 TRCACHE_100TICK_CANDLE);
+        }
         perf_start(perf);
 
         while (1) {
                 bool any = false;
-                for (int s = 0; s < g_num_symbols; s++) {
+                for (int i = 0; i < count; i++) {
+                        int s = syms[i];
                         struct trcache_trade_data *array = NULL;
-                        int count = 0;
-                        if (trade_data_buffer_peek(g_bufs[s], cursors[s],
-                                                   &array, &count)) {
-                                for (int i = 0; i < count; i++)
+                        int n = 0;
+                        if (trade_data_buffer_peek(g_bufs[s], cursors[i],
+                                                   &array, &n)) {
+                                for (int k = 0; k < n; k++)
                                         candle_chunk_list_apply_trade(
-                                                g_list_ticks[s], &array[i]);
-                                trade_data_buffer_consume(g_bufs[s], cursors[s],
-                                                         count);
-                                perf->ops += count;
+                                                g_list_ticks[s], &array[k]);
+                                trade_data_buffer_consume(g_bufs[s], cursors[i],
+                                                         n);
+                                perf->ops += n;
                                 any = true;
                         }
                 }
@@ -136,33 +150,42 @@ static void *consumer_tick_thread(void *arg)
 
         perf_end(perf);
         free(cursors);
+        free(syms);
         atomic_fetch_add(&consumers_done, 1);
         return NULL;
 }
 
 static void *consumer_sec_thread(void *arg)
 {
-        struct thread_perf *perf = (struct thread_perf *)arg;
+        struct consumer_arg *carg = (struct consumer_arg *)arg;
+        struct thread_perf *perf = carg->perf;
+        int count = carg->count;
+
         struct trade_data_buffer_cursor **cursors =
-                malloc(sizeof(*cursors) * g_num_symbols);
-        for (int s = 0; s < g_num_symbols; s++)
-                cursors[s] = trade_data_buffer_get_cursor(g_bufs[s],
+                malloc(sizeof(*cursors) * count);
+        int *syms = malloc(sizeof(*syms) * count);
+        for (int j = 0; j < count; j++) {
+                int s = carg->start + j;
+                syms[j] = s;
+                cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
                                 TRCACHE_1SEC_CANDLE);
+        }
         perf_start(perf);
 
         while (1) {
                 bool any = false;
-                for (int s = 0; s < g_num_symbols; s++) {
+                for (int i = 0; i < count; i++) {
+                        int s = syms[i];
                         struct trcache_trade_data *array = NULL;
-                        int count = 0;
-                        if (trade_data_buffer_peek(g_bufs[s], cursors[s],
-                                                   &array, &count)) {
-                                for (int i = 0; i < count; i++)
+                        int n = 0;
+                        if (trade_data_buffer_peek(g_bufs[s], cursors[i],
+                                                   &array, &n)) {
+                                for (int k = 0; k < n; k++)
                                         candle_chunk_list_apply_trade(
-                                                g_list_secs[s], &array[i]);
-                                trade_data_buffer_consume(g_bufs[s], cursors[s],
-                                                         count);
-                                perf->ops += count;
+                                                g_list_secs[s], &array[k]);
+                                trade_data_buffer_consume(g_bufs[s], cursors[i],
+                                                         n);
+                                perf->ops += n;
                                 any = true;
                         }
                 }
@@ -172,6 +195,7 @@ static void *consumer_sec_thread(void *arg)
 
         perf_end(perf);
         free(cursors);
+        free(syms);
         atomic_fetch_add(&consumers_done, 1);
         return NULL;
 }
@@ -393,14 +417,33 @@ int main(int argc, char **argv)
         struct thread_perf prod_perf, conv_perf, flush_perf, read_perf, read_sec_perf;
         struct thread_perf *cons_tick_perf = calloc(g_num_consumers, sizeof(struct thread_perf));
         struct thread_perf *cons_sec_perf = calloc(g_num_consumers, sizeof(struct thread_perf));
+        struct consumer_arg *cons_tick_args = calloc(g_num_consumers, sizeof(struct consumer_arg));
+        struct consumer_arg *cons_sec_args = calloc(g_num_consumers, sizeof(struct consumer_arg));
 
         pthread_create(&prod_t, NULL, producer_thread, &prod_perf);
-        for (int i = 0; i < g_num_consumers; i++)
+
+        int base = g_num_symbols / g_num_consumers;
+        int rem = g_num_symbols % g_num_consumers;
+        int start_idx = 0;
+        for (int i = 0; i < g_num_consumers; i++) {
+                int count = base + (i < rem ? 1 : 0);
+                cons_tick_args[i].perf = &cons_tick_perf[i];
+                cons_tick_args[i].start = start_idx;
+                cons_tick_args[i].count = count;
                 pthread_create(&cons_tick_t[i], NULL, consumer_tick_thread,
-                               &cons_tick_perf[i]);
-        for (int i = 0; i < g_num_consumers; i++)
+                               &cons_tick_args[i]);
+                start_idx += count;
+        }
+        start_idx = 0;
+        for (int i = 0; i < g_num_consumers; i++) {
+                int count = base + (i < rem ? 1 : 0);
+                cons_sec_args[i].perf = &cons_sec_perf[i];
+                cons_sec_args[i].start = start_idx;
+                cons_sec_args[i].count = count;
                 pthread_create(&cons_sec_t[i], NULL, consumer_sec_thread,
-                               &cons_sec_perf[i]);
+                               &cons_sec_args[i]);
+                start_idx += count;
+        }
         pthread_create(&conv_t, NULL, convert_thread, &conv_perf);
         pthread_create(&flush_t, NULL, flush_thread, &flush_perf);
         pthread_create(&read_t, NULL, reader_tick_thread, &read_perf);
@@ -429,6 +472,8 @@ int main(int argc, char **argv)
         free(cons_sec_t);
         free(cons_tick_perf);
         free(cons_sec_perf);
+        free(cons_tick_args);
+        free(cons_sec_args);
 
         double prod_time = timespec_to_sec(&prod_perf.end) - timespec_to_sec(&prod_perf.start);
         double cons_tick_time = 0.0;
