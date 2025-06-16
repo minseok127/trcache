@@ -7,9 +7,10 @@ TARGETS = test_utils test_symbol_table \
           test_trade_data_buffer_no_freelist \
           test_trade_data_buffer_free_list \
           test_copy_backward_by_seq_error \
-          test_candle_chunk_list_multithread \
-          test_trcache_api_multithread \
-          test_trcache_api_single_worker \
+         test_candle_chunk_list_multithread \
+         test_trcache_api_multithread \
+         test_trcache_api_multi_symbol \
+         test_trcache_api_single_worker \
           test_trcache_api_multi_worker \
           test_trcache_init_destroy
 
@@ -61,6 +62,9 @@ SRC_test_candle_chunk_list_multithread = \
 OBJS_test_trcache_api_multithread = test_trcache_api_multithread.o
 SRC_test_trcache_api_multithread = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
 
+OBJS_test_trcache_api_multi_symbol = test_trcache_api_multi_symbol.o
+SRC_test_trcache_api_multi_symbol = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
+
 OBJS_test_trcache_api_single_worker = test_trcache_api_single_worker.o
 SRC_test_trcache_api_single_worker = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
 
@@ -95,6 +99,8 @@ test_candle_chunk_list_multithread: $(SRC_test_candle_chunk_list_multithread) $(
 
 test_trcache_api_multithread: $(SRC_test_trcache_api_multithread) $(OBJS_test_trcache_api_multithread)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trcache_api_multithread) $(OBJS_test_trcache_api_multithread) -o $@
+test_trcache_api_multi_symbol: $(SRC_test_trcache_api_multi_symbol) $(OBJS_test_trcache_api_multi_symbol)
+	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trcache_api_multi_symbol) $(OBJS_test_trcache_api_multi_symbol) -o $@
 test_trcache_api_single_worker: $(SRC_test_trcache_api_single_worker) $(OBJS_test_trcache_api_single_worker)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trcache_api_single_worker) $(OBJS_test_trcache_api_single_worker) -o $@
 test_trcache_api_multi_worker: $(SRC_test_trcache_api_multi_worker) $(OBJS_test_trcache_api_multi_worker)
@@ -113,6 +119,7 @@ run: all
 	./test_trade_data_buffer_free_list
 	./test_candle_chunk_list_multithread
 	./test_trcache_api_multithread
+	./test_trcache_api_multi_symbol
 	./test_trcache_api_single_worker
 	./test_trcache_api_multi_worker
 	./test_trcache_init_destroy
@@ -122,9 +129,10 @@ clean:
 	$(OBJS_test_trade_data_buffer_no_freelist) \
 	$(OBJS_test_trade_data_buffer_free_list) \
 	$(OBJS_test_copy_backward_by_seq_error) \
-	$(OBJS_test_candle_chunk_list_multithread) \
-	$(OBJS_test_trcache_api_multithread) \
-	$(OBJS_test_trcache_api_single_worker) \
-	$(OBJS_test_trcache_api_multi_worker) \
+        $(OBJS_test_candle_chunk_list_multithread) \
+        $(OBJS_test_trcache_api_multithread) \
+       $(OBJS_test_trcache_api_multi_symbol) \
+        $(OBJS_test_trcache_api_single_worker) \
+        $(OBJS_test_trcache_api_multi_worker) \
 	$(OBJS_test_trcache_init_destroy) \
                $(TARGETS)
