@@ -925,6 +925,14 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
+	if (head_snap == NULL) {
+		errmsg(stderr,
+			"Head of candle chunk list is not yet initialized "
+			"(ts_end=%" PRIu64 ")\n",
+			ts_end);
+		return -1;
+	}
+
 	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
 	head_chunk = head_ver->head_node;
 
