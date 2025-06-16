@@ -40,7 +40,8 @@ struct thread_perf {
 
 struct consumer_arg {
         struct thread_perf *perf;
-        int idx;
+        int start;
+        int count;
 };
 
 static double timespec_to_sec(const struct timespec *ts)
@@ -113,20 +114,16 @@ static void *consumer_tick_thread(void *arg)
 {
         struct consumer_arg *carg = (struct consumer_arg *)arg;
         struct thread_perf *perf = carg->perf;
-
-        int count = 0;
-        for (int s = carg->idx; s < g_num_symbols; s += g_num_consumers)
-                count++;
+        int count = carg->count;
 
         struct trade_data_buffer_cursor **cursors =
                 malloc(sizeof(*cursors) * count);
         int *syms = malloc(sizeof(*syms) * count);
-        int j = 0;
-        for (int s = carg->idx; s < g_num_symbols; s += g_num_consumers) {
+        for (int j = 0; j < count; j++) {
+                int s = carg->start + j;
                 syms[j] = s;
                 cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
                                 TRCACHE_100TICK_CANDLE);
-                j++;
         }
         perf_start(perf);
 
@@ -162,20 +159,16 @@ static void *consumer_sec_thread(void *arg)
 {
         struct consumer_arg *carg = (struct consumer_arg *)arg;
         struct thread_perf *perf = carg->perf;
-
-        int count = 0;
-        for (int s = carg->idx; s < g_num_symbols; s += g_num_consumers)
-                count++;
+        int count = carg->count;
 
         struct trade_data_buffer_cursor **cursors =
                 malloc(sizeof(*cursors) * count);
         int *syms = malloc(sizeof(*syms) * count);
-        int j = 0;
-        for (int s = carg->idx; s < g_num_symbols; s += g_num_consumers) {
+        for (int j = 0; j < count; j++) {
+                int s = carg->start + j;
                 syms[j] = s;
                 cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
                                 TRCACHE_1SEC_CANDLE);
-                j++;
         }
         perf_start(perf);
 
@@ -428,17 +421,28 @@ int main(int argc, char **argv)
         struct consumer_arg *cons_sec_args = calloc(g_num_consumers, sizeof(struct consumer_arg));
 
         pthread_create(&prod_t, NULL, producer_thread, &prod_perf);
+
+        int base = g_num_symbols / g_num_consumers;
+        int rem = g_num_symbols % g_num_consumers;
+        int start_idx = 0;
         for (int i = 0; i < g_num_consumers; i++) {
+                int count = base + (i < rem ? 1 : 0);
                 cons_tick_args[i].perf = &cons_tick_perf[i];
-                cons_tick_args[i].idx = i;
+                cons_tick_args[i].start = start_idx;
+                cons_tick_args[i].count = count;
                 pthread_create(&cons_tick_t[i], NULL, consumer_tick_thread,
                                &cons_tick_args[i]);
+                start_idx += count;
         }
+        start_idx = 0;
         for (int i = 0; i < g_num_consumers; i++) {
+                int count = base + (i < rem ? 1 : 0);
                 cons_sec_args[i].perf = &cons_sec_perf[i];
-                cons_sec_args[i].idx = i;
+                cons_sec_args[i].start = start_idx;
+                cons_sec_args[i].count = count;
                 pthread_create(&cons_sec_t[i], NULL, consumer_sec_thread,
                                &cons_sec_args[i]);
+                start_idx += count;
         }
         pthread_create(&conv_t, NULL, convert_thread, &conv_perf);
         pthread_create(&flush_t, NULL, flush_thread, &flush_perf);
