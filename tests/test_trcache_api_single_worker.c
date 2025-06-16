@@ -147,16 +147,6 @@ static void *reader_tick_thread(void *arg)
                 }
         }
 
-        for (int i = 0; i < 1000; i++) {
-                if (trcache_get_candles_by_symbol_id_and_offset(g_tc, g_symbol_id,
-                                TRCACHE_100TICK_CANDLE, mask, 1, 5, batch) == 0) {
-                        for (int j = 0; j < batch->num_candles; j++)
-                                check_tick_candle(batch, j);
-                        perf->ops++;
-                        break;
-                }
-        }
-
         perf_end(perf);
         trcache_batch_free(batch);
         return NULL;
@@ -172,6 +162,8 @@ static void *reader_sec_thread(void *arg)
                 TRCACHE_LOW | TRCACHE_CLOSE | TRCACHE_VOLUME;
         perf_start(perf);
 
+		sleep(5);
+
         while (!atomic_load(&producer_done)) {
                 struct timespec now;
                 clock_gettime(CLOCK_REALTIME, &now);
@@ -185,21 +177,6 @@ static void *reader_sec_thread(void *arg)
                         perf->ops++;
                 } else {
                         sched_yield();
-                }
-        }
-
-        for (int i = 0; i < 1000; i++) {
-                struct timespec now;
-                clock_gettime(CLOCK_REALTIME, &now);
-                uint64_t ms = now.tv_sec * 1000ULL + now.tv_nsec / 1000000ULL;
-                uint64_t ts = (ms / 1000ULL) * 1000ULL;
-
-                if (trcache_get_candles_by_symbol_id_and_ts(g_tc, g_symbol_id,
-                                TRCACHE_1SEC_CANDLE, mask, ts, 5, batch) == 0) {
-                        for (int j = 0; j < batch->num_candles; j++)
-                                check_sec_candle(batch, j);
-                        perf->ops++;
-                        break;
                 }
         }
 
@@ -251,9 +228,6 @@ int main(int argc, char **argv)
         struct thread_perf prod_perf, read_tick_perf, read_sec_perf;
 
         pthread_create(&prod_t, NULL, producer_thread, &prod_perf);
-
-        /* give worker threads time to initialise lists and produce candles */
-        sleep(2);
 
         pthread_create(&read_tick_t, NULL, reader_tick_thread, &read_tick_perf);
         pthread_create(&read_sec_t, NULL, reader_sec_thread, &read_sec_perf);

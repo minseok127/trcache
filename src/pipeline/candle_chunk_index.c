@@ -79,6 +79,8 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *cap)
 	}
 #endif
 
+	memset(idx_ver->array, 0, sz);
+
 	snap_ver->object = idx_ver;
 	idx_ver->mask = newcap - 1;
 
