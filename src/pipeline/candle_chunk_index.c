@@ -408,7 +408,9 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	 */
 	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
 		errmsg(stderr,
-			"Target ts is greater than the start ts of the recent candle\n");
+			"Target ts is greater than the start ts of the recent candle "
+			"(last_ts=%" PRIu64 ")\n",
+			out->column_batch->start_timestamp_array[out->num_completed]);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}

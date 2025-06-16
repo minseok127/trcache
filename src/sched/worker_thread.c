@@ -78,7 +78,7 @@ static void worker_remove_work(struct worker_state *state, uint64_t key)
 
 	list_del(&item->node);
 	ht_remove(state->work_map, (void *)key, sizeof(void *));
-        free(item);
+	free(item);
 }
 
 /**

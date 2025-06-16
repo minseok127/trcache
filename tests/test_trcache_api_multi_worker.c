@@ -223,8 +223,8 @@ int main(int argc, char **argv)
 
         struct trcache_init_ctx init_ctx = {
                 .num_worker_threads = g_num_workers,
-                .batch_candle_count_pow2 = 10,
-                .flush_threshold_pow2 = 1,
+                .batch_candle_count_pow2 = 12,
+                .flush_threshold_pow2 = 0,
                 .candle_type_flags = TRCACHE_100TICK_CANDLE | TRCACHE_1SEC_CANDLE,
                 .flush_ops = {
                         .flush = dummy_flush,
@@ -256,12 +256,12 @@ int main(int argc, char **argv)
         struct thread_perf prod_perf, read_tick_perf, read_sec_perf;
 
         pthread_create(&prod_t, NULL, producer_thread, &prod_perf);
-        pthread_create(&read_tick_t, NULL, reader_tick_thread, &read_tick_perf);
-        pthread_create(&read_sec_t, NULL, reader_sec_thread, &read_sec_perf);
+        //pthread_create(&read_tick_t, NULL, reader_tick_thread, &read_tick_perf);
+        //pthread_create(&read_sec_t, NULL, reader_sec_thread, &read_sec_perf);
 
         pthread_join(prod_t, NULL);
-        pthread_join(read_tick_t, NULL);
-        pthread_join(read_sec_t, NULL);
+        //pthread_join(read_tick_t, NULL);
+        //pthread_join(read_sec_t, NULL);
 
         trcache_destroy(g_tc);
         free(g_symbol_ids);
