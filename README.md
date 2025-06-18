@@ -34,6 +34,13 @@ make test
 
 which will produce several test binaries and run them automatically.
 
+## Code style
+
+The repository uses `.clang-format` and `.clang-tidy` for formatting and
+linting.  Run `make fmt` to format all source files and `make lint` to
+verify that all control statements use braces.  Vim users can rely on the
+included `.editorconfig` to set tab-based indentation automatically.
+
 ## Basic usage
 
 ### 1. Candle and field types

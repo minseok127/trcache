@@ -17,6 +17,7 @@ endif
 PROJECT_ROOT := $(realpath .)
 SRC_DIR := src
 SUBDIRS := concurrent utils meta pipeline sched
+FMT_FILES := $(shell find $(PROJECT_ROOT) -name '*.c' -o -name '*.h')
 
 OBJS = \
 	$(wildcard $(SRC_DIR)/*/*.o)
@@ -26,7 +27,7 @@ INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 STATIC_LIB = libtrcache.a
 SHARED_LIB = libtrcache.so
 
-.PHONY: all clean test
+.PHONY: all clean test fmt lint
 
 all:
 	@for dir in $(SUBDIRS); do \
@@ -45,3 +46,9 @@ clean:
 test:
 	$(MAKE) -C tests CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)" \
 	PROJECT_ROOT="$(PROJECT_ROOT)" run
+
+fmt:
+	clang-format -i $(FMT_FILES)
+
+lint:
+	clang-tidy $(FMT_FILES) -- -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
