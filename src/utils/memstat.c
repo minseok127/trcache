@@ -1,8 +1,10 @@
 #include "utils/memstat.h"
 #include "utils/log.h"
 
+/** Global instance storing byte counters for each category. */
 struct memstat g_memstat;
 
+/* Human readable names for each category, indexed by memstat_category. */
 static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_TRADE_DATA_BUFFER] = "trade_data_buffer",
 	[MEMSTAT_CANDLE_CHUNK_LIST] = "candle_chunk_list",
@@ -11,6 +13,9 @@ static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_SCHED_MSG] = "sched_msg",
 };
 
+/**
+ * @brief Print all memory statistics using errmsg().
+ */
 void memstat_errmsg_status(void)
 {
 	size_t total = 0;

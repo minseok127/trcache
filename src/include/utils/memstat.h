@@ -26,26 +26,50 @@ struct memstat {
 	struct memstat_entry category[MEMSTAT_CATEGORY_NUM];
 };
 
+/**
+ * @brief Global memory counters used by the library.
+ */
 extern struct memstat g_memstat;
 
+/**
+ * @brief Increment the counter for a memory category.
+ *
+ * @param cat   Category to update.
+ * @param bytes Number of bytes to add.
+ */
 static inline void memstat_add(memstat_category cat, size_t bytes)
 {
-	atomic_fetch_add_explicit(&g_memstat.category[cat].value,
-		bytes, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_memstat.category[cat].value,
+                bytes, memory_order_relaxed);
 }
 
+/**
+ * @brief Decrement the counter for a memory category.
+ *
+ * @param cat   Category to update.
+ * @param bytes Number of bytes to subtract.
+ */
 static inline void memstat_sub(memstat_category cat, size_t bytes)
 {
-	atomic_fetch_sub_explicit(&g_memstat.category[cat].value,
-		bytes, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&g_memstat.category[cat].value,
+                bytes, memory_order_relaxed);
 }
 
+/**
+ * @brief Obtain the current byte count for a category.
+ *
+ * @param cat Category to query.
+ * @return Current number of bytes tracked for @cat.
+ */
 static inline size_t memstat_get(memstat_category cat)
 {
-	return atomic_load_explicit(&g_memstat.category[cat].value,
-		memory_order_relaxed);
+        return atomic_load_explicit(&g_memstat.category[cat].value,
+                memory_order_relaxed);
 }
 
+/**
+ * @brief Print per-category memory statistics to stderr.
+ */
 void memstat_errmsg_status(void);
 
 #endif /* MEMSTAT_H */
