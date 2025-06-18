@@ -12,6 +12,7 @@
 #include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Initialise the admin thread state.
@@ -46,6 +47,13 @@ void admin_state_destroy(struct admin_state *state)
 	if (state == NULL) {
 		return;
 	}
+
+	struct sched_work_msg *msg = NULL;
+		while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
+			free(msg);
+			memstat_sub(MEMSTAT_SCHED_MSG,
+			sizeof(struct sched_work_msg));
+		}
 
 	scq_destroy(state->sched_msg_queue);
 	state->sched_msg_queue = NULL;
@@ -438,7 +446,7 @@ void *admin_thread_main(void *arg)
 {
 	struct trcache *cache = (struct trcache *)arg;
 
-	while (!cache->admin_state.done) {
+		while (!cache->admin_state.done) {
 		update_all_pipeline_stats(cache);
 		balance_workers(cache);
 		sched_yield();

@@ -16,6 +16,7 @@
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
@@ -32,26 +33,33 @@ static struct atomsnap_version *row_page_version_alloc(
 	struct candle_row_page *row_page = NULL;
 
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
-	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN,
-		sizeof(struct candle_row_page));
+        row_page = aligned_alloc(TRCACHE_SIMD_ALIGN,
+                sizeof(struct candle_row_page));
 #else
 	posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN,
 		sizeof(struct candle_row_page));
 #endif
 
-	if (!row_page) {
-		errmsg(stderr, "#candle_row_page allocation failed\n");
-		return NULL;
-	} else {
-		memset(row_page, 0, sizeof(struct candle_row_page));
-	}
+        if (!row_page) {
+                errmsg(stderr, "#candle_row_page allocation failed\n");
+                return NULL;
+        } else {
+                memset(row_page, 0, sizeof(struct candle_row_page));
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_row_page));
+        }
 
-	version = malloc(sizeof(struct atomsnap_version));
-	if (version == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
-		free(row_page);
-		return NULL;
-	}
+        version = malloc(sizeof(struct atomsnap_version));
+        if (version)
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct atomsnap_version));
+        if (version == NULL) {
+                errmsg(stderr, "#atomsnap_version allocation failed\n");
+                free(row_page);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_row_page));
+                return NULL;
+        }
 
 	version->object = row_page;
 	return version;
@@ -66,12 +74,16 @@ static struct atomsnap_version *row_page_version_alloc(
  */
 static void row_page_version_free(struct atomsnap_version *version)
 {
-	if (version == NULL) {
-		return;
-	}
+        if (version == NULL) {
+                return;
+        }
 
-	free(version->object); /* #candle_row_page */
-	free(version);
+        free(version->object); /* #candle_row_page */
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct candle_row_page));
+        free(version);
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct atomsnap_version));
 }
 
 /**
@@ -94,35 +106,44 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 		.num_extra_control_blocks = row_page_count - 1
 	};
 
-	chunk = malloc(sizeof(struct candle_chunk));
-	if (chunk == NULL) {
-		errmsg(stderr, "#candle_chunk allocation failed\n");
-		return NULL;
-	}
+        chunk = malloc(sizeof(struct candle_chunk));
+        if (chunk)
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk));
+        if (chunk == NULL) {
+                errmsg(stderr, "#candle_chunk allocation failed\n");
+                return NULL;
+        }
 
 	if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
-		errmsg(stderr, "Initialization of spinlock failed\n");
-		free(chunk);
-		return NULL;
-	}
+                errmsg(stderr, "Initialization of spinlock failed\n");
+                free(chunk);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk));
+                return NULL;
+        }
 
-	chunk->row_gate = atomsnap_init_gate(&ctx);
-	if (chunk->row_gate == NULL) {
-		errmsg(stderr, "Failure on atomsnap_init_gate\n");
-		pthread_spin_destroy(&chunk->spinlock);
-		free(chunk);
-		return NULL;
-	}
+        chunk->row_gate = atomsnap_init_gate(&ctx);
+        if (chunk->row_gate == NULL) {
+                errmsg(stderr, "Failure on atomsnap_init_gate\n");
+                pthread_spin_destroy(&chunk->spinlock);
+                free(chunk);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk));
+                return NULL;
+        }
 
 	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count,
 		TRCACHE_FIELD_MASK_ALL);
-	if (chunk->column_batch == NULL) {
-		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
-		pthread_spin_destroy(&chunk->spinlock);
-		atomsnap_destroy_gate(chunk->row_gate);
-		free(chunk);
-		return NULL;
-	}
+        if (chunk->column_batch == NULL) {
+                errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
+                pthread_spin_destroy(&chunk->spinlock);
+                atomsnap_destroy_gate(chunk->row_gate);
+                free(chunk);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk));
+                return NULL;
+        }
 
 	chunk->column_batch->symbol_id = symbol_id;
 	chunk->column_batch->candle_type = candle_type;
@@ -155,10 +176,12 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 		return;
 	}
 
-	pthread_spin_destroy(&chunk->spinlock);
-	atomsnap_destroy_gate(chunk->row_gate);
-	trcache_batch_free(chunk->column_batch);
-	free(chunk);
+        pthread_spin_destroy(&chunk->spinlock);
+        atomsnap_destroy_gate(chunk->row_gate);
+        trcache_batch_free(chunk->column_batch);
+        free(chunk);
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct candle_chunk));
 }
 
 /**

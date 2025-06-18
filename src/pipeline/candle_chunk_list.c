@@ -17,6 +17,7 @@
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Allocate an candle chunk list's head version.
@@ -31,20 +32,28 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
 	struct atomsnap_version *version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
 
-	version = malloc(sizeof(struct atomsnap_version));
+        version = malloc(sizeof(struct atomsnap_version));
+        if (version)
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct atomsnap_version));
 
 	if (version == NULL) {
 		errmsg(stderr, "#atomsnap_version allocation failed\n");
 		return NULL;
 	}
 
-	head = malloc(sizeof(struct candle_chunk_list_head_version));
+        head = malloc(sizeof(struct candle_chunk_list_head_version));
+        if (head)
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk_list_head_version));
 
 	if (head == NULL) {
-		errmsg(stderr, "#candle_chunk_list_head_version allocation failed\n");
-		free(version);
-		return NULL;
-	}
+                errmsg(stderr, "#candle_chunk_list_head_version allocation failed\n");
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct atomsnap_version));
+                free(version);
+                return NULL;
+        }
 
 	head->snap_version = version;
 	version->object = (void *)head;
@@ -113,8 +122,12 @@ free_head_version:
 
 	next_head_version = atomic_load(&head_version->head_version_next);
 
-	free(head_version->snap_version); /* #atomsnap_version */
-	free(head_version); /* #candle_chunk_list_head_version */
+        free(head_version->snap_version); /* #atomsnap_version */
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct atomsnap_version));
+        free(head_version); /* #candle_chunk_list_head_version */
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct candle_chunk_list_head_version));
 
 	/*
 	 * Normally not NULL, but may be NULL if the chunk list is being destroyed.
@@ -161,32 +174,39 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
-	list = malloc(sizeof(struct candle_chunk_list));
-	if (list == NULL) {
-		errmsg(stderr, "#candle_chunk_list allocation failed\n");
-		return NULL;
-	}
+        list = malloc(sizeof(struct candle_chunk_list));
+        if (list)
+                memstat_add(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk_list));
+        if (list == NULL) {
+                errmsg(stderr, "#candle_chunk_list allocation failed\n");
+                return NULL;
+        }
 
 	list->trc = ctx->trc;
 
 	list->chunk_index = candle_chunk_index_create(
 		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2);
-	if (list->chunk_index == NULL) {
-		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
-		free(list);
-		return NULL;
-	}
+        if (list->chunk_index == NULL) {
+                errmsg(stderr, "Failure on candle_chunk_index_create()\n");
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk_list));
+                free(list);
+                return NULL;
+        }
 
 	list->row_page_count = (list->trc->batch_candle_count
 		+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
 
 	list->head_gate = atomsnap_init_gate(&atomsnap_ctx);
-	if (list->head_gate == NULL) {
-		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
-		candle_chunk_index_destroy(list->chunk_index);
-		free(list);
-		return NULL;
-	}
+        if (list->head_gate == NULL) {
+                errmsg(stderr, "Failure on atomsnap_init_gate()\n");
+                candle_chunk_index_destroy(list->chunk_index);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk_list));
+                free(list);
+                return NULL;
+        }
 
 	atomic_store(&list->mutable_seq, UINT64_MAX);
 	atomic_store(&list->last_seq_converted, UINT64_MAX);
@@ -229,11 +249,13 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 		errmsg(stderr, "Unused candle chunk list, "
 			"type: %d, symbol_id: %d\n",
 			chunk_list->candle_type, chunk_list->symbol_id);
-		atomsnap_destroy_gate(chunk_list->head_gate);
-		candle_chunk_index_destroy(chunk_list->chunk_index);
-		free(chunk_list);
-		return;
-	}
+                atomsnap_destroy_gate(chunk_list->head_gate);
+                candle_chunk_index_destroy(chunk_list->chunk_index);
+                free(chunk_list);
+                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                        sizeof(struct candle_chunk_list));
+                return;
+        }
 
 	head_version = (struct candle_chunk_list_head_version *)snap->object;
 	head_version->tail_node = chunk_list->tail;
@@ -256,9 +278,11 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	/* This will call candle_chunk_list_head_free() */
 	atomsnap_destroy_gate(chunk_list->head_gate);
 
-	candle_chunk_index_destroy(chunk_list->chunk_index);
+        candle_chunk_index_destroy(chunk_list->chunk_index);
 
-	free(chunk_list);
+        free(chunk_list);
+        memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST,
+                sizeof(struct candle_chunk_list));
 }
 
 /**

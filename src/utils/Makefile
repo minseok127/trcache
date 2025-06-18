@@ -1,6 +1,6 @@
 CC = gcc
 
-OBJS = hash_table.o hash_table_callbacks.o vector.o
+OBJS = hash_table.o hash_table_callbacks.o vector.o memstat.o
 
 .PHONY: all clean
 

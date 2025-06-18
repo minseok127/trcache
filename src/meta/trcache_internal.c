@@ -15,6 +15,7 @@
 #include "utils/log.h"
 #include "sched/sched_work_msg.h"
 #include "sched/admin_thread.h"
+#include "utils/memstat.h"
 
 #include "trcache.h"
 
@@ -98,11 +99,13 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		c = list_get_first(&tls_data->local_free_list);
 		while (c != &tls_data->local_free_list) {
 			n = c->next;
-			chunk = __get_trd_chunk_ptr(c);
-			free(chunk);
-			c = n;
-		}
-	}
+                        chunk = __get_trd_chunk_ptr(c);
+                        free(chunk);
+                        memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
+                                sizeof(struct trade_data_chunk));
+                        c = n;
+                }
+        }
 
 	free(tls_data);
 }
@@ -186,7 +189,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 
 	if (admin_state_init(&tc->admin_state) != 0) {
 		errmsg(stderr, "admin_state_init failed\n");
-		scq_destroy(tc->sched_msg_free_list);
+
+       scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
@@ -331,6 +335,14 @@ void trcache_destroy(struct trcache *tc)
 		worker_state_destroy(&tc->worker_state_arr[i]);
 	}
 	
+        /* Drain and release scheduler messages */
+        struct sched_work_msg *msg = NULL;
+        while (scq_dequeue(tc->sched_msg_free_list, (void **)&msg)) {
+                free(msg);
+                memstat_sub(MEMSTAT_SCHED_MSG,
+                        sizeof(struct sched_work_msg));
+        }
+
 	scq_destroy(tc->sched_msg_free_list);
 
 	free(tc->worker_state_arr);

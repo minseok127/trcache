@@ -9,6 +9,7 @@
 
 #include "sched/sched_work_msg.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Obtain a message object from the specified free‑list.
@@ -36,11 +37,12 @@ struct sched_work_msg *sched_work_msg_alloc(sched_work_msg_free_list *freelist)
 memalloc:
 
 	/* Fallback – allocate fresh */
-	msg = malloc(sizeof(struct sched_work_msg));
-	if (msg == NULL) {
-		errmsg(stderr, "Message allocation is failed\n");
-		return NULL;
-	}
+        msg = malloc(sizeof(struct sched_work_msg));
+        if (msg == NULL) {
+                errmsg(stderr, "Message allocation is failed\n");
+                return NULL;
+        }
+        memstat_add(MEMSTAT_SCHED_MSG, sizeof(struct sched_work_msg));
 
 	return msg;
 }

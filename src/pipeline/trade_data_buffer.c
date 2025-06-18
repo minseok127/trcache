@@ -17,6 +17,7 @@
 #include "pipeline/trade_data_buffer.h"
 #include "utils/list_head.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Create and initialize a trade_data_buffer.
@@ -37,20 +38,28 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 		return NULL;
 	}
 
-	buf = malloc(sizeof(struct trade_data_buffer));
+        buf = malloc(sizeof(struct trade_data_buffer));
+        if (buf)
+                memstat_add(MEMSTAT_TRADE_DATA_BUFFER,
+                        sizeof(struct trade_data_buffer));
 
-	if (buf == NULL) {
-		errmsg(stderr, "#trade_data_buffer allocation failed\n");
-		return NULL;
-	}
+        if (buf == NULL) {
+                errmsg(stderr, "#trade_data_buffer allocation failed\n");
+                return NULL;
+        }
 
-	chunk = malloc(sizeof(struct trade_data_chunk));
+        chunk = malloc(sizeof(struct trade_data_chunk));
+        if (chunk)
+                memstat_add(MEMSTAT_TRADE_DATA_BUFFER,
+                        sizeof(struct trade_data_chunk));
 
-	if (chunk == NULL) {
-		errmsg(stderr, "#trade_data_chunk allocation failed\n");
-		free(buf);
-		return NULL;
-	}
+        if (chunk == NULL) {
+                errmsg(stderr, "#trade_data_chunk allocation failed\n");
+                memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
+                        sizeof(struct trade_data_buffer));
+                free(buf);
+                return NULL;
+        }
 
 	INIT_LIST_HEAD(&buf->chunk_list);
 
@@ -97,13 +106,17 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 		c = list_get_first(&buf->chunk_list);
 		while (c != &buf->chunk_list) {
 			n = c->next;
-			chunk = __get_trd_chunk_ptr(c);
-			free(chunk);
-			c = n;
-		}
-	}
+                        chunk = __get_trd_chunk_ptr(c);
+                        free(chunk);
+                        memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
+                                sizeof(struct trade_data_chunk));
+                        c = n;
+                }
+        }
 
-	free(buf);
+        free(buf);
+        memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
+                sizeof(struct trade_data_buffer));
 }
 
 /**
@@ -143,12 +156,14 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		if (free_list != NULL && !list_empty(free_list)) {
 			list_move_tail(free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
-		} else {
-			new_chunk = malloc(sizeof(struct trade_data_chunk));
-			if (new_chunk == NULL) {
-				errmsg(stderr, "#trade_data_chunk allocation failed\n");
-				return -1;
-			}
+                } else {
+                        new_chunk = malloc(sizeof(struct trade_data_chunk));
+                        if (new_chunk == NULL) {
+                                errmsg(stderr, "#trade_data_chunk allocation failed\n");
+                                return -1;
+                        }
+                        memstat_add(MEMSTAT_TRADE_DATA_BUFFER,
+                                sizeof(struct trade_data_chunk));
 
 			INIT_LIST_HEAD(&new_chunk->list_node);
 			list_add_tail(&new_chunk->list_node, &buf->chunk_list);

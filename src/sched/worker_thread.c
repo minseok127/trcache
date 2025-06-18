@@ -15,6 +15,7 @@
 #include "utils/hash_table.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
+#include "utils/memstat.h"
 
 /**
  * @brief   Create a 64-bit identifier for a work item.
@@ -29,7 +30,7 @@
  * @return  Packed 64-bit key.
  */
 static uint64_t pack_work_key(int symbol_id, worker_stat_stage_type stage,
-        trcache_candle_type type)
+	trcache_candle_type type)
 {
 	int idx = worker_ct_to_idx(type);
 	return ((uint64_t)(uint32_t)symbol_id << 32) |
@@ -334,9 +335,16 @@ void worker_state_destroy(struct worker_state *state)
 		return;
 	}
 
+	struct sched_work_msg *msg = NULL;
+	while (scq_dequeue(state->sched_msg_queue, (void **)&msg)) {
+	free(msg);
+	memstat_sub(MEMSTAT_SCHED_MSG,
+	sizeof(struct sched_work_msg));
+	}
+	
 	scq_destroy(state->sched_msg_queue);
 	state->sched_msg_queue = NULL;
-
+	
 	if (state->work_map) {
 		struct list_head *pos = state->work_list.next;
 		struct list_head *n = NULL;
@@ -379,8 +387,9 @@ void *worker_thread_main(void *arg)
 			sched_work_msg_recycle(cache->sched_msg_free_list, msg);
 		}
 
-		worker_run_all_work(cache, state);
+	worker_run_all_work(cache, state);
 	}
+
 
 	return NULL;
 }
