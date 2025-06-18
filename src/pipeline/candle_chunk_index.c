@@ -368,32 +368,32 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	struct candle_chunk *out;
 	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
 
-        if (snap_ver == NULL) {
-                char ts_buf[32];
-                format_timestamp_ms(target_ts, ts_buf, sizeof(ts_buf));
-                errmsg(stderr,
-                        "Failure on atomsnap_acquire_version() "
-                        "(target_ts=%s)\n",
-                        ts_buf);
-                return NULL;
-        }
+	if (snap_ver == NULL) {
+		char ts_buf[32];
+		format_timestamp_ms(target_ts, ts_buf, sizeof(ts_buf));
+		errmsg(stderr,
+			"Failure on atomsnap_acquire_version() "
+			"(target_ts=%s)\n",
+			ts_buf);
+		return NULL;
+	}
 	
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
 	mask = idx_ver->mask;
 	
-        if (idx_ver->array[head & mask].timestamp_first > target_ts) {
-                char ts_buf1[32];
-                char ts_buf2[32];
-                format_timestamp_ms(target_ts, ts_buf1, sizeof(ts_buf1));
-                format_timestamp_ms(idx_ver->array[head & mask].timestamp_first,
-                        ts_buf2, sizeof(ts_buf2));
-                errmsg(stderr,
-                        "Target ts is less than head's timestamp "
-                        "(target_ts=%s), (head_ts=%s)\n",
-                        ts_buf1, ts_buf2);
-                atomsnap_release_version(snap_ver);
-                return NULL;
-        }
+	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
+		char ts_buf1[32];
+		char ts_buf2[32];
+		format_timestamp_ms(target_ts, ts_buf1, sizeof(ts_buf1));
+		format_timestamp_ms(idx_ver->array[head & mask].timestamp_first,
+			ts_buf2, sizeof(ts_buf2));
+		errmsg(stderr,
+			"Target ts is less than head's timestamp "
+			"(target_ts=%s), (head_ts=%s)\n",
+			ts_buf1, ts_buf2);
+		atomsnap_release_version(snap_ver);
+		return NULL;
+	}
 
 	/* Binary search */
 	while (lo < hi) {
@@ -414,18 +414,18 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	 * recent candle, it is not possible to determine whether the target belongs
 	 * to that candle, and the chunk is considered not found.
 	 */
-        if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
-                char ts_buf[32];
-                format_timestamp_ms(
-                        out->column_batch->start_timestamp_array[out->num_completed],
-                        ts_buf, sizeof(ts_buf));
-                errmsg(stderr,
-                        "Target ts is greater than the start ts of the recent candle "
-                        "(last_ts=%s)\n",
-                        ts_buf);
-                atomsnap_release_version(snap_ver);
-                return NULL;
-        }
+	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
+		char ts_buf[32];
+		format_timestamp_ms(
+			out->column_batch->start_timestamp_array[out->num_completed],
+			ts_buf, sizeof(ts_buf));
+		errmsg(stderr,
+			"Target ts is greater than the start ts of the recent candle "
+			"(last_ts=%s)\n",
+			ts_buf);
+		atomsnap_release_version(snap_ver);
+		return NULL;
+	}
 
 	atomsnap_release_version(snap_ver);
 	return out;
