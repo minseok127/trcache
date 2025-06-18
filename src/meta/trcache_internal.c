@@ -99,13 +99,13 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		c = list_get_first(&tls_data->local_free_list);
 		while (c != &tls_data->local_free_list) {
 			n = c->next;
-                        chunk = __get_trd_chunk_ptr(c);
-                        free(chunk);
-                        memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
-                                sizeof(struct trade_data_chunk));
-                        c = n;
-                }
-        }
+			chunk = __get_trd_chunk_ptr(c);
+			free(chunk);
+			memstat_sub(MEMSTAT_TRADE_DATA_BUFFER,
+				sizeof(struct trade_data_chunk));
+			c = n;
+		}
+	}
 
 	free(tls_data);
 }
