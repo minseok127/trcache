@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "utils/log.h"
-#include "utils/memstat.h"
 
 #include "trcache.h"
 
@@ -116,7 +115,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 
 	/* Single aligned block for struct + all arrays. */
 	base = simd_aligned_alloc(a, total_sz);
-        
+	
 	if (base == NULL) {
 		errmsg(stderr, "Failure on simd_aligned_alloc()\n");
 		return NULL;
