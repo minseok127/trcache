@@ -17,6 +17,7 @@
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
+#include "utils/time_utils.h"
 
 /**
  * @brief   Allocate an candle chunk list's head version.
@@ -926,10 +927,12 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
+		char ts_buf[32];
+		format_timestamp_ms(ts_end, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
 			"Head of candle chunk list is not yet initialized "
-			"(ts_end=%" PRIu64 ")\n",
-			ts_end);
+			"(ts_end=%s)\n",
+			ts_buf);
 		return -1;
 	}
 
@@ -940,9 +943,11 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	chunk = candle_chunk_index_find_ts(idx, ts_end);
 
 	if (chunk == NULL) {
+		char ts_buf[32];
+		format_timestamp_ms(ts_end, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
-			"Target timestamp is out of range (ts_end=%" PRIu64 ")\n",
-			ts_end);
+			"Target timestamp is out of range (ts_end=%s)\n",
+			ts_buf);
 		atomsnap_release_version(head_snap);
 		return -1;
 	}

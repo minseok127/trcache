@@ -21,6 +21,7 @@
 
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
+#include "utils/time_utils.h"
 
 /**
  * @brief   Allocate atomsnap version and index version.
@@ -368,10 +369,12 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
 
 	if (snap_ver == NULL) {
+		char ts_buf[32];
+		format_timestamp_ms(target_ts, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
 			"Failure on atomsnap_acquire_version() "
-			"(target_ts=%" PRIu64 ")\n",
-			target_ts);
+			"(target_ts=%s)\n",
+			ts_buf);
 		return NULL;
 	}
 	
@@ -379,10 +382,15 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	mask = idx_ver->mask;
 	
 	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
+		char ts_buf1[32];
+		char ts_buf2[32];
+		format_timestamp_ms(target_ts, ts_buf1, sizeof(ts_buf1));
+		format_timestamp_ms(idx_ver->array[head & mask].timestamp_first,
+			ts_buf2, sizeof(ts_buf2));
 		errmsg(stderr,
 			"Target ts is less than head's timestamp "
-			"(target_ts=%" PRIu64 "), (head_ts=%" PRIu64 ")\n",
-			target_ts, idx_ver->array[head &mask].timestamp_first);
+			"(target_ts=%s), (head_ts=%s)\n",
+			ts_buf1, ts_buf2);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
@@ -407,10 +415,14 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	 * to that candle, and the chunk is considered not found.
 	 */
 	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
+		char ts_buf[32];
+		format_timestamp_ms(
+			out->column_batch->start_timestamp_array[out->num_completed],
+			ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
 			"Target ts is greater than the start ts of the recent candle "
-			"(last_ts=%" PRIu64 ")\n",
-			out->column_batch->start_timestamp_array[out->num_completed]);
+			"(last_ts=%s)\n",
+			ts_buf);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
