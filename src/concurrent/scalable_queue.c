@@ -14,7 +14,6 @@
 #include "concurrent/scalable_queue.h"
 #include "utils/log.h"
 #include "utils/memstat.h"
-#include "sched/sched_work_msg.h"
 
 #define MAX_SCQ_NUM (1024)
 #define MAX_THREAD_NUM (1024)
@@ -180,13 +179,14 @@ void scq_destroy(struct scalable_queue *scq)
 			while (node != dequeued_node_list->local_tail) {
 				prev_node = node;
 				node = node->next;
-                               free(prev_node);
-                               memstat_sub(MEMSTAT_SCQ_NODE,
-                                       sizeof(struct scq_node));
-                       }
-                       free(dequeued_node_list->local_tail);
-                       memstat_sub(MEMSTAT_SCQ_NODE,
-                               sizeof(struct scq_node));
+				free(prev_node);
+				memstat_sub(MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+			
+			free(dequeued_node_list->local_tail);
+			memstat_sub(MEMSTAT_SCQ_NODE,
+				sizeof(struct scq_node));
 		}
 
 		if (free_node_list->local_head != NULL) {
@@ -194,34 +194,34 @@ void scq_destroy(struct scalable_queue *scq)
 			while (node != free_node_list->local_tail) {
 				prev_node = node;
 				node = node->next;
-                               free(prev_node);
-                               memstat_sub(MEMSTAT_SCQ_NODE,
-                                       sizeof(struct scq_node));
-                       }
-                       free(free_node_list->local_tail);
-                       memstat_sub(MEMSTAT_SCQ_NODE,
-                               sizeof(struct scq_node));
+				free(prev_node);
+				memstat_sub(MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+			free(free_node_list->local_tail);
+			memstat_sub(MEMSTAT_SCQ_NODE,
+				sizeof(struct scq_node));
 		}
 
 		node = free_node_list->shared_sentinel.next;
 		while (node != NULL) {
 			prev_node = node;
 			node = node->next;
-                       free(prev_node);
-                       memstat_sub(MEMSTAT_SCQ_NODE,
-                               sizeof(struct scq_node));
-               }
+			free(prev_node);
+			memstat_sub(MEMSTAT_SCQ_NODE,
+				sizeof(struct scq_node));
+		}
 
 		node = tls_data_ptr->shared_sentinel.next;
 		while (node != NULL) {
 			prev_node = node;
 			node = node->next;
-                       free(prev_node);
-                       memstat_sub(MEMSTAT_SCQ_NODE,
-                               sizeof(struct scq_node));
-               }
+			free(prev_node);
+			memstat_sub(MEMSTAT_SCQ_NODE,
+				sizeof(struct scq_node));
+		}
 
-                free(tls_data_ptr);
+		free(tls_data_ptr);
 	}
 
 	pthread_spin_destroy(&scq->spinlock);
@@ -277,22 +277,24 @@ static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
 
 	if (free_node_list->local_head == NULL) {
 		if (free_node_list->shared_sentinel.next == NULL) {
-                        struct scq_node *tmp = malloc(sizeof(struct scq_node));
-                        if (tmp)
-                                memstat_add(MEMSTAT_SCQ_NODE,
-                                        sizeof(struct scq_node));
-                        return tmp;
+			struct scq_node *tmp = malloc(sizeof(struct scq_node));
+			if (tmp) {
+				memstat_add(MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+			return tmp;
 		}
 
 		free_node_list->local_head
 			= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
 
 		if (free_node_list->local_head == NULL) {
-                        struct scq_node *tmp = malloc(sizeof(struct scq_node));
-                        if (tmp)
-                                memstat_add(MEMSTAT_SCQ_NODE,
-                                        sizeof(struct scq_node));
-                        return tmp;
+			struct scq_node *tmp = malloc(sizeof(struct scq_node));
+			if (tmp) {
+				memstat_add(MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+			return tmp;
 		}
 
 		free_node_list->local_tail
