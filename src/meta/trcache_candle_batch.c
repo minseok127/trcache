@@ -115,13 +115,12 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 	total_sz = align_up(cur, a);
 
 	/* Single aligned block for struct + all arrays. */
-        base = simd_aligned_alloc(a, total_sz);
+	base = simd_aligned_alloc(a, total_sz);
         
-        if (base == NULL) {
-                errmsg(stderr, "Failure on simd_aligned_alloc()\n");
-                return NULL;
-        }
-        memstat_add(MEMSTAT_CANDLE_CHUNK_LIST, total_sz);
+	if (base == NULL) {
+		errmsg(stderr, "Failure on simd_aligned_alloc()\n");
+		return NULL;
+	}
 
 	/* Wire up internal pointers. */
 	b = (struct trcache_candle_batch *)base;
@@ -158,12 +157,8 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
  */
 void trcache_batch_free(struct trcache_candle_batch *b)
 {
-        if (b != NULL) {
-                /* size information not stored; approximate with capacity */
-                size_t sz = align_up(sizeof(struct trcache_candle_batch), TRCACHE_SIMD_ALIGN)
-                        + (size_t)b->capacity * (sizeof(uint64_t)*2 + sizeof(double)*5);
-                simd_aligned_free((void *)b); /* Struct address == block base */
-                memstat_sub(MEMSTAT_CANDLE_CHUNK_LIST, sz);
-        }
+	if (b != NULL) {
+		simd_aligned_free((void *)b); /* Struct address == block base */
+	}
 }
 
