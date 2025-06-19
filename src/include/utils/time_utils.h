@@ -6,6 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/**
+ * @brief   Convert a millisecond timestamp to a human readable string.
+ *
+ * @param   ts_ms:   Milliseconds since the Unix epoch.
+ * @param   buf:     Output buffer for the formatted timestamp.
+ * @param   buf_len: Size of @buf in bytes.
+ */
 static inline void format_timestamp_ms(uint64_t ts_ms, char *buf, size_t buf_len)
 {
 	time_t secs = (time_t)(ts_ms / 1000ULL);
