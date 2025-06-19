@@ -1,7 +1,10 @@
 #include "utils/memstat.h"
 #include "utils/log.h"
 
-struct memstat g_memstat;
+/**
+ * @file   memstat.c
+ * @brief  Memory statistics helpers.
+ */
 
 static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_TRADE_DATA_BUFFER] = "trade_data_buffer",
@@ -11,11 +14,11 @@ static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_SCHED_MSG] = "sched_msg",
 };
 
-void memstat_errmsg_status(void)
+void memstat_errmsg_status(struct memstat *ms)
 {
 	size_t total = 0;
 	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; ++i) {
-		size_t val = memstat_get((memstat_category)i);
+		size_t val = memstat_get(ms, (memstat_category)i);
 		total += val;
 		errmsg(stderr, "%s: %zu bytes\n", cat_name[i], val);
 	}
