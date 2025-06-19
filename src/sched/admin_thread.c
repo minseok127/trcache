@@ -12,6 +12,13 @@
 #include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
+#include <string.h>   /* memset */
+
+/* --------------------------------------------------------------------- */
+/*                    Worker candle-type bitmask per stage               */
+/* --------------------------------------------------------------------- */
+/* cache->stage_ct_mask[stage][worker] records which candle type indices are
+ * currently assigned to each worker for a stage. */
 
 /**
  * @brief   Initialise the admin thread state.
@@ -119,6 +126,7 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
  * @param   cache:  Global cache instance.
  * @param   out:    Array indexed by stage, filled with items per second.
  */
+#define BACKLOG_W 0.25
 static void compute_pipeline_demand(struct trcache *cache, double *out)
 {
 	struct symbol_table *table = cache->symbol_table;
@@ -141,12 +149,33 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 			out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
 			out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
 			out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
+			
+			const struct sched_stage_snapshot *snap =
+				&e->pipeline_stats.stage_snaps[idx];
+			double back_apply = (double)(snap->produced_seq -
+				snap->completed_seq);
+			double back_convert = (double)(snap->completed_seq -
+				snap->converted_seq);
+			
+			out[WORKER_STAT_STAGE_APPLY] += BACKLOG_W * back_apply;
+			out[WORKER_STAT_STAGE_CONVERT] += BACKLOG_W * back_convert;
 		}
 	}
 
 	atomsnap_release_version(ver);
 }
 
+/* --------------------------------------------------------------------- */
+/*                reset_stage_ct_masks - Clear worker bitmasks            */
+/* --------------------------------------------------------------------- */
+static void reset_stage_ct_masks(struct trcache *cache)
+{
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		memset(cache->stage_ct_mask[s], 0,
+		sizeof(uint32_t) * cache->num_workers);
+		}
+}
+	
 /**
  * @brief   Send a work message to a worker.
  *
@@ -178,28 +207,35 @@ static void post_work_msg(struct trcache *cache, int worker_id,
 }
 
 /**
- * @brief   Choose the worker with the lowest load value.
+ * @brief   Choose the worker with the lowest adjusted load.
  *
- * Iterates over @load and returns the index of the element with the minimal
- * value in the range [0, @limit).
+ * Each load entry is penalised when the worker is not currently handling
+ * @candle_idx according to @mask.
  *
- * @param   load:   Array of per-worker load counters.
- * @param   limit:  Number of valid entries in @load.
+ * @param   load:       Array of per-worker load counters.
+ * @param   limit:      Number of valid entries in @load.
+ * @param   mask:       Per-worker candle-type bitmask for the stage.
+ * @param   candle_idx: Candle type index being scheduled.
  *
  * @return  Index of the least-loaded worker.
  */
-static int choose_best_worker(double *load, int limit)
+static int choose_best_worker(double *load, int limit,
+	uint32_t *mask, int candle_idx)
 {
-	int best = 0;
-	double min_load = load[0];
-
+	const double PENALTY = 10.0;
+		int best = 0;
+	double best_score = load[0] +
+	((mask[0] & (1u << candle_idx)) ? 0.0 : PENALTY);
+	
 	for (int w = 1; w < limit; w++) {
-		if (load[w] < min_load) {
-			min_load = load[w];
+				double score = load[w] +
+				((mask[w] & (1u << candle_idx)) ? 0.0 : PENALTY);
+		if (score < best_score) {
+			best_score = score;
 			best = w;
-		}
 	}
-
+	}
+	
 	return best;
 }
 
@@ -241,14 +277,19 @@ static void update_stage_assignment(struct trcache *cache,
 	if (cur == worker) {
 		return;
 	}
-		
+				
 	if (cur >= 0) {
+		/* remove candle index from previous worker bitmask */
+		cache->stage_ct_mask[env->stage][cur] &= ~(1u << idx);
 		post_work_msg(cache, cur, type, env->stage,
 			entry->id, SCHED_MSG_REMOVE_WORK);
 	}
-		
+	
 	post_work_msg(cache, worker, type, env->stage,
 		entry->id, SCHED_MSG_ADD_WORK);
+	
+	/* assign candle index to new worker bitmask */
+	cache->stage_ct_mask[env->stage][worker] |= (1u << idx);
 }
 	
 /**
@@ -272,8 +313,8 @@ static void schedule_symbol_stage(struct trcache *cache,
 	if (env->limit <= 0) {
 		return;
 	}
-		
-	int best = choose_best_worker(env->load, env->limit) + env->start;
+	int best = choose_best_worker(env->load, env->limit,
+		cache->stage_ct_mask[env->stage], idx) + env->start;
 	env->load[best - env->start] += demand;
 	
 	update_stage_assignment(cache, entry, idx, type, env, best);
@@ -410,6 +451,8 @@ static void balance_workers(struct trcache *cache)
 	int limits[WORKER_STAT_STAGE_NUM];
 	int stage_start[WORKER_STAT_STAGE_NUM];
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
+	
+	reset_stage_ct_masks(cache);
 
 	compute_stage_limits(cache, limits);
 	compute_stage_starts(cache, limits, stage_start);
