@@ -59,7 +59,7 @@ struct memory_accounting {
  * @param	bytes:	Number of bytes to add.
  */
 static inline void memstat_add(struct memstat *ms,
-		memstat_category cat, size_t bytes)
+	memstat_category cat, size_t bytes)
 {
 	atomic_fetch_add_explicit(&ms->category[cat].value,
 			bytes, memory_order_relaxed);
@@ -73,7 +73,7 @@ static inline void memstat_add(struct memstat *ms,
  * @param	bytes:	Number of bytes to subtract.
  */
 static inline void memstat_sub(struct memstat *ms,
-		memstat_category cat, size_t bytes)
+	memstat_category cat, size_t bytes)
 {
 	atomic_fetch_sub_explicit(&ms->category[cat].value,
 			bytes, memory_order_relaxed);

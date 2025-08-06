@@ -74,7 +74,7 @@ struct scalable_queue {
 	int scq_id;
 	int thread_num;
 	struct trcache *owner_tc;
-	const struct memory_accounting *mem_acc;
+	struct memory_accounting *mem_acc;
 };
 
 typedef struct scalable_queue scalable_queue;
@@ -89,7 +89,7 @@ typedef struct scalable_queue scq;
  *
  * @return  New queue on success, NULL on failure.
  */
-struct scalable_queue *scq_init(const struct memory_accounting *mem_acc);
+struct scalable_queue *scq_init(struct memory_accounting *mem_acc);
 
 /**
  * @brief   Destroy a scalable_queue and free all associated memory.

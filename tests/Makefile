@@ -7,12 +7,13 @@ TARGETS = test_utils test_symbol_table \
           test_trade_data_buffer_no_freelist \
           test_trade_data_buffer_free_list \
           test_copy_backward_by_seq_error \
-         test_candle_chunk_list_multithread \
-         test_trcache_api_multithread \
-         test_trcache_api_multi_symbol \
-         test_trcache_api_single_worker \
+          test_candle_chunk_list_multithread \
+          test_trcache_api_multithread \
+          test_trcache_api_multi_symbol \
+          test_trcache_api_single_worker \
           test_trcache_api_multi_worker \
-          test_trcache_init_destroy
+          test_trcache_init_destroy \
+          test_memory_limit 
 
 OBJS_test_utils = test_utils.o
 SRC_test_utils = $(PROJECT_ROOT)/src/utils/vector.c \
@@ -74,6 +75,9 @@ SRC_test_trcache_api_multi_worker = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
 OBJS_test_trcache_init_destroy = test_trcache_init_destroy.o
 SRC_test_trcache_init_destroy = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
 
+OBJS_test_memory_limit = test_memory_limit.o
+SRC_test_memory_limit = $(wildcard $(PROJECT_ROOT)/src/*/*.c)
+
 .PHONY: all run clean
 
 all: $(TARGETS)
@@ -109,6 +113,9 @@ test_trcache_api_multi_worker: $(SRC_test_trcache_api_multi_worker) $(OBJS_test_
 test_trcache_init_destroy: $(SRC_test_trcache_init_destroy) $(OBJS_test_trcache_init_destroy)
 	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_trcache_init_destroy) $(OBJS_test_trcache_init_destroy) -o $@
 
+test_memory_limit: $(SRC_test_memory_limit) $(OBJS_test_memory_limit)
+	$(CC) $(CFLAGS) $(INCLUDES) -pthread $(SRC_test_memory_limit) $(OBJS_test_memory_limit) -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -123,16 +130,18 @@ run: all
 	./test_trcache_api_single_worker
 	./test_trcache_api_multi_worker
 	./test_trcache_init_destroy
+	./test_memory_limit
 	
 clean:
 	rm -f $(OBJS_test_utils) $(OBJS_test_symbol_table) \
-	$(OBJS_test_trade_data_buffer_no_freelist) \
-	$(OBJS_test_trade_data_buffer_free_list) \
-	$(OBJS_test_copy_backward_by_seq_error) \
-        $(OBJS_test_candle_chunk_list_multithread) \
-        $(OBJS_test_trcache_api_multithread) \
-       $(OBJS_test_trcache_api_multi_symbol) \
-        $(OBJS_test_trcache_api_single_worker) \
-        $(OBJS_test_trcache_api_multi_worker) \
-	$(OBJS_test_trcache_init_destroy) \
-               $(TARGETS)
+          $(OBJS_test_trade_data_buffer_no_freelist) \
+          $(OBJS_test_trade_data_buffer_free_list) \
+          $(OBJS_test_copy_backward_by_seq_error) \
+          $(OBJS_test_candle_chunk_list_multithread) \
+          $(OBJS_test_trcache_api_multithread) \
+          $(OBJS_test_trcache_api_multi_symbol) \
+          $(OBJS_test_trcache_api_single_worker) \
+          $(OBJS_test_trcache_api_multi_worker) \
+          $(OBJS_test_trcache_init_destroy) \
+          $(OBJS_test_memory_limit) \
+          $(TARGETS)

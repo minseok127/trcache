@@ -78,7 +78,7 @@ typedef enum {
 typedef uint32_t trcache_candle_type_flags;
 
 /*
- * Identifires for candle's fields. This is used in a bitmap to distinguish
+ * Identifiers for candle's fields. This is used in a bitmap to distinguish
  * fields, so the values should be a power of two.
  */
 typedef enum {

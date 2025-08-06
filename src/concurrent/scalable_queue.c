@@ -29,7 +29,7 @@ _Thread_local static struct scalable_queue *tls_scq_ptr_arr[MAX_SCQ_NUM];
  *
  * @return  New queue on success, NULL on failure.
  */
-struct scalable_queue *scq_init(const struct memory_accounting *mem_acc)
+struct scalable_queue *scq_init(struct memory_accounting *mem_acc)
 {
 	struct scalable_queue *scq = calloc(1, sizeof(struct scalable_queue));
 

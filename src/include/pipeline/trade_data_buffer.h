@@ -84,7 +84,7 @@ struct trade_data_buffer {
 	struct trade_data_buffer_cursor cursor_arr[TRCACHE_NUM_CANDLE_TYPE];
 	int num_cursor;
 	int next_tail_write_idx;
-	const struct memory_accounting *mem_acc;
+	struct memory_accounting *mem_acc;
 };
 
 /**

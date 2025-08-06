@@ -59,7 +59,7 @@ memalloc:
 void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
 	struct sched_work_msg *msg)
 {
-	const struct memory_accounting *acc;
+	struct memory_accounting *acc;
 
 	if (freelist == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");
