@@ -386,6 +386,21 @@ void trcache_batch_free(struct trcache_candle_batch *batch);
 void trcache_print_worker_distribution(struct trcache *cache);
 
 /**
+ * @brief   Print a breakdown of the internal memory usage of a trcache instance.
+ *
+ * This function reports the bytes consumed in each internal memory category
+ * (trade data buffers, candle chunk lists and indices, scalable queue nodes,
+ * scheduler messages, etc.) and the total consumption across all categories.
+ * It also prints the configured memory limit, if any, and the percentage of the
+ * limit currently in use:contentReference[oaicite:2]{index=2}. Output is
+ * written to stderr using the same logging facility as other trcache
+ * diagnostics. Passing a NULL pointer is permitted and results in no output.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_memory_breakdown(struct trcache *cache);
+
+/**
  * @brief   Align a pointer upward to the next @p a-byte boundary.
  *
  * @param   p: Raw pointer to be aligned.

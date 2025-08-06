@@ -147,10 +147,10 @@ static void *feed_thread_func(void *arg) {
 				break;
 			}
 		}
-		struct timespec ts;
-		ts.tv_sec = 0;
-		ts.tv_nsec = 1000000; // 밀리초 → 나노초
-		nanosleep(&ts, NULL);
+		//struct timespec ts;
+		//ts.tv_sec = 0;
+		//ts.tv_nsec = 1000000; // 밀리초 → 나노초
+		//nanosleep(&ts, NULL);
 	}
 	return NULL;
 }
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
 		.num_worker_threads = worker_threads,
 		.batch_candle_count_pow2 = 10,
 		.flush_threshold_pow2 = 1,
-		.candle_type_flags = TRCACHE_100TICK_CANDLE,
+		.candle_type_flags = TRCACHE_1MIN_CANDLE,
 		.flush_ops = {
 			.flush = test_flush,
 			.is_done = test_is_done,
@@ -315,6 +315,8 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "Elapsed %.1fs RSS=%zu bytes (%.2f%% of limit)\n",
 					elapsed, rss_bytes,
 					mem_limit > 0 ? (rss_bytes * 100.0) / mem_limit : 0.0);
+			trcache_print_memory_breakdown(cache);
+			trcache_print_worker_distribution(cache);
 			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 2)) {
 				fprintf(stderr, "Memory usage exceeded limit: %zu bytes > %zu bytes\n",
 						rss_bytes, mem_limit);

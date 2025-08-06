@@ -730,3 +730,39 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	printf("  FLUSH   : %d..%d\n",
 		start[WORKER_STAT_STAGE_FLUSH], end);
 }
+
+/**
+ * @brief   Print a breakdown of the internal memory usage of a trcache instance.
+ *
+ * This function reports the bytes consumed in each internal memory category
+ * (trade data buffers, candle chunk lists and indices, scalable queue nodes,
+ * scheduler messages, etc.) and the total consumption across all categories.
+ * It also prints the configured memory limit, if any, and the percentage of the
+ * limit currently in use:contentReference[oaicite:2]{index=2}. Output is
+ * written to stderr using the same logging facility as other trcache
+ * diagnostics. Passing a NULL pointer is permitted and results in no output.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_memory_breakdown(struct trcache *cache)
+{
+	if (cache == NULL) {
+		return;
+	}
+
+	struct memstat *ms = &cache->mem_acc.ms;
+	memstat_errmsg_status(ms);
+
+	size_t total = memstat_get_total(ms);
+	size_t limit = cache->mem_acc.limit;
+	if (limit > 0) {
+		double pct = (double)total * 100.0 / (double)limit;
+		errmsg(stderr,
+			"mem_limit=%zu bytes, used=%zu bytes (%.2f%% of limit)\n",
+			limit, total, pct);
+	} else {
+		errmsg(stderr,
+			"mem_limit=unlimited, used=%zu bytes\n",
+			total);
+	}
+}
