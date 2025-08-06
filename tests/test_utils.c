@@ -11,7 +11,7 @@ int main(void) {
 	assert(vec != NULL);
 
 	for (int i = 0; i < 3; i++) {
-	    assert(vector_push_back(vec, &i) == 0);
+		assert(vector_push_back(vec, &i) == 0);
 	}
 	assert(vector_size(vec) == 3);
 	int *v1 = vector_at(vec, 1);
