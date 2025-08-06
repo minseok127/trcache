@@ -171,10 +171,11 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->flush_threshold_pow2 = ctx->flush_threshold_pow2;
 	tc->flush_threshold = (1 << ctx->flush_threshold_pow2);
 	tc->flush_ops = ctx->flush_ops;
+	tc->mem_acc.limit = ctx->memory_limit;
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
-	tc->sched_msg_free_list = scq_init();
+	tc->sched_msg_free_list = scq_init(&tc->mem_acc);
 	if (tc->sched_msg_free_list == NULL) {
 		errmsg(stderr, "sched_msg_free_list allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
@@ -184,7 +185,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	if (admin_state_init(&tc->admin_state) != 0) {
+	if (admin_state_init(tc) != 0) {
 		errmsg(stderr, "admin_state_init failed\n");
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
@@ -205,7 +206,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	}
 
 	for (int i = 0; i < tc->num_workers; i++) {
-		if (worker_state_init(&tc->worker_state_arr[i], i) != 0) {
+		if (worker_state_init(tc, i) != 0) {
 			errmsg(stderr, "worker_state_init failed\n");
 			for (int j = 0; j < i; j++) {
 				worker_state_destroy(&tc->worker_state_arr[j]);

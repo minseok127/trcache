@@ -71,6 +71,7 @@ struct trade_data_buffer_cursor {
  * @cursor_arr:          Cursor array (only valid types are initialized).
  * @num_cursor:          Number of valid cursors.
  * @next_tail_write_idx: Next write_idx of the tail chunk.
+ * @mem_acc:             Memory accounting information for this buffer.
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -83,6 +84,7 @@ struct trade_data_buffer {
 	struct trade_data_buffer_cursor cursor_arr[TRCACHE_NUM_CANDLE_TYPE];
 	int num_cursor;
 	int next_tail_write_idx;
+	const struct memory_accounting *mem_acc;
 };
 
 /**

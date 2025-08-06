@@ -54,11 +54,12 @@ struct worker_state {
  * @brief   Initialise the worker thread state.
  *
  * @param   state:     Target state structure.
+ * @param   tc: Owner of the admin state.
  * @param   worker_id: Numeric identifier for the worker.
  *
  * @return  0 on success, -1 on failure.
  */
-int worker_state_init(struct worker_state *state, int worker_id);
+int worker_state_init(struct trcache *tc, int worker_id);
 
 /**
  * @brief   Destroy resources held by @state.

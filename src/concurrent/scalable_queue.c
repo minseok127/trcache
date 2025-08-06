@@ -9,27 +9,8 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "trcache.h"
-
 #include "concurrent/scalable_queue.h"
 #include "utils/log.h"
-
-#define MAX_SCQ_NUM (1024)
-#define MAX_THREAD_NUM (1024)
-
-/*
- * scq_node - Linked list node
- * @next:  Pointer to the next inserted node.
- * @datum: Scalar or pointer value.
- *
- * When scq_enqueue is called, an scq_node is allocated and inserted into the
- * linked list queue. When scq_dequeue is called, the nodes are detached from
- * the shared linked list and attached into the thread-local linked list.
- */
-struct scq_node {
-	struct scq_node *next;
-	void *datum;
-};
 
 /*
  * During initialization, the scalable_queue is assigned a unique ID.
@@ -38,66 +19,17 @@ struct scq_node {
 _Atomic int global_scq_id_flag;
 static int global_scq_id_arr[MAX_SCQ_NUM];
 
-/*
- * Dequeue thread detaches nodes from the shared linked list and brings them
- * into its thread-local linked list.
- */
-struct scq_dequeued_node_list {
-	struct scq_node *local_head;
-	struct scq_node *local_tail;
-	struct scq_node *local_initial_head;
-};
-
-/*
- * shared_sentinel and shared_tail are used for every dequeue thread.
- * They will push the free node into the shared linked list.
- *
- * local_head and local_tail are used for enqueue thread only. The thread will
- * detach the nodes from the shared linked list into the local list.
- */
-struct scq_free_node_list {
-	struct scq_node shared_sentinel;
-	struct scq_node *shared_tail;
-	struct scq_node *local_head;
-	struct scq_node *local_tail;
-};
-
-/*
- * New nodes are inserted into tail.
- * Thread idx is used to determine the start index of round-robin.
- */
-struct scq_tls_data {
-	struct scq_dequeued_node_list dequeued_node_list;
-	struct scq_free_node_list free_node_list;
-	struct scq_node *shared_tail;
-	struct scq_node shared_sentinel;
-	int last_dequeued_thread_idx;
-};
-
 _Thread_local static struct scq_tls_data *tls_data_ptr_arr[MAX_SCQ_NUM];
-
-/*
- * scalable_queue - Main data structure to manage queue
- * @tls_data_ptr_list: Each thread's scq_tls_data pointer.
- * @spinlock:          Spinlock to manage thread-local data structures.
- * @scq_id:            Global ID of the scalable_queue.
- * @thread_num:        Number of threads.
- */
-struct scalable_queue {
-	struct scq_tls_data *tls_data_ptr_list[MAX_THREAD_NUM];
-	pthread_spinlock_t spinlock;
-	int scq_id;
-	int thread_num;
-};
-
 _Thread_local static struct scalable_queue *tls_scq_ptr_arr[MAX_SCQ_NUM];
 
 /**
- * @brief   Create a new scalable_queue instance.
+ * @brief   Initialise a scalble_queue that will account memory limit.
  *
- * @return  Pointer to queue on success, NULL on failure.
+ * @param   mem_acc: Pointer to #memory_accounting data (may be NULL).
+ *
+ * @return  New queue on success, NULL on failure.
  */
-struct scalable_queue *scq_init(void)
+struct scalable_queue *scq_init(const struct memory_accounting *mem_acc)
 {
 	struct scalable_queue *scq = calloc(1, sizeof(struct scalable_queue));
 
@@ -105,6 +37,8 @@ struct scalable_queue *scq_init(void)
 		errmsg(stderr, "Queue allocation failed\n");
 		return NULL;
 	}
+
+	scq->mem_acc = mem_acc;
 
 	scq->thread_num = 0;
 
@@ -256,21 +190,34 @@ static void check_and_init_scq_tls_data(struct scalable_queue *scq)
 /**
  * If there is a free node available, return it; otherwise allocate one.
  */
-static struct scq_node *scq_allocate_node(struct scq_tls_data *tls_data)
+static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
+	struct scq_tls_data *tls_data)
 {
 	struct scq_node *node = NULL;
 	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
 
 	if (free_node_list->local_head == NULL) {
 		if (free_node_list->shared_sentinel.next == NULL) {
-			return (struct scq_node *)malloc(sizeof(struct scq_node));
+			node = (struct scq_node *)malloc(sizeof(struct scq_node));
+			if (node != NULL && scq->mem_acc != NULL) {
+				memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+
+			return node;
 		}
 
 		free_node_list->local_head
 			= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
 
 		if (free_node_list->local_head == NULL) {
-			return (struct scq_node *)malloc(sizeof(struct scq_node));
+			node = (struct scq_node *)malloc(sizeof(struct scq_node));
+			if (node != NULL && scq->mem_acc != NULL) {
+				memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+					sizeof(struct scq_node));
+			}
+
+			return node;
 		}
 
 		free_node_list->local_tail
@@ -309,7 +256,7 @@ void scq_enqueue(struct scalable_queue *scq, void *datum)
 	check_and_init_scq_tls_data(scq);
 	tls_data = tls_data_ptr_arr[scq->scq_id];
 
-	node = scq_allocate_node(tls_data);
+	node = scq_allocate_node(scq, tls_data);
 
 	node->datum = datum;
 	node->next = NULL;
@@ -330,7 +277,23 @@ static void scq_free_nodes(struct scalable_queue *scq,
 {
 	struct scq_tls_data *tls_data = scq->tls_data_ptr_list[enqueue_thread_idx];
 	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
-	struct scq_node *prev_tail = NULL;
+	struct scq_node *prev_tail = NULL, *node = NULL, *next = NULL;
+
+	if (scq->mem_acc != NULL && scq->mem_acc->limit > 0 &&
+		memstat_get_total(&scq->mem_acc->ms) > scq->mem_acc->limit) {
+		node = initial_head_node;
+		while (node != NULL) {
+			next = node->next;
+			free(node);
+			memstat_sub(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+				sizeof(struct scq_node));
+			if (node == tail_node) {
+				break;
+			}
+			node = next;
+		}
+		return;
+	}
 
 	tail_node->next = NULL;
 	__sync_synchronize();

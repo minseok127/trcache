@@ -56,10 +56,10 @@ struct trcache_tls_data {
  * @stage_ct_mask:           Candle-type ownership mask per stage/worker.
  * @admin_state:             State structure for admin thread.
  * @sched_msg_free_list:     Free list for scheduler message objects.
- * @memstat:                 Per-instance memory statistics.
- * @admin_thread:           Handle for admin thread.
- * @worker_threads:         Array of handles for worker threads.
- * @worker_args:            Per-worker argument array used at start.
+ * @admin_thread:            Handle for admin thread.
+ * @worker_threads:          Array of handles for worker threads.
+ * @worker_args:             Per-worker argument array used at start.
+ * @mem_acc:                 All modules use &mem_acc to update memory usage.
 */
 struct trcache {
 	pthread_key_t pthread_trcache_key;
@@ -79,10 +79,10 @@ struct trcache {
 	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS];
 	struct admin_state admin_state;
 	sched_work_msg_free_list *sched_msg_free_list;
-	struct memstat memstat;
 	pthread_t admin_thread;
 	pthread_t *worker_threads;
 	struct worker_thread_args *worker_args;
+	struct memory_accounting mem_acc;
 };
 
 /**

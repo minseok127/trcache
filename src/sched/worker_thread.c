@@ -286,24 +286,29 @@ static void worker_run_all_work(struct trcache *cache,
 }
 
 /**
-* @brief   Initialise the worker thread state.
-*
-* @param   state:     Target state structure.
-* @param   worker_id: Numeric identifier for the worker.
-*
-* @return  0 on success, -1 on failure.
-*/
-int worker_state_init(struct worker_state *state, int worker_id)
+ * @brief   Initialise the worker thread state.
+ *
+ * @param   state:     Target state structure.
+ * @param   tc: Owner of the admin state.
+ * @param   worker_id: Numeric identifier for the worker.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int worker_state_init(struct trcache *tc, int worker_id)
 {
-	if (!state) {
+	struct worker_state *state;
+
+	if (!tc) {
+		errmsg(stderr, "Invalid trcache pointer\n");
 		return -1;
 	}
 
+	state = &tc->worker_state_arr[worker_id];
 	state->worker_id = worker_id;
 
 	worker_stat_reset(&state->stat);
 	
-	state->sched_msg_queue = scq_init();
+	state->sched_msg_queue = scq_init(&tc->mem_acc);
 	if (state->sched_msg_queue == NULL) {
 		errmsg(stderr, "sched_msg_queue allocation failed\n");
 		return -1;

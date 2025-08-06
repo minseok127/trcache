@@ -44,6 +44,11 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 		return NULL;
 	}
 
+	buf->mem_acc = &tc->mem_acc;
+
+	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+		sizeof(struct trade_data_buffer));
+
 	chunk = malloc(sizeof(struct trade_data_chunk));
 
 	if (chunk == NULL) {
@@ -51,6 +56,9 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 		free(buf);
 		return NULL;
 	}
+
+	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+		sizeof(struct trade_data_chunk));
 
 	INIT_LIST_HEAD(&buf->chunk_list);
 
@@ -99,6 +107,8 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
 			free(chunk);
+			memstat_sub(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+				sizeof(struct trade_data_buffer));
 			c = n;
 		}
 	}
@@ -149,6 +159,9 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 				errmsg(stderr, "#trade_data_chunk allocation failed\n");
 				return -1;
 			}
+
+			memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+				sizeof(struct trade_data_chunk));
 
 			INIT_LIST_HEAD(&new_chunk->list_node);
 			list_add_tail(&new_chunk->list_node, &buf->chunk_list);
@@ -285,8 +298,8 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	struct list_head *free_list)
 {
-	struct trade_data_chunk *tail = NULL, *chunk = NULL;
-	struct list_head *first = NULL, *last = NULL;
+	struct trade_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
+	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
 
 	if (free_list == NULL || list_empty(&buf->chunk_list)) {
 		return;
@@ -309,6 +322,25 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	}
 
 	if (last != NULL) {
-		list_bulk_move_tail(free_list, first, last);
+		if (buf->mem_acc->limit == 0 || 
+			memstat_get_total(&buf->mem_acc->ms) <= buf->mem_acc->limit) {
+			list_bulk_move_tail(free_list, first, last);
+		} else {
+			node = first;
+			while (node != NULL) {
+				c = __get_trd_chunk_ptr(node);
+				next = (node == last) ? NULL : node->next;
+				memstat_sub(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+					sizeof(struct trade_data_chunk));
+				free(c);
+				if (node == last) {
+					break;
+				}
+				node = next;
+			}
+
+			buf->chunk_list.next = &chunk->list_node;
+			chunk->list_node.prev = &buf->chunk_list;
+		}
 	}
 }

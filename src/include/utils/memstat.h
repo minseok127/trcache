@@ -37,6 +37,20 @@ struct memstat {
 	struct memstat_entry category[MEMSTAT_CATEGORY_NUM];
 };
 
+/*
+ * memory_accounting - Encapsulates the pointers needed for memory accounting.
+ *
+ * @ms:    Per-category byte counters; zero-initialised on creation.
+ * @limit: Maximum number of bytes allowed (0 means unlimited).
+ *
+ * This structure is embedded in trcache and passed by pointer to
+ * modules that need to account memory.
+ */
+struct memory_accounting {
+	struct memstat ms;
+	size_t limit;
+};
+
 /**
  * @brief	Add bytes to the selected category.
  *
@@ -77,6 +91,24 @@ static inline size_t memstat_get(struct memstat *ms, memstat_category cat)
 {
 	return atomic_load_explicit(&ms->category[cat].value,
 			memory_order_relaxed);
+}
+
+/**
+ * @breif   Return the sum of all categories' memory usage.
+ *
+ * @param   ms: Pointer to a memstat structure.
+ *
+ * @return  Total bytes allocated across all categories.
+ */
+static inline size_t memstat_get_total(struct memstat *ms)
+{
+	size_t total = 0;
+
+	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
+		total += memstat_get(ms, (enum memstat_category)i);
+	}
+
+	return total;
 }
 
 /**

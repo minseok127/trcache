@@ -4,6 +4,7 @@
  */
 #define _GNU_SOURCE
 #include <sched.h>
+#include <string.h>   /* memset */
 
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
@@ -12,22 +13,25 @@
 #include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
-#include <string.h>   /* memset */
 
 /**
  * @brief   Initialise the admin thread state.
  *
- * @param   state:   Target state structure.
+ * @param   tc: Owner of the admin state.
  *
  * @return  0 on success, -1 on failure.
  */
-int admin_state_init(struct admin_state *state)
+int admin_state_init(struct trcache *tc)
 {
-	if (!state) {
+	struct admin_state *state;
+
+	if (!tc) {
+		errmsg(stderr, "Invalid trcache pointer\n");
 		return -1;
 	}
 
-	state->sched_msg_queue = scq_init();
+	state = &(tc->admin_state);
+	state->sched_msg_queue = scq_init(&tc->mem_acc);
 	if (state->sched_msg_queue == NULL) {
 		errmsg(stderr, "admin sched_msg_queue allocation failed\n");
 		return -1;

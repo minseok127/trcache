@@ -194,6 +194,7 @@ typedef struct trcache_flush_ops {
  * @flush_threshold_pow2:     How many batches to store before flush(log2(cap)).
  * @candle_type_flags:        OR-ed set of #trcache_candle_type values.
  * @flush_ops:                User-supplied callbacks used for flush.
+ * @memory_limit:             Maximum number of bytes this trcache may hold.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -205,6 +206,7 @@ typedef struct trcache_init_ctx {
 	int flush_threshold_pow2;
 	trcache_candle_type_flags candle_type_flags;
 	struct trcache_flush_ops flush_ops;
+	size_t memory_limit;
 } trcache_init_ctx;
 
 /**

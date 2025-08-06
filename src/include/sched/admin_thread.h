@@ -18,11 +18,11 @@ struct admin_state {
 /**
  * @brief   Initialise the admin thread state.
  *
- * @param   state:   Target state structure.
+ * @param   tc: Owner of the admin state.
  *
  * @return  0 on success, -1 on failure.
  */
-int admin_state_init(struct admin_state *state);
+int admin_state_init(struct trcache *tc);
 
 /**
  * @brief   Destroy resources held by @state.

@@ -42,6 +42,11 @@ memalloc:
 		return NULL;
 	}
 
+	if (freelist != NULL && freelist->mem_acc != NULL) {
+		memstat_add(&freelist->mem_acc->ms, MEMSTAT_SCHED_MSG,
+			sizeof(struct sched_work_msg));
+	}
+
 	return msg;
 }
 
@@ -54,8 +59,19 @@ memalloc:
 void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
 	struct sched_work_msg *msg)
 {
+	const struct memory_accounting *acc;
+
 	if (freelist == NULL || msg == NULL) {
 		errmsg(stderr, "Invalid arguments\n");
+		return;
+	}
+
+	acc = freelist->mem_acc;
+	if (acc != NULL && acc->limit > 0 && 
+		memstat_get_total(&acc->ms) > acc->limit) {
+		memstat_sub(&acc->ms, MEMSTAT_SCHED_MSG,
+			sizeof(struct sched_work_msg));
+		free(msg);
 		return;
 	}
 
