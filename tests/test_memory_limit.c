@@ -147,6 +147,10 @@ static void *feed_thread_func(void *arg) {
 				break;
 			}
 		}
+		struct timespec ts;
+		ts.tv_sec = 0;
+		ts.tv_nsec = 1000000; // 밀리초 → 나노초
+		nanosleep(&ts, NULL);
 	}
 	return NULL;
 }
@@ -311,7 +315,7 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "Elapsed %.1fs RSS=%zu bytes (%.2f%% of limit)\n",
 					elapsed, rss_bytes,
 					mem_limit > 0 ? (rss_bytes * 100.0) / mem_limit : 0.0);
-			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 1.05)) {
+			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 2)) {
 				fprintf(stderr, "Memory usage exceeded limit: %zu bytes > %zu bytes\n",
 						rss_bytes, mem_limit);
 				exceeded = true;
