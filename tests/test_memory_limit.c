@@ -187,9 +187,9 @@ int main(int argc, char **argv) {
 	// memory consumption.
 	struct trcache_init_ctx ctx = {
 		.num_worker_threads = worker_threads,
-		.batch_candle_count_pow2 = 2,
-		.flush_threshold_pow2 = 3,
-		.candle_type_flags = TRCACHE_1MIN_CANDLE,
+		.batch_candle_count_pow2 = 10,
+		.flush_threshold_pow2 = 1,
+		.candle_type_flags = TRCACHE_100TICK_CANDLE,
 		.flush_ops = {
 			.flush = test_flush,
 			.is_done = test_is_done,
