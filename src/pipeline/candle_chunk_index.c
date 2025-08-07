@@ -91,7 +91,8 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *arg)
 
 	memstat_add(&mem_acc->ms,
 		MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct candle_chunk_index_version) +
+		sizeof(struct atomsnap_version) +
+			sizeof(struct candle_chunk_index_version) +
 			newcap * sizeof(struct candle_chunk_index_entry));
 	snap_ver->free_context = (void *)mem_acc;
 
@@ -115,7 +116,8 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 
 	memstat_sub(&mem_acc->ms,
 		MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct candle_chunk_index_version) +
+		sizeof(struct atomsnap_version) +
+			sizeof(struct candle_chunk_index_version) +
 			((idx_ver->mask + 1) * sizeof(struct candle_chunk_index_entry)));
 
 	free(idx_ver->array);
