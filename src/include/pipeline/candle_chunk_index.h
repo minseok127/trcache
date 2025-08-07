@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 
 #include "pipeline/candle_chunk.h"
+#include "utils/memstat.h"
 
 /*
  * candle_chunk_index_entry - Metadata that maps a range of candles to a chunk.
@@ -41,6 +42,7 @@ struct candle_chunk_index_version {
  * @tail:                    Logical position one past the newest live entry.
  * @batch_candle_count:      Number of candles per chunk.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
+ * @mem_acc:                 Memory accounting information.
  *
  * The index is a *single-producer / single-consumer* ring with many concurrent
  * readers. A writer (producer) appends one #candle_chunk_index_entry per newly
@@ -84,6 +86,7 @@ struct candle_chunk_index {
 	_Atomic uint64_t tail;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
+	struct memory_accounting *mem_acc;
 };
 
 /**
@@ -91,11 +94,12 @@ struct candle_chunk_index {
  *
  * @param   init_cap_pow2:           Equals to log2(array_capacity).
  * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
+ * @param   mem_acc:                 Memory accounting information.
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
 struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
-	int batch_candle_count_pow2);
+	int batch_candle_count_pow2, struct memory_accounting *mem_acc);
 
 /**
  * @brief   Gracefully destroy the index and all internal arrays.
