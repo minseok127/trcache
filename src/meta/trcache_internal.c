@@ -709,7 +709,7 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	int start[WORKER_STAT_STAGE_NUM];
 	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
-	int end;
+	int end, idx;
 
 	if (!tc) {
 		return;
@@ -723,16 +723,17 @@ void trcache_print_worker_distribution(struct trcache *tc)
 			uint64_t cycles = 0, count = 0;
 			for (int w = 0; w < tc->num_workers; w++) {
 				struct worker_stat_board *b = &tc->worker_state_arr[w].stat;
-				for (int t = 0; t < tc->num_candle_types; t++) {
+				for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
+					idx = __builtin_ctz(m);
 					if (s == WORKER_STAT_STAGE_APPLY) {
-						cycles += b->apply_stat[t].cycles;
-						count  += b->apply_stat[t].work_count;
+						cycles += b->apply_stat[idx].cycles;
+						count  += b->apply_stat[idx].work_count;
 					} else if (s == WORKER_STAT_STAGE_CONVERT) {
-						cycles += b->convert_stat[t].cycles;
-						count  += b->convert_stat[t].work_count;
+						cycles += b->convert_stat[idx].cycles;
+						count  += b->convert_stat[idx].work_count;
 					} else {
-						cycles += b->flush_stat[t].cycles;
-						count  += b->flush_stat[t].work_count;
+						cycles += b->flush_stat[idx].cycles;
+						count  += b->flush_stat[idx].work_count;
 					}
 				}
 			}

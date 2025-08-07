@@ -88,6 +88,7 @@ void update_all_pipeline_stats(struct trcache *cache)
 static void compute_worker_speeds(struct trcache *cache, double *out)
 {
 	double hz = tsc_cycles_per_sec();
+	int idx;
 
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 		uint64_t cycles = 0;
@@ -95,17 +96,17 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 
 		for (int w = 0; w < cache->num_workers; w++) {
 			struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-
-			for (int t = 0; t < cache->num_candle_types; t++) {
+			for (uint32_t m = cache->candle_type_flags; m != 0; m &= m - 1) {
+				idx = __builtin_ctz(m);
 				if (s == WORKER_STAT_STAGE_APPLY) {
-					cycles += b->apply_stat[t].cycles;
-					count += b->apply_stat[t].work_count;
+					cycles += b->apply_stat[idx].cycles;
+					count += b->apply_stat[idx].work_count;
 				} else if (s == WORKER_STAT_STAGE_CONVERT) {
-					cycles += b->convert_stat[t].cycles;
-					count += b->convert_stat[t].work_count;
+					cycles += b->convert_stat[idx].cycles;
+					count += b->convert_stat[idx].work_count;
 				} else {
-					cycles += b->flush_stat[t].cycles;
-					count += b->flush_stat[t].work_count;
+					cycles += b->flush_stat[idx].cycles;
+					count += b->flush_stat[idx].work_count;
 				}
 			}
 		}
@@ -113,6 +114,7 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 		if (cycles != 0) {
 			out[s] = (double)count * hz / (double)cycles;
 		} else if (count > 0){
+			/* fallback when cycles==0 but work was done */
 			out[s] = (double)count;
 		} else {
 			out[s] = 0.0;
