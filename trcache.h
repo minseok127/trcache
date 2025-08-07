@@ -395,6 +395,13 @@ void trcache_print_worker_distribution(struct trcache *cache);
 void trcache_print_aux_memory_breakdown(struct trcache *cache);
 
 /**
+ * @brief   Print a breakdown of the total memory usage of a trcache.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_total_memory_breakdown(struct trcache *cache);
+
+/**
  * @brief   Align a pointer upward to the next @p a-byte boundary.
  *
  * @param   p: Raw pointer to be aligned.

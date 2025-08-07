@@ -315,8 +315,13 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "Elapsed %.1fs RSS=%zu bytes (%.2f%% of limit)\n",
 					elapsed, rss_bytes,
 					mem_limit > 0 ? (rss_bytes * 100.0) / mem_limit : 0.0);
+			fprintf(stderr, "=============================================\n");
+			trcache_print_total_memory_breakdown(cache);
+			fprintf(stderr, "=============================================\n");
 			trcache_print_aux_memory_breakdown(cache);
+			fprintf(stderr, "=============================================\n");
 			trcache_print_worker_distribution(cache);
+			fprintf(stderr, "=============================================\n");
 			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 2)) {
 				fprintf(stderr, "Memory usage exceeded limit: %zu bytes > %zu bytes\n",
 						rss_bytes, mem_limit);

@@ -758,3 +758,18 @@ void trcache_print_aux_memory_breakdown(struct trcache *cache)
 			total);
 	}
 }
+
+/**
+ * @brief   Print a breakdown of the total memory usage of a trcache.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_total_memory_breakdown(struct trcache *cache)
+{
+	if (cache == NULL) {
+		return;
+	}
+
+	struct memstat *ms = &cache->mem_acc.ms;
+	memstat_errmsg_status(ms, false);
+}
