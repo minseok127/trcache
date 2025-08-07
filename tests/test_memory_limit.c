@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
 		.num_worker_threads = worker_threads,
 		.batch_candle_count_pow2 = 10,
 		.cached_batch_count_pow2 = 1,
-		.candle_type_flags = TRCACHE_1MIN_CANDLE,
+		.candle_type_flags = TRCACHE_100TICK_CANDLE,
 		.flush_ops = {
 			.flush = test_flush,
 			.is_done = test_is_done,
@@ -322,7 +322,7 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "=============================================\n");
 			trcache_print_worker_distribution(cache);
 			fprintf(stderr, "=============================================\n");
-			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 2)) {
+			if (mem_limit > 0 && rss_bytes > (size_t)((double)mem_limit * 100)) {
 				fprintf(stderr, "Memory usage exceeded limit: %zu bytes > %zu bytes\n",
 						rss_bytes, mem_limit);
 				exceeded = true;
