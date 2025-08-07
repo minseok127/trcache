@@ -12,7 +12,8 @@
 #include "pipeline/candle_chunk_list.h"
 #include "utils/tsc_clock.h"
 
-#define RATE_EMA_SHIFT 7 /* alpha = 1 / 2^7 */
+#define RATE_EMA_SHIFT (7)    /* alpha = 1 / 2^7 */
+#define RATE_EMA_MULT  (127)
 
 /**
  * @brief   Update 64-bit exponential moving average.
@@ -21,10 +22,12 @@
  * @param   val:   New sample value.
  *
  * @return  Updated EMA value.
+ *
+ * EMA(t) = val(t) * (1/128) + (1 - 1/128) * EMA(t-1)
  */
 static uint64_t ema_update_u64(uint64_t ema, uint64_t val)
 {
-	return ema + ((val - ema) >> RATE_EMA_SHIFT);
+	return (val + RATE_EMA_MULT * ema) >> RATE_EMA_SHIFT;
 }
 
 /**
