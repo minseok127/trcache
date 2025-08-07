@@ -1,6 +1,6 @@
 # Trcache
 
-Trcache is a high‑performance C library for ingesting real-time trade data and converting it into **column‑oriented OHLCV candle arrays** optimised for analysis.  The library targets multicore machines and relies on lock‑free data structures together with dedicated worker threads to scale with available CPU cores.
+Trcache is a C library for ingesting real-time trade data and converting it into **column‑oriented OHLCV candle arrays** optimised for analysis.  The library targets multicore machines and relies on lock‑free data structures together with dedicated worker threads to scale with available CPU cores.
 
 ## Features
 
