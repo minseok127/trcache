@@ -311,6 +311,10 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 
 	chunk = __get_trd_chunk_ptr(first);
 
+	/*
+	 * Note that we should remain at least one node in the list.
+	 * See the comment in the trade_data_buffer_push().
+	 */
 	while (chunk != tail) {
 		if (atomic_load_explicit(&chunk->num_consumed_cursor,
 				memory_order_acquire) != buf->num_cursor) {
