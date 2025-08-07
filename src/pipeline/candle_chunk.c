@@ -20,16 +20,18 @@
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
  *
+ * @param   mem_acc_arg: Memory accounting information.
+ *
  * The returned version already contains a zero‑initialized, 64‑byte‑aligned
  * row page in its @object field.
  *
  * @return  Pointer to version, or NULL on failure.
  */
-static struct atomsnap_version *row_page_version_alloc(
-	void *unused __attribute__((unused)))
+static struct atomsnap_version *row_page_version_alloc(void *mem_acc_arg)
 {
 	struct atomsnap_version *version  = NULL;
 	struct candle_row_page *row_page = NULL;
+	struct memory_accounting *mem_acc = (struct memory_accounting *)mem_acc_arg;
 
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
 	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN,
@@ -53,7 +55,12 @@ static struct atomsnap_version *row_page_version_alloc(
 		return NULL;
 	}
 
+	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
+		 sizeof(struct atomsnap_version) + sizeof(struct candle_row_page));
+
 	version->object = row_page;
+	version->free_context = mem_acc_arg;
+
 	return version;
 }
 
@@ -66,9 +73,15 @@ static struct atomsnap_version *row_page_version_alloc(
  */
 static void row_page_version_free(struct atomsnap_version *version)
 {
+	struct memory_accounting *mem_acc;
+
 	if (version == NULL) {
 		return;
 	}
+
+	mem_acc = (struct memory_accounting *)version->free_context;
+	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
+		sizeof(struct candle_row_page) + sizeof(struct atomsnap_version));
 
 	free(version->object); /* #candle_row_page */
 	free(version);
@@ -80,12 +93,14 @@ static void row_page_version_free(struct atomsnap_version *version)
  * @param   candle_type:        Candle type of the column-batch.
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
- * @param   batch_candle_count: Number of candles per chunk.   
+ * @param   batch_candle_count: Number of candles per chunk.
+ * @param   mem_acc:            Memory accounting information.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
-	int symbol_id, int row_page_count, int batch_candle_count)
+	int symbol_id, int row_page_count, int batch_candle_count,
+	struct memory_accounting *mem_acc)
 {
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context ctx = {
@@ -124,6 +139,12 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 		return NULL;
 	}
 
+	memstat_add(&mem_acc->ms,
+		MEMSTAT_CANDLE_CHUNK_LIST,
+		sizeof(struct candle_chunk) +
+			((sizeof(double) * TRCACHE_NUM_CANDLE_FIELD * batch_candle_count)));
+	chunk->mem_acc = mem_acc;
+
 	chunk->column_batch->symbol_id = symbol_id;
 	chunk->column_batch->candle_type = candle_type;
 
@@ -155,9 +176,16 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 		return;
 	}
 
+	memstat_sub(&chunk->mem_acc->ms,
+		MEMSTAT_CANDLE_CHUNK_LIST,
+		sizeof(struct candle_chunk) +
+			((sizeof(double) * TRCACHE_NUM_CANDLE_FIELD *
+				chunk->column_batch->capacity)));
+
 	pthread_spin_destroy(&chunk->spinlock);
 	atomsnap_destroy_gate(chunk->row_gate);
 	trcache_batch_free(chunk->column_batch);
+
 	free(chunk);
 }
 
@@ -176,7 +204,7 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version
-		= atomsnap_make_version(chunk->row_gate, NULL);
+		= atomsnap_make_version(chunk->row_gate, (void *)chunk->mem_acc);
 
 	if (row_page_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");

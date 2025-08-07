@@ -269,7 +269,8 @@ static int init_first_candle(struct candle_chunk_list *list,
 	const struct candle_update_ops *ops, struct trcache_trade_data *trade)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
-		list->symbol_id, list->row_page_count, list->trc->batch_candle_count);
+		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
+		&list->trc->mem_acc);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
 
@@ -359,7 +360,8 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
-		list->symbol_id, list->row_page_count, list->trc->batch_candle_count);
+		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
+		&list->trc->mem_acc);
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");

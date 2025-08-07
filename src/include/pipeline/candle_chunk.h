@@ -8,6 +8,7 @@
 
 #include "concurrent/atomsnap.h"
 #include "pipeline/candle_update_ops.h"
+#include "utils/memstat.h"
 
 #include "trcache.h"
 
@@ -49,6 +50,7 @@ struct candle_row_page {
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
  * @column_batch:         Structure of Arrays (SoA) buffer
  * @seq_first:            First sequence number of the chunk.
+ * @mem_acc:              Memory accounting information.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -69,6 +71,7 @@ struct candle_chunk {
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
+	struct memory_accounting *mem_acc;
 };
 
 /**
@@ -209,11 +212,13 @@ static inline void candle_chunk_write_start_timestamp(
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
+ * @param   mem_acc:            Memory accounting information.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
-	int symbol_id, int row_page_count, int batch_candle_count);
+	int symbol_id, int row_page_count, int batch_candle_count,
+	struct memory_accounting *mem_acc);
 
 /**
  * @brief   Release all resources of a candle chunk.
