@@ -13,6 +13,7 @@
 #include "meta/trcache_internal.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
+#include "utils/tsc_clock.h"
 #include "sched/sched_work_msg.h"
 #include "sched/admin_thread.h"
 
@@ -225,7 +226,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->worker_args = calloc(tc->num_workers,
 		sizeof(struct worker_thread_args));
 	if (tc->worker_threads == NULL || tc->worker_args == NULL) {
-	    errmsg(stderr, "worker thread resources allocation failed\n");
+		errmsg(stderr, "worker thread resources allocation failed\n");
 		free(tc->worker_threads);
 		free(tc->worker_args);
 		for (int i = 0; i < tc->num_workers; i++) {
@@ -300,7 +301,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 void trcache_destroy(struct trcache *tc)
 {
 	if (tc == NULL) {
-	        return;
+		return;
 	}
 
 	/* stop all threads */
@@ -373,11 +374,11 @@ static int resolve_symbol_id(struct trcache *tc, struct trcache_tls_data *tls,
 	if (!found) {
 		symbol_id = symbol_table_lookup_symbol_id(
 			tc->symbol_table, symbol_str);
-	       
+		   
 		if (symbol_id == -1) {
 			return -1;
 		}
-	       
+		   
 		if (ht_insert(tls->local_symbol_id_map, symbol_str,
 				strlen(symbol_str) + 1,
 				(void *)(uintptr_t)symbol_id) < 0) {
@@ -529,7 +530,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 	}
 
 	return trade_data_buffer_push(trd_databuf, data,
-	        &tls_data_ptr->local_free_list);
+		&tls_data_ptr->local_free_list);
 }
 
 /**
@@ -624,7 +625,7 @@ int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
 
 /**
  * @brief   Copy @p count candles ending at the candle located @p offset from
- *  the most recent candle.
+ *          the most recent candle.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
@@ -660,7 +661,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 
 /**
  * @brief   Copy @p count candles ending at the candle located @p offset from
- *  the most recent candle for a symbol string.
+ *          the most recent candle for a symbol string.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
@@ -706,29 +707,97 @@ void trcache_print_worker_distribution(struct trcache *tc)
 {
 	int limits[WORKER_STAT_STAGE_NUM];
 	int start[WORKER_STAT_STAGE_NUM];
+	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
+	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	int end;
 
-	if (tc == NULL) {
+	if (!tc) {
 		return;
 	}
-	
+
 	update_all_pipeline_stats(tc);
+
+	{
+		double hz = tsc_cycles_per_sec();
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			uint64_t cycles = 0, count = 0;
+			for (int w = 0; w < tc->num_workers; w++) {
+				struct worker_stat_board *b = &tc->worker_state_arr[w].stat;
+				for (int t = 0; t < tc->num_candle_types; t++) {
+					if (s == WORKER_STAT_STAGE_APPLY) {
+						cycles += b->apply_stat[t].cycles;
+						count  += b->apply_stat[t].work_count;
+					} else if (s == WORKER_STAT_STAGE_CONVERT) {
+						cycles += b->convert_stat[t].cycles;
+						count  += b->convert_stat[t].work_count;
+					} else {
+						cycles += b->flush_stat[t].cycles;
+						count  += b->flush_stat[t].work_count;
+					}
+				}
+			}
+			speed[s] = (cycles != 0) ? ((double)count * hz / (double)cycles) : 0.0;
+		}
+	}
+
+	{
+		struct symbol_table *table = tc->symbol_table;
+		struct atomsnap_version *ver
+			= atomsnap_acquire_version(table->symbol_ptr_array_gate);
+		struct symbol_entry **arr = (struct symbol_entry **)ver->object;
+		int num = table->num_symbols;
+
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			demand[s] = 0.0;
+		}
+
+		for (int i = 0; i < num; i++) {
+			struct symbol_entry *e = arr[i];
+			for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
+				int idx = __builtin_ctz(m);
+				struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[idx];
+				demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
+				demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
+				demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
+			}
+		}
+		atomsnap_release_version(ver);
+	}
+
 	compute_stage_limits(tc, limits);
 	compute_stage_starts(tc, limits, start);
 
+	printf("Worker distribution and scheduler statistics:\n");
+	printf("  Stage speeds (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
+		   speed[WORKER_STAT_STAGE_APPLY],
+		   speed[WORKER_STAT_STAGE_CONVERT],
+		   speed[WORKER_STAT_STAGE_FLUSH]);
+	printf("  Pipeline demand (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
+		   demand[WORKER_STAT_STAGE_APPLY],
+		   demand[WORKER_STAT_STAGE_CONVERT],
+		   demand[WORKER_STAT_STAGE_FLUSH]);
+	printf("  Stage limits: APPLY=%d, CONVERT=%d, FLUSH=%d\n",
+		   limits[WORKER_STAT_STAGE_APPLY],
+		   limits[WORKER_STAT_STAGE_CONVERT],
+		   limits[WORKER_STAT_STAGE_FLUSH]);
+	printf("  Stage starts: APPLY=%d, CONVERT=%d, FLUSH=%d\n",
+		   start[WORKER_STAT_STAGE_APPLY],
+		   start[WORKER_STAT_STAGE_CONVERT],
+		   start[WORKER_STAT_STAGE_FLUSH]);
+
 	printf("Worker distribution:\n");
 	end = start[WORKER_STAT_STAGE_APPLY] +
-		limits[WORKER_STAT_STAGE_APPLY] - 1;
+		  limits[WORKER_STAT_STAGE_APPLY] - 1;
 	printf("  APPLY   : %d..%d\n",
-		start[WORKER_STAT_STAGE_APPLY], end);
+		   start[WORKER_STAT_STAGE_APPLY], end);
 	end = start[WORKER_STAT_STAGE_CONVERT] +
-		limits[WORKER_STAT_STAGE_CONVERT] - 1;
+		  limits[WORKER_STAT_STAGE_CONVERT] - 1;
 	printf("  CONVERT : %d..%d\n",
-		start[WORKER_STAT_STAGE_CONVERT], end);
+		   start[WORKER_STAT_STAGE_CONVERT], end);
 	end = start[WORKER_STAT_STAGE_FLUSH] +
-		limits[WORKER_STAT_STAGE_FLUSH] - 1;
+		  limits[WORKER_STAT_STAGE_FLUSH] - 1;
 	printf("  FLUSH   : %d..%d\n",
-		start[WORKER_STAT_STAGE_FLUSH], end);
+		   start[WORKER_STAT_STAGE_FLUSH], end);
 }
 
 /**

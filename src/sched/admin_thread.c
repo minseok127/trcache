@@ -364,8 +364,8 @@ static void schedule_symbol_work(struct trcache *cache,
  */
 void compute_stage_limits(struct trcache *cache, int *limits)
 {
-	double speed[WORKER_STAT_STAGE_NUM];
-	double demand[WORKER_STAT_STAGE_NUM];
+	double speed[WORKER_STAT_STAGE_NUM] = { 0, };
+	double demand[WORKER_STAT_STAGE_NUM] = { 0, };
 	int need = 1;
 
 	compute_worker_speeds(cache, speed);
@@ -436,9 +436,9 @@ static void balance_workers(struct trcache *cache)
 	struct atomsnap_version *ver = NULL;
 	struct symbol_entry **arr = NULL;
 	int num = 0;
-	int limits[WORKER_STAT_STAGE_NUM];
-	int stage_start[WORKER_STAT_STAGE_NUM];
-	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0 } };
+	int limits[WORKER_STAT_STAGE_NUM] = { 0, };
+	int stage_start[WORKER_STAT_STAGE_NUM] = { 0, };
+	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0, } };
 	
 	reset_stage_ct_masks(cache);
 

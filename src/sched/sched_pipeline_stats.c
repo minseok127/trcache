@@ -50,8 +50,14 @@ static void snapshot_stage(struct symbol_entry *entry, int idx,
 	last_seq_conv = atomic_load_explicit(&list->last_seq_converted,
 		memory_order_acquire);
 
-	stage->completed_seq = (mutable_seq == UINT64_MAX) ?
-		UINT64_MAX : mutable_seq - 1;
+	if (mutable_seq == UINT64_MAX) {
+		stage->completed_seq = UINT64_MAX;
+	} else if (mutable_seq == 0) {
+		stage->completed_seq = 0;
+	} else {
+		stage->completed_seq = mutable_seq - 1;
+	}
+
 	stage->converted_seq = last_seq_conv;
 }
 
