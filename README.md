@@ -126,7 +126,7 @@ void async_destroy(void *handle, void *ctx)
 }
 ```
 
-Supply these callbacks to `trcache_init()`.  When using the asynchronous variant, also set `ops.is_done` and `ops.destroy_handle`. See `examples/flush_templates/` for flush templates using SQLite, PostgreSQL, MySQL, DuckDB, Parquet and Arrow. Each directory shows how to link against the required client libraries.
+Supply these callbacks to `trcache_init()`.  When using the asynchronous variant, also set `ops.is_done` and `ops.destroy_handle`.
 
 ### 4. Initialise the engine
 
@@ -135,7 +135,7 @@ struct trcache_flush_ops ops = { .flush = sync_flush };
 struct trcache_init_ctx ctx = {
     .num_worker_threads = 4,
     .batch_candle_count_pow2 = 10,  /* 1024 candles per batch */
-    .flush_threshold_pow2 = 3,      /* flush after 8 batches */
+    .cached_batch_count_pow2 = 3,   /* flush after 8 batches */
     .candle_type_flags = TRCACHE_1MIN_CANDLE | TRCACHE_5MIN_CANDLE,
     .flush_ops = ops,
 };
@@ -192,3 +192,5 @@ A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_
 Concurrency is handled by an **admin thread** and one or more **worker threads**.  Workers execute pipeline stages while the admin thread schedules work items and balances load based on real‑time throughput statistics.  The scheduler communicates via lock‑free queues ([`scalable_queue`](https://github.com/minseok127/scalable-queue)).
 
 Another lock-free mechanism used in the system is [`atomsnap`](https://github.com/minseok127/atomsnap), which provides grace-period management. For example, it enables operations such as symbol registration in the symbol table, memory reclamation of row-oriented candle pages that have been fully converted to column-oriented batches, and freeing candle chunks that no longer need to reside in memory after flush—all without blocking readers.
+
+## Evaluation
