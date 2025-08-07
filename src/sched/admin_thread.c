@@ -501,7 +501,7 @@ void *admin_thread_main(void *arg)
 	while (!cache->admin_state.done) {
 		update_all_pipeline_stats(cache);
 		balance_workers(cache);
-		sched_yield();
+		sleep(1);
 	}
 
 	return NULL;

@@ -147,10 +147,10 @@ static void *feed_thread_func(void *arg) {
 				break;
 			}
 		}
-		//struct timespec ts;
-		//ts.tv_sec = 0;
-		//ts.tv_nsec = 1000000; // 밀리초 → 나노초
-		//nanosleep(&ts, NULL);
+		struct timespec ts;
+		ts.tv_sec = 0;
+		ts.tv_nsec = 10000;
+		nanosleep(&ts, NULL);
 	}
 	return NULL;
 }
