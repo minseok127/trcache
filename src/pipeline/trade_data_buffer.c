@@ -322,8 +322,8 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	}
 
 	if (last != NULL) {
-		if (buf->mem_acc->limit == 0 || 
-			memstat_get_total(&buf->mem_acc->ms) <= buf->mem_acc->limit) {
+		if (buf->mem_acc->aux_limit == 0 || 
+			memstat_get_aux_total(&buf->mem_acc->ms) <= buf->mem_acc->aux_limit) {
 			list_bulk_move_tail(free_list, first, last);
 		} else {
 			node = first;

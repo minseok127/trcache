@@ -67,8 +67,8 @@ void sched_work_msg_recycle(sched_work_msg_free_list *freelist,
 	}
 
 	acc = freelist->mem_acc;
-	if (acc != NULL && acc->limit > 0 && 
-		memstat_get_total(&acc->ms) > acc->limit) {
+	if (acc != NULL && acc->aux_limit > 0&& 
+		memstat_get_aux_total(&acc->ms) > acc->aux_limit) {
 		memstat_sub(&acc->ms, MEMSTAT_SCHED_MSG,
 			sizeof(struct sched_work_msg));
 		free(msg);

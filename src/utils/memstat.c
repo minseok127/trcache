@@ -14,11 +14,18 @@ static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_SCHED_MSG] = "sched_msg",
 };
 
-void memstat_errmsg_status(struct memstat *ms)
+void memstat_errmsg_status(struct memstat *ms, bool only_aux)
 {
 	size_t total = 0;
 	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; ++i) {
 		size_t val = memstat_get(ms, (memstat_category)i);
+
+		if (only_aux &&
+			(i == MEMSTAT_CANDLE_CHUNK_LIST
+				|| i == MEMSTAT_CANDLE_CHUNK_INDEX)) {
+			continue;
+		}
+
 		total += val;
 		errmsg(stderr, "%s: %zu bytes\n", cat_name[i], val);
 	}

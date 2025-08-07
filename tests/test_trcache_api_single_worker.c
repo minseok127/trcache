@@ -204,7 +204,7 @@ int main(int argc, char **argv)
 	struct trcache_init_ctx init_ctx = {
 		.num_worker_threads = 1,
 		.batch_candle_count_pow2 = 10,
-		.flush_threshold_pow2 = 1,
+		.cached_batch_count_pow2 = 1,
 		.candle_type_flags = TRCACHE_100TICK_CANDLE | TRCACHE_1SEC_CANDLE,
 		.flush_ops = {
 			.flush = dummy_flush,

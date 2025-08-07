@@ -3,6 +3,7 @@
 
 #include <stdatomic.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifndef TRCACHE_CACHELINE_SIZE
 #define TRCACHE_CACHELINE_SIZE 64
@@ -40,15 +41,16 @@ struct memstat {
 /*
  * memory_accounting - Encapsulates the pointers needed for memory accounting.
  *
- * @ms:    Per-category byte counters; zero-initialised on creation.
- * @limit: Maximum number of bytes allowed (0 means unlimited).
+ * @ms:        Per-category byte counters; zero-initialised on creation.
+ * @aux_limit: Maximum number of bytes allowed for auxiliary memory.
+ *
  *
  * This structure is embedded in trcache and passed by pointer to
  * modules that need to account memory.
  */
 struct memory_accounting {
 	struct memstat ms;
-	size_t limit;
+	size_t aux_limit;
 };
 
 /**
@@ -112,10 +114,36 @@ static inline size_t memstat_get_total(struct memstat *ms)
 }
 
 /**
+ * @brief   Return the sum of all auxiliary memory usage.
+ *
+ * Sums all memstat categories except MEMSTAT_CANDLE_CHUNK_LIST and
+ * MEMSTAT_CANDLE_CHUNK_INDEX.
+ *
+ * @param   ms: Pointer to a memstat structure.
+ *
+ * @return  Total bytes allocated across auxiliary categories.
+ */
+static inline size_t memstat_get_aux_total(struct memstat *ms)
+{
+	size_t total = 0;
+
+	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
+		if (i == MEMSTAT_CANDLE_CHUNK_LIST ||
+			i == MEMSTAT_CANDLE_CHUNK_INDEX) {
+			continue;
+		}
+		total += memstat_get(ms, (memstat_category)i);
+	}
+
+	return total;
+}
+
+/**
  * @brief	Print current memory statistics to stderr.
  *
- * @param	ms:	Pointer to memstat structure.
+ * @param	ms:	      Pointer to memstat structure.
+ * @param   only_aux: Whether skip candle chunk list / index or not.
  */
-void memstat_errmsg_status(struct memstat *ms);
+void memstat_errmsg_status(struct memstat *ms, bool only_aux);
 
 #endif /* MEMSTAT_H */

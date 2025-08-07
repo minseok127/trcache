@@ -279,8 +279,8 @@ static void scq_free_nodes(struct scalable_queue *scq,
 	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
 	struct scq_node *prev_tail = NULL, *node = NULL, *next = NULL;
 
-	if (scq->mem_acc != NULL && scq->mem_acc->limit > 0 &&
-		memstat_get_total(&scq->mem_acc->ms) > scq->mem_acc->limit) {
+	if (scq->mem_acc != NULL && scq->mem_acc->aux_limit > 0 &&
+		memstat_get_aux_total(&scq->mem_acc->ms) > scq->mem_acc->aux_limit) {
 		node = initial_head_node;
 		while (node != NULL) {
 			next = node->next;

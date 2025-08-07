@@ -191,10 +191,12 @@ typedef struct trcache_flush_ops {
  *
  * @num_worker_threads:       Number of worker threads.
  * @batch_candle_count_pow2:  Number of candles per column batch(log2(cap)).
- * @flush_threshold_pow2:     How many batches to store before flush(log2(cap)).
+ * @cached_batch_count_pow2:  Number of batches to cache (log2(cap)).
  * @candle_type_flags:        OR-ed set of #trcache_candle_type values.
  * @flush_ops:                User-supplied callbacks used for flush.
- * @memory_limit:             Maximum number of bytes this trcache may hold.
+ * @aux_memory_limit:         Maximum number of bytes this trcache may use
+ *                            for auxiliary data structures (i.e. everything
+ *                            other than candle chunk list/index).
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -203,10 +205,10 @@ typedef struct trcache_flush_ops {
 typedef struct trcache_init_ctx {
 	int num_worker_threads;
 	int batch_candle_count_pow2;
-	int flush_threshold_pow2;
+	int cached_batch_count_pow2;
 	trcache_candle_type_flags candle_type_flags;
 	struct trcache_flush_ops flush_ops;
-	size_t memory_limit;
+	size_t aux_memory_limit;
 } trcache_init_ctx;
 
 /**
@@ -386,19 +388,11 @@ void trcache_batch_free(struct trcache_candle_batch *batch);
 void trcache_print_worker_distribution(struct trcache *cache);
 
 /**
- * @brief   Print a breakdown of the internal memory usage of a trcache instance.
- *
- * This function reports the bytes consumed in each internal memory category
- * (trade data buffers, candle chunk lists and indices, scalable queue nodes,
- * scheduler messages, etc.) and the total consumption across all categories.
- * It also prints the configured memory limit, if any, and the percentage of the
- * limit currently in use:contentReference[oaicite:2]{index=2}. Output is
- * written to stderr using the same logging facility as other trcache
- * diagnostics. Passing a NULL pointer is permitted and results in no output.
+ * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
  *
  * @param   cache: Pointer to a trcache instance as returned from trcache_init().
  */
-void trcache_print_memory_breakdown(struct trcache *cache);
+void trcache_print_aux_memory_breakdown(struct trcache *cache);
 
 /**
  * @brief   Align a pointer upward to the next @p a-byte boundary.

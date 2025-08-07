@@ -14,7 +14,7 @@ int main(void) {
 	struct trcache_init_ctx ctx = {
 	    .num_worker_threads = 2,
 	    .batch_candle_count_pow2 = 2,
-	    .flush_threshold_pow2 = 1,
+	    .cached_batch_count_pow2 = 1,
 	    .candle_type_flags = TRCACHE_1MIN_CANDLE,
 	    .flush_ops = {
 		.flush = dummy_flush,

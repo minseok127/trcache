@@ -168,10 +168,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->candle_type_flags = ctx->candle_type_flags;
 	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
 	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
-	tc->flush_threshold_pow2 = ctx->flush_threshold_pow2;
-	tc->flush_threshold = (1 << ctx->flush_threshold_pow2);
+	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
+	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->flush_ops = ctx->flush_ops;
-	tc->mem_acc.limit = ctx->memory_limit;
+	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
@@ -732,29 +732,21 @@ void trcache_print_worker_distribution(struct trcache *tc)
 }
 
 /**
- * @brief   Print a breakdown of the internal memory usage of a trcache instance.
- *
- * This function reports the bytes consumed in each internal memory category
- * (trade data buffers, candle chunk lists and indices, scalable queue nodes,
- * scheduler messages, etc.) and the total consumption across all categories.
- * It also prints the configured memory limit, if any, and the percentage of the
- * limit currently in use:contentReference[oaicite:2]{index=2}. Output is
- * written to stderr using the same logging facility as other trcache
- * diagnostics. Passing a NULL pointer is permitted and results in no output.
+ * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
  *
  * @param   cache: Pointer to a trcache instance as returned from trcache_init().
  */
-void trcache_print_memory_breakdown(struct trcache *cache)
+void trcache_print_aux_memory_breakdown(struct trcache *cache)
 {
 	if (cache == NULL) {
 		return;
 	}
 
 	struct memstat *ms = &cache->mem_acc.ms;
-	memstat_errmsg_status(ms);
+	memstat_errmsg_status(ms, true);
 
-	size_t total = memstat_get_total(ms);
-	size_t limit = cache->mem_acc.limit;
+	size_t total = memstat_get_aux_total(ms);
+	size_t limit = cache->mem_acc.aux_limit;
 	if (limit > 0) {
 		double pct = (double)total * 100.0 / (double)limit;
 		errmsg(stderr,
