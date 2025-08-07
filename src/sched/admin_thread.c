@@ -112,6 +112,8 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 		
 		if (cycles != 0) {
 			out[s] = (double)count * hz / (double)cycles;
+		} else if (count > 0){
+			out[s] = (double)count;
 		} else {
 			out[s] = 0.0;
 		}
@@ -366,7 +368,8 @@ void compute_stage_limits(struct trcache *cache, int *limits)
 {
 	double speed[WORKER_STAT_STAGE_NUM] = { 0, };
 	double demand[WORKER_STAT_STAGE_NUM] = { 0, };
-	int need = 1;
+	double ratio, best_ratio;
+	int need, idle, total, best_stage;
 
 	compute_worker_speeds(cache, speed);
 	compute_pipeline_demand(cache, demand);
@@ -378,12 +381,17 @@ void compute_stage_limits(struct trcache *cache, int *limits)
 			need = (int)((demand[s] / speed[s]) + 0.999);
 		}
 
+		if (need < 1) {
+			need = 1;
+		}
+
 		limits[s] = need;
 	}
 
-	if (limits[WORKER_STAT_STAGE_APPLY] +
-			limits[WORKER_STAT_STAGE_CONVERT] +
-			limits[WORKER_STAT_STAGE_FLUSH] > cache->num_workers) {
+	total = limits[WORKER_STAT_STAGE_APPLY] +
+		limits[WORKER_STAT_STAGE_CONVERT] + limits[WORKER_STAT_STAGE_FLUSH];
+
+	if (total >= cache->num_workers) {
 		limits[WORKER_STAT_STAGE_APPLY] = cache->num_workers - 2;
 		
 		if (limits[WORKER_STAT_STAGE_APPLY] < 1) {
@@ -392,6 +400,25 @@ void compute_stage_limits(struct trcache *cache, int *limits)
 		
 		limits[WORKER_STAT_STAGE_CONVERT] = 1;
 		limits[WORKER_STAT_STAGE_FLUSH] = 1;
+	} else {
+		idle = cache->num_workers - total;
+		best_stage = WORKER_STAT_STAGE_APPLY;
+		best_ratio = 0.0;
+
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			if (speed[s] > 0.0) {
+				ratio = demand[s] / speed[s];
+			} else {
+				ratio = demand[s];
+			}
+
+			if (ratio > best_ratio) {
+				best_ratio = ratio;
+				best_stage = s;
+			}
+		}
+
+		limits[best_stage] += idle;
 	}
 }
 
