@@ -193,4 +193,6 @@ Concurrency is handled by an **admin thread** and one or more **worker threads**
 
 Another lock-free mechanism used in the system is [`atomsnap`](https://github.com/minseok127/atomsnap), which provides grace-period management. For example, it enables operations such as symbol registration in the symbol table, memory reclamation of row-oriented candle pages that have been fully converted to column-oriented batches, and freeing candle chunks that no longer need to reside in memory after flush—all without blocking readers.
 
+## Details
+
 ## Evaluation
