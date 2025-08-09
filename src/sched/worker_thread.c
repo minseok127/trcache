@@ -1,7 +1,7 @@
 /**
-* @file   worker_thread.c
-* @brief  Implementation of the worker thread main routine.
-*/
+ * @file   worker_thread.c
+ * @brief  Implementation of the worker thread main routine.
+ */
 
 #define _GNU_SOURCE
 #include <sched.h>
@@ -329,10 +329,10 @@ int worker_state_init(struct trcache *tc, int worker_id)
 }
 
 /**
-* @brief   Destroy resources held by @state.
-*
-* @param   state:   Previously initialised worker_state pointer.
-*/
+ * @brief   Destroy resources held by @state.
+ *
+ * @param   state:   Previously initialised worker_state pointer.
+ */
 void worker_state_destroy(struct worker_state *state)
 {
 	if (state == NULL) {
