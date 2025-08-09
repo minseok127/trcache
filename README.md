@@ -185,7 +185,7 @@ trcache_destroy(cache);
 
 A `trcache` instance manages multiple symbols. Each symbol owns one `trade_data_buffer` and one `candle_chunk_list` per enabled candle type. Incoming trades are pushed into the symbol's `trade_data_buffer`. The buffered data flows through a three-stage pipeline:
 
-1. **Apply** – trade entries are consumed from the `trade_data_buffer` and aggregated into the mutable row-oriented candle contained in each candle_chunk, for every candle type's candle_chunk_list. Only the most recent candle is mutable; all previous candles within the chunk are immutable.
+1. **Apply** – trade entries are consumed from the `trade_data_buffer` and aggregated into the mutable row-oriented candle contained in each `candle_chunk`, for every candle type's `candle_chunk_list`. Only the most recent candle is mutable; all previous candles within the chunk are immutable.
 2. **Convert** – once a row-oriented candle becomes immutable, it is converted into a column-oriented batch (`trcache_candle_batch`), where each field is stored in a separate array. All arrays point into a single contiguous, 64-bytes-aligned memory block, allowing the entire batch to be freed with a single free() call or released from the stack if allocated via `alloca`. The engine guarantees that both the memory block and each array pointer are aligned to 64-bytes to maximize SIMD load/store efficiency.
 3. **Flush** – fully converted batches are handed to user‑defined flush callbacks when the per‑list threshold is reached.  Flushes can be synchronous or asynchronous via the `trcache_flush_ops` interface.
 
