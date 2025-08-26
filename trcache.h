@@ -67,13 +67,62 @@ typedef enum {
 	TRCACHE_5MIN_CANDLE     = 1 << 4,
 	TRCACHE_1MIN_CANDLE     = 1 << 5,
 	TRCACHE_1SEC_CANDLE     = 1 << 6,
+	/* <- time-based candle types */
+
 	TRCACHE_100TICK_CANDLE  = 1 << 7,
 	TRCACHE_50TICK_CANDLE   = 1 << 8,
 	TRCACHE_10TICK_CANDLE   = 1 << 9,
 	TRCACHE_5TICK_CANDLE    = 1 << 10,
+	/* <- tick-based candle tyeps */
 } trcache_candle_type;
 
 #define TRCACHE_NUM_CANDLE_TYPE	(11)
+
+/*
+ * The candle type enumeration begins with a set of time‑based intervals
+ * (day, hour, minute and second granularity). This macro gives the
+ * count of those entries. Adjust it if you add or remove time‑based
+ * candle types.
+ */
+#define NUM_TIME_BASED_CANDLE_TYPES (7)
+
+/*
+ * The candle type enumeration includes a fixed number of tick‑based
+ * candles (100tick, 50tick, 10tick and 5tick). This macro must
+ * reflect that count; update it if additional tick‑based candle types
+ * are introduced.
+ */
+#define NUM_TICK_BASED_CANDLE_TYPES (4)
+
+/*
+ * Mapping of time‑based candle intervals (in milliseconds) ordered by
+ * candle index. The array size equals NUM_TIME_BASED_CANDLE_TYPES and
+ * must align with the enumeration order of time‑based candle types.
+ * Intervals are computed as: days, hours, minutes and seconds in milliseconds.
+ */
+static const uint64_t candle_time_intervals_ms[NUM_TIME_BASED_CANDLE_TYPES] = {
+	86400000ULL,  /* day   = 24 * 60 * 60 * 1000 */
+	3600000ULL,   /* 1h    = 60 * 60 * 1000     */
+	1800000ULL,   /* 30min = 30 * 60 * 1000     */
+	900000ULL,    /* 15min = 15 * 60 * 1000     */
+	300000ULL,    /* 5min  = 5  * 60 * 1000     */
+	60000ULL,     /* 1min  = 60 * 1000          */
+	1000ULL       /* 1sec  = 1  * 1000          */
+};
+
+/*
+ * Mapping of tick‑based candle intervals expressed as the number of
+ * trades per candle. The array size equals NUM_TICK_BASED_CANDLE_TYPES
+ * and must align with the enumeration order of tick‑based candle types.
+ * When adding additional tick‑based candle types, extend this array and update
+ * NUM_TICK_BASED_CANDLE_TYPES accordingly.
+ */
+static const int candle_tick_intervals[NUM_TICK_BASED_CANDLE_TYPES] = {
+	100,
+	50,
+	10,
+	5
+};
 
 typedef uint32_t trcache_candle_type_flags;
 

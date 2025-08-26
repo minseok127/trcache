@@ -16,6 +16,31 @@ struct admin_state {
 };
 
 /**
+ * @brief   Period of the admin thread main loop in milliseconds.
+ *
+ * The admin thread wakes up at this interval to perform routine duties
+ * such as updating pipeline statistics and balancing worker loads.
+ * A millisecond granularity is used rather than a fixed one‑second sleep
+ * so that callers can tune responsiveness as needed. The default
+ * period corresponds to one second. Override this definition at
+ * compile time to customise the admin thread frequency.
+ */
+#ifndef ADMIN_THREAD_PERIOD_MS
+#define ADMIN_THREAD_PERIOD_MS 1000
+#endif
+
+/**
+ * @brief   Externally visible timestamp maintained by the admin thread.
+ *
+ * On each wakeup, the admin thread records the current real‑time clock
+ * (in milliseconds since the Unix epoch) into this global. Other threads may
+ * read this variable to make time‑based decisions – for example, determining
+ * whether a time‑interval candle has crossed its boundary. It is declared as
+ * _Atomic to permit lock‑free loads.
+ */
+extern _Atomic uint64_t g_admin_current_ts_ms;
+
+/**
  * @brief   Initialise the admin thread state.
  *
  * @param   tc: Owner of the admin state.

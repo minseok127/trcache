@@ -4,7 +4,8 @@
  */
 #define _GNU_SOURCE
 #include <sched.h>
-#include <string.h>   /* memset */
+#include <string.h>
+#include <time.h>
 
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
@@ -13,6 +14,12 @@
 #include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
+
+/*
+ * Definition of the global timestamp maintained by the admin thread.
+ * See admin_thread.h for the corresponding declaration.
+ */
+_Atomic uint64_t g_admin_current_ts_ms = 0;
 
 /**
  * @brief   Initialise the admin thread state.
@@ -497,11 +504,20 @@ static void balance_workers(struct trcache *cache)
 void *admin_thread_main(void *arg)
 {
 	struct trcache *cache = (struct trcache *)arg;
+	struct timespec ts;
+	uint64_t now_ms;
 
 	while (!cache->admin_state.done) {
+		if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+			now_ms = (uint64_t)ts.tv_sec * 1000ULL 
+				+ (uint64_t)(ts.tv_nsec / 1000000ULL);
+			atomic_store_explicit(&g_admin_current_ts_ms, now_ms,
+				memory_order_release);
+		}
+
 		update_all_pipeline_stats(cache);
 		balance_workers(cache);
-		sleep(1);
+		usleep((useconds_t)(ADMIN_THREAD_PERIOD_MS * 1000U));
 	}
 
 	return NULL;

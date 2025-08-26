@@ -11,6 +11,8 @@
 #include <pthread.h>
 
 #include "meta/trcache_internal.h"
+#include "pipeline/trade_data_buffer.h"
+#include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
@@ -462,6 +464,145 @@ int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
 }
 
 /**
+ * @brief   Obtain candle chunk list for given symbol and type.
+ */
+static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
+	int symbol_id, trcache_candle_type type)
+{
+	struct symbol_entry *entry;
+	int bit;
+
+	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+	if (entry == NULL) {
+		errmsg(stderr, "Invalid symbol id\n");
+		return NULL;
+	}
+
+	bit = __builtin_ctz(type);
+	if (bit < 0 || bit >= TRCACHE_NUM_CANDLE_TYPE) {
+		errmsg(stderr, "Invalid candle type\n");
+		return NULL;
+	}
+
+	return entry->candle_chunk_list_ptrs[bit];
+}
+
+/*
+ * @brief   Determine whether a time‑based candle of a given index is near
+ *          completion.
+ *
+ * A time‑based candle is considered "near completion" when the remaining
+ * time in its interval is less than or equal to the admin thread period.
+ * In such a state, applying buffered trades early helps ensure that
+ * readers observe a fully updated candle immediately after the interval
+ * rolls over.
+ *
+ * @param   idx:      Zero‑based index into the time‑based candle array.
+ * @param   admin_ts: Current admin timestamp in milliseconds.
+ *
+ * @return  true if the candle is in its final admin period, otherwise false.
+ */
+static inline bool time_candle_should_apply(int idx, uint64_t admin_ts)
+{
+	uint64_t interval = candle_time_intervals_ms[idx];
+	uint64_t remainder = admin_ts % interval;
+	uint64_t time_left = interval - remainder;
+	return time_left <= ADMIN_THREAD_PERIOD_MS;
+}
+
+/*
+ * @brief   Determine whether a tick‑based candle of a given index is closed by
+ *          this trade.
+ *
+ * For tick‑based candles, each candle contains a fixed number of trades
+ * (the interval). When a trade arrives whose trade_id modulo the
+ * interval equals interval − 1, that trade is the last trade of the
+ * candle. Applying buffered trades at this point ensures the candle
+ * reflects all trades before it is read.
+ *
+ * @param   idx:     Zero‑based index into the tick‑based candle array.
+ * @param   trade_id: Identifier of the incoming trade.
+ *
+ * @return  true if this trade is the last trade in the candle, otherwise false.
+ */
+static inline bool tick_candle_should_apply(int idx, uint64_t trade_id)
+{
+	int interval_tick = candle_tick_intervals[idx];
+	return (trade_id % (uint64_t)interval_tick)
+		== (uint64_t)(interval_tick - 1);
+}
+
+/*
+ * @brief   Opportunistically apply buffered trades for a given symbol.
+ *
+ * This helper encapsulates the logic for determining when to apply
+ * buffered trades based on candle completion proximity. It examines
+ * each candle type enabled in the cache, decides whether the incoming
+ * trade implies closure of that candle (tick‑based) or whether the
+ * current time is within the final admin period before a time‑based
+ * candle rolls over, and applies the trades when appropriate.
+ *
+ * @param   tc:        Cache instance containing candle configuration.
+ * @param   buf:       Trade data buffer associated with @symbol_id.
+ * @param   symbol_id: Symbol identifier to look up candle lists.
+ * @param   data:      Incoming trade.  Its trade_id is used to detect
+ *                     tick‑based candle completion.
+ */
+static void maybe_apply_trades(struct trcache *tc,
+	struct trade_data_buffer *buf, int symbol_id,
+	struct trcache_trade_data *data)
+{
+	uint64_t admin_ts = atomic_load_explicit(&g_admin_current_ts_ms,
+		memory_order_acquire);
+
+	/* Iterate over all candle types set in the bitmask. */
+	for (uint32_t m = tc->candle_type_flags; m != 0; m &= (m - 1)) {
+		int idx = __builtin_ctz(m);
+		trcache_candle_type type = (trcache_candle_type)(1U << idx);
+		bool should_apply = false;
+
+		if (idx < NUM_TIME_BASED_CANDLE_TYPES) {
+			should_apply = time_candle_should_apply(idx, admin_ts);
+		} else {
+			int tick_idx = idx - NUM_TIME_BASED_CANDLE_TYPES;
+			should_apply = tick_candle_should_apply(tick_idx, data->trade_id);
+		}
+
+		if (!should_apply) {
+			continue;
+		}
+
+		/* 
+		 * Acquire a cursor for this candle type.
+		 * Skip if another worker thread holds it.
+		 */
+		struct trade_data_buffer_cursor *cur
+			= trade_data_buffer_acquire_cursor(buf, type);
+		if (cur == NULL) {
+			continue;
+		}
+
+		struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
+		if (list != NULL) {
+			struct trcache_trade_data *array = NULL;
+			int count = 0;
+
+			/* Consume and apply all trades available for this cursor. */
+			while (trade_data_buffer_peek(buf, cur, &array, &count)
+					&& count > 0) {
+				for (int i = 0; i < count; i++) {
+					candle_chunk_list_apply_trade(list, &array[i]);
+				}
+
+				trade_data_buffer_consume(buf, cur, count);
+			}
+		}
+
+		trade_data_buffer_release_cursor(cur);
+	}
+}
+
+/**
  * @brief   Push a single trade into the internal pipeline.
  *
  * @param   tc:        Pointer to trcache instance.
@@ -529,32 +670,20 @@ int trcache_feed_trade_data(struct trcache *tc,
 			&tls_data_ptr->local_free_list);
 	}
 
-	return trade_data_buffer_push(trd_databuf, data,
-		&tls_data_ptr->local_free_list);
-}
-
-/**
- * @brief   Obtain candle chunk list for given symbol and type.
- */
-static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
-	int symbol_id, trcache_candle_type type)
-{
-	struct symbol_entry *entry;
-	int bit;
-
-	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
-	if (entry == NULL) {
-		errmsg(stderr, "Invalid symbol id\n");
-		return NULL;
+	/*
+	 * Push the trade record into the buffer.
+	 */
+	if (trade_data_buffer_push(trd_databuf, data,
+			&tls_data_ptr->local_free_list) == -1) {
+		return -1;
 	}
 
-	bit = __builtin_ctz(type);
-	if (bit < 0 || bit >= TRCACHE_NUM_CANDLE_TYPE) {
-		errmsg(stderr, "Invalid candle type\n");
-		return NULL;
-	}
+	/* 
+	 * Opportunistically apply buffered trades for this symbol.
+	 */
+	maybe_apply_trades(tc, trd_databuf, symbol_id, data);
 
-	return entry->candle_chunk_list_ptrs[bit];
+	return 0;
 }
 
 /**

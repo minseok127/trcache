@@ -572,9 +572,18 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 }
 
 /*
- * Helper for candle_chunk_copy_from_column_batch().
+ * @brief   Copy a segment of memory containing 64‑bit values.
+ *
+ * This helper is tuned for copying arrays of 64‑bit types (e.g. uint64_t,
+ * double). It requires that the byte count be a multiple of 8 and
+ * performs a small unrolled loop when the segment is small. 
+ * Larger segments fall back to memcpy().
+ *
+ * @param   src:   Source pointer.
+ * @param   dst:   Destination pointer.
+ * @param   bytes: Number of bytes to copy (must be a multiple of 8).
  */
-static inline void copy_segment(const void *__restrict src,
+static inline void copy_segment_u64(const void *__restrict src,
 	void *__restrict dst, int bytes)
 {
 	assert((bytes & 7u) == 0);
@@ -582,10 +591,10 @@ static inline void copy_segment(const void *__restrict src,
 	if (bytes <= 256) {
 		const uint64_t *__restrict s = (const uint64_t *)src;
 		uint64_t *__restrict d = (uint64_t *)dst;
-		size_t n_qwords = bytes >> 3;
+		size_t n_qwords = (size_t)bytes >> 3;
 		size_t i = 0;
 
-		/* 64 bytes unroll */
+		/* 64‑byte unroll */
 		for (; i + 7 < n_qwords; i += 8) {
 			d[i] = s[i];
 			d[i + 1] = s[i + 1];
@@ -597,13 +606,72 @@ static inline void copy_segment(const void *__restrict src,
 			d[i + 7] = s[i + 7];
 		}
 
-		/* Remains */
+		/* Remainder */
 		for (; i < n_qwords; i++) {
 			d[i] = s[i];
 		}
 	} else {
-		memcpy(dst, src, bytes);
+		memcpy(dst, src, (size_t)bytes);
 	}
+}
+
+/*
+ * @brief   Copy a segment of memory containing 32‑bit values.
+ *
+ * This helper mirrors copy_segment_u64() but operates on 4‑byte
+ * elements such as uint32_t. The byte count must be a multiple of 4.
+ *
+ * @param   src:   Source pointer.
+ * @param   dst:   Destination pointer.
+ * @param   bytes: Number of bytes to copy (must be a multiple of 4).
+ */
+static inline void copy_segment_u32(const void *__restrict src,
+	void *__restrict dst, int bytes)
+{
+	assert((bytes & 3u) == 0);
+
+	if (bytes <= 256) {
+		const uint32_t *__restrict s = (const uint32_t *)src;
+		uint32_t *__restrict d = (uint32_t *)dst;
+		size_t n_words = (size_t)bytes >> 2;
+		size_t i = 0;
+
+		/* 32‑byte unroll (8 words) */
+		for (; i + 7 < n_words; i += 8) {
+			d[i] = s[i];
+			d[i + 1] = s[i + 1];
+			d[i + 2] = s[i + 2];
+			d[i + 3] = s[i + 3];
+			d[i + 4] = s[i + 4];
+			d[i + 5] = s[i + 5];
+			d[i + 6] = s[i + 6];
+			d[i + 7] = s[i + 7];
+		}
+		/* Remainder */
+		for (; i < n_words; i++) {
+			d[i] = s[i];
+		}
+	} else {
+		memcpy(dst, src, (size_t)bytes);
+	}
+}
+
+/*
+ * @brief   Copy a segment of memory containing boolean values.
+ *
+ * This helper copies arrays of bool. Since bool values are 1 byte each,
+ * there is no need for unrolling; memcpy() is sufficient and typically
+ * optimized by the compiler. The byte count must be a multiple of 1.
+ *
+ * @param   src:   Source pointer.
+ * @param   dst:   Destination pointer.
+ * @param   bytes: Number of bytes to copy.
+ */
+static inline void copy_segment_bool(const void *__restrict src,
+	void *__restrict dst, int bytes)
+{
+	/* For booleans there is no alignment requirement */
+	memcpy(dst, src, (size_t)bytes);
 }
 
 /**
@@ -652,58 +720,56 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_start_ts:
-	copy_segment(chunk->column_batch->start_timestamp_array + start_idx,
+	copy_segment_u64(chunk->column_batch->start_timestamp_array + start_idx,
 		dst->start_timestamp_array + dst_first, bytes_u64);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_open:
-	copy_segment(chunk->column_batch->open_array + start_idx,
+	copy_segment_u64(chunk->column_batch->open_array + start_idx,
 		dst->open_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_high:
-	copy_segment(chunk->column_batch->high_array + start_idx,
+	copy_segment_u64(chunk->column_batch->high_array + start_idx,
 		dst->high_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_low:
-	copy_segment(chunk->column_batch->low_array + start_idx,
+	copy_segment_u64(chunk->column_batch->low_array + start_idx,
 		dst->low_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_close:
-	copy_segment(chunk->column_batch->close_array + start_idx,
+	copy_segment_u64(chunk->column_batch->close_array + start_idx,
 		dst->close_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_volume:
-	copy_segment(chunk->column_batch->volume_array + start_idx,
+	copy_segment_u64(chunk->column_batch->volume_array + start_idx,
 		dst->volume_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_trading_value:
-	copy_segment(chunk->column_batch->trading_value_array + start_idx,
+	copy_segment_u64(chunk->column_batch->trading_value_array + start_idx,
 		dst->trading_value_array + dst_first, bytes_db);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_trade_count:
-	/* copy 32‑bit elements – cannot use copy_segment() */
-	memcpy(dst->trade_count_array + dst_first,
-		chunk->column_batch->trade_count_array + start_idx, bytes_u32);
+	copy_segment_u32(chunk->column_batch->trade_count_array + start_idx,
+		dst->trade_count_array + dst_first, bytes_u32);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
 col_copy_is_closed:
-	/* copy bool elements – cannot use copy_segment() */
-	memcpy(dst->is_closed_array + dst_first,
-		chunk->column_batch->is_closed_array + start_idx, bytes_bool);
+	copy_segment_bool(chunk->column_batch->is_closed_array + start_idx,
+		dst->is_closed_array + dst_first, bytes_bool);
 	/* Fall through */
 
 col_copy_done:
