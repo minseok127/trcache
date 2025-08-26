@@ -76,6 +76,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 		c->consume_count = 0;
 		c->peek_chunk = chunk;
 		c->peek_idx = 0;
+		atomic_store_explicit(&c->in_use, 0, memory_order_release);
 		num_cursor++;
 	}
 

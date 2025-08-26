@@ -53,6 +53,7 @@ struct trade_data_chunk {
  * @consume_count: Number of data items consumed from this cursor.
  * @peek_chunk:    Chunk for next peek.
  * @peek_idx:      Index in the peek_chunk for next peek.
+ * @in_use:        0 means the cursor is free; 1 means it is in use.
  *
  * Caller allocates this and passes to peek/consume.
  */
@@ -60,7 +61,8 @@ struct trade_data_buffer_cursor {
 	struct trade_data_chunk	*consume_chunk;
 	uint64_t consume_count;
 	struct trade_data_chunk *peek_chunk;
-	int peek_idx; 
+	int peek_idx;
+	_Atomic int in_use;
 } __cacheline_aligned;
 
 /*
@@ -93,15 +95,40 @@ struct trade_data_buffer {
  * @param   buf:          Pointer to the #trade_data_buffer holding cursor.
  * @param   candle_type:  Desired candle type.
  *
- * @return  Pointer of the #trade_data_buffer_cursor (non-NULL).
- *
- * Validation of the type is the caller's responsibility.
+ * @return  Pointer of the #trade_data_buffer_cursor when it is free.
  */
-static inline struct trade_data_buffer_cursor *trade_data_buffer_get_cursor(
+static inline struct trade_data_buffer_cursor *trade_data_buffer_acquire_cursor(
 	struct trade_data_buffer *buf, trcache_candle_type candle_type)
 {
 	int bit = __builtin_ctz(candle_type);
-	return (buf->cursor_arr + bit);
+	struct trade_data_buffer_cursor *cur = buf->cursor_arr + bit;
+	int expected = 0;
+
+	if (atomic_load_explicit(&cur->in_use, memory_order_acquire) != 0) {
+		return NULL;
+	}
+
+	if (atomic_compare_exchange_strong(&cur->in_use, &expected, 1)) {
+		return cur;
+	}
+
+	return NULL;
+}
+
+/**
+ * @brief   Release a previously acquired cursor.
+ *
+ * Callers must invoke this after they finish with the cursor returned from
+ * trade_data_buffer_get_cursor().  It resets the in_use flag to 0.
+ *
+ * @param   cursor: Pointer to #trade_data_buffer_cursor acquired earlier.
+ */
+static inline void trade_data_buffer_release_cursor(
+	struct trade_data_buffer_cursor *cursor)
+{
+	if (cursor != NULL) {
+		atomic_store_explicit(&cursor->in_use, 0, memory_order_release);
+	}
 }
 
 /**

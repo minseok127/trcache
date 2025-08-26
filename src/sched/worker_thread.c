@@ -93,7 +93,7 @@ static void worker_handle_add_work(struct trcache *cache,
 {
 	struct symbol_entry *entry = symbol_table_lookup_entry(
 		cache->symbol_table, cmd->symbol_id);
-	int idx, expected = -1;
+	int idx, cur_val, expected = -1;
 	uint64_t key;
 
 	if (!entry) {
@@ -101,10 +101,14 @@ static void worker_handle_add_work(struct trcache *cache,
 	}
 
 	idx = worker_ct_to_idx(cmd->candle_type);
-	if (atomic_compare_exchange_strong(&entry->in_progress[cmd->stage][idx],
-			&expected, state->worker_id)) {
-		key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
-		worker_insert_work(state, key);
+	cur_val = atomic_load(&entry->in_progress[cmd->stage][idx]);
+
+	if (cur_val == -1) {
+		if (atomic_compare_exchange_strong(&entry->in_progress[cmd->stage][idx],
+				&expected, state->worker_id)) {
+			key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
+			worker_insert_work(state, key);
+		}
 	}
 }
 
@@ -171,14 +175,20 @@ static void worker_do_apply(struct worker_state *state,
 	struct symbol_entry *entry, trcache_candle_type type)
 {
 	struct trade_data_buffer *buf = entry->trd_buf;
-	struct trade_data_buffer_cursor *cur =
-		trade_data_buffer_get_cursor(buf, type);
-	struct candle_chunk_list *list =
-		entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+	struct trade_data_buffer_cursor *cur;
+	struct candle_chunk_list *list;
 	struct trcache_trade_data *array = NULL;
 	int count = 0;
-	uint64_t start = tsc_cycles();
-	uint64_t work_count = 0;
+	uint64_t start, work_count = 0;
+
+	cur = trade_data_buffer_acquire_cursor(buf, type);
+	if (cur == NULL) {
+		return;
+	}
+
+	start = tsc_cycles();
+
+	list = entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
 
 	while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
@@ -191,6 +201,8 @@ static void worker_do_apply(struct worker_state *state,
 
 	worker_stat_add_apply(&state->stat, type,
 		tsc_cycles() - start, work_count);
+
+	trade_data_buffer_release_cursor(cur);
 }
 
 /**

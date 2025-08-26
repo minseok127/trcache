@@ -248,12 +248,14 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 	/* Vector pointers */
 	uint64_t *ts_ptr = batch->start_timestamp_array + start_idx;
-	uint64_t *id_ptr = batch->start_trade_id_array + start_idx;
 	double *o_ptr = batch->open_array + start_idx;
 	double *h_ptr = batch->high_array + start_idx;
 	double *l_ptr = batch->low_array + start_idx;
 	double *c_ptr = batch->close_array + start_idx;
 	double *v_ptr = batch->volume_array + start_idx;
+	double *tv_ptr = batch->trading_value_array + start_idx;
+	uint32_t *tc_ptr = batch->trade_count_array + start_idx;
+	bool *ic_ptr = batch->is_closed_array + start_idx;
 
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
@@ -274,12 +276,14 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 		c = &(page->rows[candle_chunk_calc_row_idx(idx)]);
 
 		*ts_ptr++ = c->start_timestamp;
-		*id_ptr++ = c->start_trade_id;
 		*o_ptr++ = c->open;
 		*h_ptr++ = c->high;
 		*l_ptr++ = c->low;
 		*c_ptr++ = c->close;
 		*v_ptr++ = c->volume;
+		*tv_ptr++ = c->trading_value;
+		*tc_ptr++ = c->trade_count;
+		*ic_ptr++ = c->is_closed;
 	}
 	atomsnap_release_version(page_version);
 
@@ -367,7 +371,7 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk)
 	return 0;
 }
 
-_Static_assert(TRCACHE_NUM_CANDLE_FIELD == 7, "Field count/dispatch mismatch");
+_Static_assert(TRCACHE_NUM_CANDLE_FIELD == 9, "Field count/dispatch mismatch");
 
 /**
  * @brief   Dispatch-table based copier (GNU computed-goto).
@@ -394,12 +398,14 @@ static inline void candle_copy_dispatch_tbl(
 {
 	static void *dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
 		&&copy_start_ts,
-		&&copy_start_id,
 		&&copy_open,
 		&&copy_high,
 		&&copy_low,
 		&&copy_close,
 		&&copy_volume,
+		&&copy_trading_value,
+		&&copy_trade_count,
+		&&copy_is_closed,
 		&&copy_done
 	};
 	uint32_t m;
@@ -414,11 +420,6 @@ static inline void candle_copy_dispatch_tbl(
 
 copy_start_ts:
 	d->start_timestamp_array[i] = c->start_timestamp;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_start_id:
-	d->start_trade_id_array[i] = c->start_trade_id;
 	m &= m - 1;
 	goto *dispatch[__builtin_ctz(m)];
 
@@ -444,6 +445,21 @@ copy_close:
 
 copy_volume:
 	d->volume_array[i] = c->volume;
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
+
+copy_trading_value:
+	d->trading_value_array[i] = c->trading_value;
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
+
+copy_trade_count:
+	d->trade_count_array[i] = c->trade_count;
+	m &= m - 1;
+	goto *dispatch[__builtin_ctz(m)];
+
+copy_is_closed:
+	d->is_closed_array[i] = c->is_closed;
 	/* Fall through */
 
 copy_done:
@@ -612,16 +628,19 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 {
 	static void *const col_dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
 		&&col_copy_start_ts,
-		&&col_copy_start_id,
 		&&col_copy_open,
 		&&col_copy_high,
 		&&col_copy_low,
 		&&col_copy_close,
 		&&col_copy_volume,
+		&&col_copy_trading_value,
+		&&col_copy_trade_count,
+		&&col_copy_is_closed,
 		&&col_copy_done
 	};
 	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n;
 	int bytes_db = n * sizeof(double), bytes_u64 = n * sizeof(uint64_t);
+	int bytes_u32 = n * sizeof(uint32_t), bytes_bool = n * sizeof(bool);
 	uint32_t m;
 
 	if (n == 0 || field_mask == 0) {
@@ -635,12 +654,6 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 col_copy_start_ts:
 	copy_segment(chunk->column_batch->start_timestamp_array + start_idx,
 		dst->start_timestamp_array + dst_first, bytes_u64);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
-
-col_copy_start_id:
-	copy_segment(chunk->column_batch->start_trade_id_array + start_idx,
-		dst->start_trade_id_array + dst_first, bytes_u64);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 
@@ -671,6 +684,26 @@ col_copy_close:
 col_copy_volume:
 	copy_segment(chunk->column_batch->volume_array + start_idx,
 		dst->volume_array + dst_first, bytes_db);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_trading_value:
+	copy_segment(chunk->column_batch->trading_value_array + start_idx,
+		dst->trading_value_array + dst_first, bytes_db);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_trade_count:
+	/* copy 32‑bit elements – cannot use copy_segment() */
+	memcpy(dst->trade_count_array + dst_first,
+		chunk->column_batch->trade_count_array + start_idx, bytes_u32);
+	m &= m - 1;
+	goto *col_dispatch[__builtin_ctz(m)];
+
+col_copy_is_closed:
+	/* copy bool elements – cannot use copy_segment() */
+	memcpy(dst->is_closed_array + dst_first,
+		chunk->column_batch->is_closed_array + start_idx, bytes_bool);
 	/* Fall through */
 
 col_copy_done:

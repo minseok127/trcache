@@ -98,7 +98,7 @@ static void *consumer_tick_thread(void *arg)
 {
 	struct thread_perf *perf = (struct thread_perf *)arg;
 	struct trade_data_buffer_cursor *cursor =
-		trade_data_buffer_get_cursor(g_buf, TRCACHE_100TICK_CANDLE);
+		trade_data_buffer_acquire_cursor(g_buf, TRCACHE_100TICK_CANDLE);
 	int consumed = 0;
 	perf_start(perf);
 
@@ -126,7 +126,7 @@ static void *consumer_sec_thread(void *arg)
 {
 	struct thread_perf *perf = (struct thread_perf *)arg;
 	struct trade_data_buffer_cursor *cursor =
-		trade_data_buffer_get_cursor(g_buf, TRCACHE_1SEC_CANDLE);
+		trade_data_buffer_acquire_cursor(g_buf, TRCACHE_1SEC_CANDLE);
 	int consumed = 0;
 	perf_start(perf);
 

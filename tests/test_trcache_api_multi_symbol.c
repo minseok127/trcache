@@ -122,7 +122,7 @@ static void *consumer_tick_thread(void *arg)
 	for (int j = 0; j < count; j++) {
 		int s = carg->start + j;
 		syms[j] = s;
-		cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
+		cursors[j] = trade_data_buffer_acquire_cursor(g_bufs[s],
 				TRCACHE_100TICK_CANDLE);
 	}
 	perf_start(perf);
@@ -167,7 +167,7 @@ static void *consumer_sec_thread(void *arg)
 	for (int j = 0; j < count; j++) {
 		int s = carg->start + j;
 		syms[j] = s;
-		cursors[j] = trade_data_buffer_get_cursor(g_bufs[s],
+		cursors[j] = trade_data_buffer_acquire_cursor(g_bufs[s],
 				TRCACHE_1SEC_CANDLE);
 	}
 	perf_start(perf);

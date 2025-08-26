@@ -29,9 +29,11 @@ static void init_##SUFFIX(struct trcache_candle *c,                      \
 {                                                                        \
 	uint64_t start = d->timestamp - (d->timestamp % (INTERVAL_MS));      \
 	c->start_timestamp = start;                                          \
-	c->start_trade_id = d->trade_id;                                     \
 	c->open = c->high = c->low = c->close = d->price;                    \
 	c->volume = d->volume;                                               \
+	c->trading_value = d->price * d->volume;                             \
+	c->trade_count = 1;                                                  \
+	c->is_closed = false;                                                \
 }                                                                        \
 static void update_##SUFFIX(struct trcache_candle *c,                    \
 	struct trcache_trade_data *d)                                        \
@@ -40,12 +42,18 @@ static void update_##SUFFIX(struct trcache_candle *c,                    \
 	c->low = MIN(c->low, d->price);                                      \
 	c->close = d->price;                                                 \
 	c->volume += d->volume;                                              \
+	c->trading_value += d->price * d->volume;                            \
+	c->trade_count += 1;                                                 \
 }                                                                        \
 static bool is_closed_##SUFFIX(struct trcache_candle *c,                 \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
-	return (d->timestamp / (INTERVAL_MS))                                \
+	bool closed = (d->timestamp / (INTERVAL_MS))                         \
 		!= (c->start_timestamp / (INTERVAL_MS));                         \
+	if (closed) {                                                        \
+		c->is_closed = true;                                             \
+	}                                                                    \
+	return closed;                                                       \
 }                                                                        \
 static const struct candle_update_ops ops_##SUFFIX = {                   \
 	.init = init_##SUFFIX,                                               \
@@ -58,11 +66,13 @@ static const struct candle_update_ops ops_##SUFFIX = {                   \
 static void init_##SUFFIX(struct trcache_candle *c,                      \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
-	uint64_t base = d->trade_id - (d->trade_id % (INTERVAL_TICK));       \
-	c->start_trade_id = base;                                            \
+	uint64_t rem = d->trade_id % (INTERVAL_TICK);                        \
 	c->start_timestamp = d->timestamp;                                   \
 	c->open = c->high = c->low = c->close = d->price;                    \
 	c->volume = d->volume;                                               \
+	c->trading_value = d->price * d->volume;                             \
+	c->trade_count = (uint32_t)rem + 1;                                  \
+	c->is_closed = false;                                                \
 }                                                                        \
 static void update_##SUFFIX(struct trcache_candle *c,                    \
 	struct trcache_trade_data *d)                                        \
@@ -71,12 +81,18 @@ static void update_##SUFFIX(struct trcache_candle *c,                    \
 	c->low = MIN(c->low, d->price);                                      \
 	c->close = d->price;                                                 \
 	c->volume += d->volume;                                              \
+	c->trading_value += d->price * d->volume;                            \
+	c->trade_count += 1;                                                 \
 }                                                                        \
 static bool is_closed_##SUFFIX(struct trcache_candle *c,                 \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
-	return (d->trade_id / (INTERVAL_TICK))                               \
-		!= (c->start_trade_id / (INTERVAL_TICK));                        \
+	(void)d;                                                             \
+	bool closed = (c->trade_count >= (INTERVAL_TICK));                   \
+	if (closed) {                                                        \
+		c->is_closed = true;                                             \
+	}                                                                    \
+	return closed;                                                       \
 }                                                                        \
 static const struct candle_update_ops ops_##SUFFIX = {                   \
 	.init = init_##SUFFIX,                                               \

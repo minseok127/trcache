@@ -23,7 +23,7 @@ static void *consumer_thread(void *arg)
 {
 	struct consumer_arg *carg = (struct consumer_arg *)arg;
 	struct trade_data_buffer_cursor *cursor =
-		trade_data_buffer_get_cursor(carg->buf, carg->type);
+		trade_data_buffer_acquire_cursor(carg->buf, carg->type);
 	int consumed = 0;
 
 	while (consumed < NUM_ENTRIES) {

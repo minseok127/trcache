@@ -83,15 +83,17 @@ typedef uint32_t trcache_candle_type_flags;
  */
 typedef enum {
 	TRCACHE_START_TIMESTAMP     = 1 << 0,
-	TRCACHE_START_TRADE_ID      = 1 << 1,
-	TRCACHE_OPEN                = 1 << 2,
-	TRCACHE_HIGH                = 1 << 3,
-	TRCACHE_LOW                 = 1 << 4,
-	TRCACHE_CLOSE               = 1 << 5,
-	TRCACHE_VOLUME              = 1 << 6,
+	TRCACHE_OPEN                = 1 << 1,
+	TRCACHE_HIGH                = 1 << 2,
+	TRCACHE_LOW                 = 1 << 3,
+	TRCACHE_CLOSE               = 1 << 4,
+	TRCACHE_VOLUME              = 1 << 5,
+	TRCACHE_TRADING_VALUE       = 1 << 6,
+	TRCACHE_TRADE_COUNT         = 1 << 7,
+	TRCACHE_IS_CLOSED           = 1 << 8
 } trcache_candle_field_type;
 
-#define TRCACHE_NUM_CANDLE_FIELD (7)
+#define TRCACHE_NUM_CANDLE_FIELD (9)
 
 typedef uint32_t trcache_candle_field_flags;
 
@@ -103,22 +105,26 @@ typedef uint32_t trcache_candle_field_flags;
  *
  * @start_timestamp:    Start timestamp covered by the candle
  *                      (unix epoch in milliseconds).
- * @start_trade_id:     Trade-ID of the first trade in the candle.
  * @open:               Price of the very first trade.
  * @high:               Highest traded price inside the candle.
  * @low:                Lowest traded price inside the candle.
  * @close:              Price of the very last trade.
  * @volume:             Sum of traded volume.
+ * @trading_value:      Sum of each trade's price multiplied by its volume.
+ * @trade_count:        Number of trades aggregated into this candle.
+ * @is_closed:          Non-zero when the candle has closed.
  */
 typedef struct trcache_candle {
 	uint64_t start_timestamp;
-	uint64_t start_trade_id;
 	double open;
 	double high;
 	double low;
 	double close;
 	double volume;
-	uint64_t pad; /* for 64 byte align */
+	double trading_value;
+	uint32_t trade_count;
+	bool is_closed;
+	uint8_t pad[3];
 } trcache_candle;
 
 /*
@@ -141,12 +147,14 @@ typedef struct trcache_candle {
  */
 typedef struct trcache_candle_batch {
 	uint64_t *start_timestamp_array;
-	uint64_t *start_trade_id_array;
 	double *open_array;
 	double *high_array;
 	double *low_array;
 	double *close_array;
 	double *volume_array;
+	double *trading_value_array;
+	uint32_t *trade_count_array;
+	bool *is_closed_array;
 	int capacity;
 	int num_candles;
 	int candle_type;
@@ -437,19 +445,21 @@ static inline void trcache_batch_alloc_on_stack(
 	const size_t a = TRCACHE_SIMD_ALIGN;
 	size_t u64b = (size_t)capacity * sizeof(uint64_t);
 	size_t dblb = (size_t)capacity * sizeof(double);
+	size_t u32b = (size_t)capacity * sizeof(uint32_t);
+	size_t boolb = (size_t)capacity * sizeof(bool);
 
 	uint8_t *buf_ts = NULL;
-	uint8_t *buf_tid = NULL;
 	uint8_t *buf_op = NULL;
 	uint8_t *buf_hi = NULL;
 	uint8_t *buf_lo = NULL;
 	uint8_t *buf_cl = NULL;
 	uint8_t *buf_vol = NULL;
+	uint8_t *buf_tv = NULL;
+	uint8_t *buf_tc = NULL;
+	uint8_t *buf_ic = NULL;
 
 	if (field_mask & TRCACHE_START_TIMESTAMP)
 		buf_ts = alloca(u64b + a - 1);
-	if (field_mask & TRCACHE_START_TRADE_ID)
-		buf_tid = alloca(u64b + a - 1);
 	if (field_mask & TRCACHE_OPEN)
 		buf_op = alloca(dblb + a - 1);
 	if (field_mask & TRCACHE_HIGH)
@@ -460,6 +470,12 @@ static inline void trcache_batch_alloc_on_stack(
 		buf_cl = alloca(dblb + a - 1);
 	if (field_mask & TRCACHE_VOLUME)
 		buf_vol = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_TRADING_VALUE)
+		buf_tv = alloca(dblb + a - 1);
+	if (field_mask & TRCACHE_TRADE_COUNT)
+		buf_tc = alloca(u32b + a - 1);
+	if (field_mask & TRCACHE_IS_CLOSED)
+		buf_ic = alloca(boolb + a - 1);
 
 	dst->capacity = capacity;
 	dst->num_candles = 0;
@@ -468,8 +484,6 @@ static inline void trcache_batch_alloc_on_stack(
 
 	dst->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
 		(uint64_t *)trcache_align_up_ptr(buf_ts, a) : NULL;
-	dst->start_trade_id_array = (field_mask & TRCACHE_START_TRADE_ID) ?
-		(uint64_t *)trcache_align_up_ptr(buf_tid, a) : NULL;
 	dst->open_array = (field_mask & TRCACHE_OPEN) ?
 		(double *)trcache_align_up_ptr(buf_op, a) : NULL;
 	dst->high_array = (field_mask & TRCACHE_HIGH) ?
@@ -480,6 +494,12 @@ static inline void trcache_batch_alloc_on_stack(
 		(double *)trcache_align_up_ptr(buf_cl, a) : NULL;
 	dst->volume_array = (field_mask & TRCACHE_VOLUME) ?
 		(double *)trcache_align_up_ptr(buf_vol, a) : NULL;
+	dst->trading_value_array = (field_mask & TRCACHE_TRADING_VALUE) ?
+		(double *)trcache_align_up_ptr(buf_tv, a) : NULL;
+	dst->trade_count_array = (field_mask & TRCACHE_TRADE_COUNT) ?
+		(uint32_t *)trcache_align_up_ptr(buf_tc, a) : NULL;
+	dst->is_closed_array = (field_mask & TRCACHE_IS_CLOSED) ?
+		(bool *)trcache_align_up_ptr(buf_ic, a) : NULL;
 }
 
 /**
