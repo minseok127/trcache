@@ -418,6 +418,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
 	int expected_num_completed;
+	bool consumed;
 
 	/*
 	 * This path occurs only once, right after the chunk list is created.
@@ -440,17 +441,18 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	row_page = (struct candle_row_page *)row_page_version->object;
 	candle = &(row_page->rows[chunk->mutable_row_idx]);
 
-	/*
-	 * For time-based candles, their completion cannot be determined by the
-	 * candle alone. Instead, completion is determined only when a new trade
-	 * data arrives by checking whether the new data falls within the time range
-	 * of the current candle.
+	/* 
+	 * Attempt to update the current candle. The update callback returns
+	 * true if the trade was consumed by the candle; false if the candle
+	 * is closed and the trade must start a new candle. A spinlock
+	 * protects the update to ensure readers never observe partially
+	 * updated candles.
 	 */
-	if (!ops->is_closed(candle, trade)) {
-		/* Protect from readers */
-		pthread_spin_lock(&chunk->spinlock);
-		ops->update(candle, trade);
-		pthread_spin_unlock(&chunk->spinlock);
+	pthread_spin_lock(&chunk->spinlock);
+	consumed = ops->update(candle, trade);
+	pthread_spin_unlock(&chunk->spinlock);
+
+	if (consumed) {
 		atomsnap_release_version(row_page_version);
 		return 0;
 	}

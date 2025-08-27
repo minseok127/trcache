@@ -10,7 +10,7 @@ extern "C" {
  *
  * The library buffers per-trade raw data, aggregates multiple candle types
  * (time-, tick- and month/week/day-based) and flushes them to storage after
- * a configurable threshold.  All functions are *thread-safe* unless otherwise
+ * a configurable threshold. All functions are *thread-safe* unless otherwise
  * stated.
  */
 
@@ -55,76 +55,6 @@ typedef struct trcache_trade_data {
 	double price;
 	double volume;
 } trcache_trade_data;
-
-/*
- * Identifiers used by the user and trcache to recognize candle types.
- */
-typedef enum {
-	TRCACHE_DAY_CANDLE      = 1 << 0,
-	TRCACHE_1H_CANDLE       = 1 << 1,
-	TRCACHE_30MIN_CANDLE    = 1 << 2,
-	TRCACHE_15MIN_CANDLE    = 1 << 3,
-	TRCACHE_5MIN_CANDLE     = 1 << 4,
-	TRCACHE_1MIN_CANDLE     = 1 << 5,
-	TRCACHE_1SEC_CANDLE     = 1 << 6,
-	/* <- time-based candle types */
-
-	TRCACHE_100TICK_CANDLE  = 1 << 7,
-	TRCACHE_50TICK_CANDLE   = 1 << 8,
-	TRCACHE_10TICK_CANDLE   = 1 << 9,
-	TRCACHE_5TICK_CANDLE    = 1 << 10,
-	/* <- tick-based candle tyeps */
-} trcache_candle_type;
-
-#define TRCACHE_NUM_CANDLE_TYPE	(11)
-
-/*
- * The candle type enumeration begins with a set of time‑based intervals
- * (day, hour, minute and second granularity). This macro gives the
- * count of those entries. Adjust it if you add or remove time‑based
- * candle types.
- */
-#define NUM_TIME_BASED_CANDLE_TYPES (7)
-
-/*
- * The candle type enumeration includes a fixed number of tick‑based
- * candles (100tick, 50tick, 10tick and 5tick). This macro must
- * reflect that count; update it if additional tick‑based candle types
- * are introduced.
- */
-#define NUM_TICK_BASED_CANDLE_TYPES (4)
-
-/*
- * Mapping of time‑based candle intervals (in milliseconds) ordered by
- * candle index. The array size equals NUM_TIME_BASED_CANDLE_TYPES and
- * must align with the enumeration order of time‑based candle types.
- * Intervals are computed as: days, hours, minutes and seconds in milliseconds.
- */
-static const uint64_t candle_time_intervals_ms[NUM_TIME_BASED_CANDLE_TYPES] = {
-	86400000ULL,  /* day   = 24 * 60 * 60 * 1000 */
-	3600000ULL,   /* 1h    = 60 * 60 * 1000     */
-	1800000ULL,   /* 30min = 30 * 60 * 1000     */
-	900000ULL,    /* 15min = 15 * 60 * 1000     */
-	300000ULL,    /* 5min  = 5  * 60 * 1000     */
-	60000ULL,     /* 1min  = 60 * 1000          */
-	1000ULL       /* 1sec  = 1  * 1000          */
-};
-
-/*
- * Mapping of tick‑based candle intervals expressed as the number of
- * trades per candle. The array size equals NUM_TICK_BASED_CANDLE_TYPES
- * and must align with the enumeration order of tick‑based candle types.
- * When adding additional tick‑based candle types, extend this array and update
- * NUM_TICK_BASED_CANDLE_TYPES accordingly.
- */
-static const int candle_tick_intervals[NUM_TICK_BASED_CANDLE_TYPES] = {
-	100,
-	50,
-	10,
-	5
-};
-
-typedef uint32_t trcache_candle_type_flags;
 
 /*
  * Identifiers for candle's fields. This is used in a bitmap to distinguish
@@ -244,16 +174,108 @@ typedef struct trcache_flush_ops {
 } trcache_flush_ops;
 
 /*
+ * candle_update_ops - Callbacks for updating candles.
+ *
+ * @init:    Initialise a new candle using the first trade. This is
+ *           invoked exactly once per candle before any calls to update().
+ * @update:  Update an existing candle with a trade. The function must
+ *           return true if the trade was consumed by this candle and false
+ *           if the candle is already complete and the trade belongs in
+ *           the subsequent candle.
+ */
+typedef struct candle_update_ops {
+	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
+	bool (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
+} candle_update_ops;
+
+/* Helper macros for time-interval candles */
+#define DEFINE_TIME_CANDLE_OPS(SUFFIX, INTERVAL_MS)                      \
+static void init_##SUFFIX(struct trcache_candle *c,                      \
+	struct trcache_trade_data *d)                                        \
+{                                                                        \
+	uint64_t start = d->timestamp - (d->timestamp % (INTERVAL_MS));      \
+	c->start_timestamp = start;                                          \
+	c->open = c->high = c->low = c->close = d->price;                    \
+	c->volume = d->volume;                                               \
+	c->trading_value = d->price * d->volume;                             \
+	c->trade_count = 1;                                                  \
+	c->is_closed = false;                                                \
+}                                                                        \
+static bool update_##SUFFIX(struct trcache_candle *c,                    \
+	struct trcache_trade_data *d)                                        \
+{                                                                        \
+	if ((d->timestamp / (INTERVAL_MS))                                   \
+			!= (c->start_timestamp / (INTERVAL_MS))) {                   \
+		c->is_closed = true;                                             \
+		return false;                                                    \
+	}                                                                    \
+	c->high = c->high > d->price ? c->high : d->price;                   \
+	c->low = c->low < d->price ? c->low : d->price;                      \
+	c->close = d->price;                                                 \
+	c->volume += d->volume;                                              \
+	c->trading_value += d->price * d->volume;                            \
+	c->trade_count += 1;                                                 \
+	return true;                                                         \
+}                                                                        \
+static const struct candle_update_ops ops_##SUFFIX = {                   \
+	.init = init_##SUFFIX,                                               \
+	.update = update_##SUFFIX,                                           \
+}
+
+/* Helper macro for tick-count candles */
+#define DEFINE_TICK_CANDLE_OPS(SUFFIX, INTERVAL_TICK)                    \
+static void init_##SUFFIX(struct trcache_candle *c,                      \
+	struct trcache_trade_data *d)                                        \
+{                                                                        \
+	uint64_t rem = d->trade_id % (INTERVAL_TICK);                        \
+	c->start_timestamp = d->timestamp;                                   \
+	c->open = c->high = c->low = c->close = d->price;                    \
+	c->volume = d->volume;                                               \
+	c->trading_value = d->price * d->volume;                             \
+	c->trade_count = (uint32_t)rem + 1;                                  \
+	c->is_closed = false;                                                \
+}                                                                        \
+static void update_##SUFFIX(struct trcache_candle *c,                    \
+	struct trcache_trade_data *d)                                        \
+{                                                                        \
+	if (c->trade_count >= (INTERVAL_TICK)) {                             \
+		c->is_closed = true;                                             \
+		return false;                                                    \
+	}                                                                    \
+	c->high = c->high > d->price ? c->high : d->price;                   \
+	c->low = c->low < d->price ? c->low : d->price;                      \
+	c->close = d->price;                                                 \
+	c->volume += d->volume;                                              \
+	c->trading_value += d->price * d->volume;                            \
+	c->trade_count += 1;                                                 \
+	return true;                                                         \
+}                                                                        \
+static const struct candle_update_ops ops_##SUFFIX = {                   \
+	.init = init_##SUFFIX,                                               \
+	.update = update_##SUFFIX,                                           \
+}
+
+
+/*
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
- * @num_worker_threads:       Number of worker threads.
- * @batch_candle_count_pow2:  Number of candles per column batch(log2(cap)).
- * @cached_batch_count_pow2:  Number of batches to cache (log2(cap)).
- * @candle_type_flags:        OR-ed set of #trcache_candle_type values.
- * @flush_ops:                User-supplied callbacks used for flush.
- * @aux_memory_limit:         Maximum number of bytes this trcache may use
- *                            for auxiliary data structures (i.e. everything
- *                            other than candle chunk list/index).
+ * @num_worker_threads:        Number of worker threads.
+ * @batch_candle_count_pow2:   Number of candles per column batch(log2(cap)).
+ * @cached_batch_count_pow2:   Number of batches to cache (log2(cap)).
+ * @time_candle_intervals_ms:  Array of time‑based intervals in milliseconds.
+ * @num_time_candle_intervals: Number of entries in @time_candle_intervals_ms.
+ * @tick_candle_intervals:     Array of tick‑based intervals (trades per candle).
+ * @num_tick_candle_intervals: Number of entries in @tick_candle_intervals.
+ * @time_candle_update_ops:    Array of pointers to update operations for time
+ *                             candles; one entry per interval in
+ *                             @time_candle_intervals_ms.
+ * @tick_candle_update_ops:    Array of pointers to update operations for tick
+ *                             candles; one entry per interval in
+ *                             @tick_candle_intervals.
+ * @flush_ops:                 User-supplied callbacks used for flush.
+ * @aux_memory_limit:          Maximum number of bytes this trcache may use
+ *                             for auxiliary data structures (i.e. everything
+ *                             other than candle chunk list/index).
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -264,6 +286,12 @@ typedef struct trcache_init_ctx {
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
 	trcache_candle_type_flags candle_type_flags;
+	const int *time_candle_intervals_ms;
+	int num_time_candle_intervals;
+	const int *tick_candle_intervals;
+	int num_tick_candle_intervals;
+	const struct candle_update_ops **time_candle_update_ops;
+	const struct candle_update_ops **tick_candle_update_ops;
 	struct trcache_flush_ops flush_ops;
 	size_t aux_memory_limit;
 } trcache_init_ctx;
@@ -338,78 +366,120 @@ int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end.
+ * @brief   Copy @count time‑based candles ending at @ts_end for a symbol ID.
  *
- * @param   cache:       Handle from trcache_init().
- * @param   symbol_id:   Symbol ID from trcache_register_symbol().
- * @param   candle_type: Candle type to query.
- * @param   field_mask:  Bitmask of desired candle fields.
- * @param   ts_end:      Timestamp belonging to the last candle.
- * @param   count:       Number of candles to copy.
- * @param   batch:       Pre-allocated destination batch.
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
+ * @param   time_type_idx:  Zero‑based index into the time interval array
+ *                          supplied via #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   ts_end:         Timestamp belonging to the last candle (inclusive).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_and_ts(struct trcache *cache,
-	int symbol_id, trcache_candle_type candle_type,
+int trcache_get_time_candles_by_symbol_id_ts(trcache *cache,
+	int symbol_id, int time_type_idx, trcache_candle_field_flags field_mask,
+	uint64_t ts_end, int count, trcache_candle_batch *batch);
+
+/**
+ * @brief   Copy @count time‑based candles ending at @ts_end
+ *          for a symbol string.
+ *
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_str:     NULL‑terminated symbol string.
+ * @param   time_type_idx:  Zero‑based index into the time interval array
+ *                          supplied via #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   ts_end:         Timestamp belonging to the last candle (inclusive).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_time_candles_by_symbol_str_ts(trcache *cache,
+	const char *symbol_str, int time_type_idx,
 	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
-	struct trcache_candle_batch *batch);
+	trcache_candle_batch *batch);
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
+ * @brief   Copy @count time‑based candles ending at the candle located
+ *          @offset from the most recent candle for a symbol ID.
  *
- * @param   cache:       Handle from trcache_init().
- * @param   symbol_str:  NULL-terminated symbol string.
- * @param   candle_type: Candle type to query.
- * @param   field_mask:  Bitmask of desired candle fields.
- * @param   ts_end:      Timestamp belonging to the last candle.
- * @param   count:       Number of candles to copy.
- * @param   batch:       Pre-allocated destination batch.
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
+ * @param   time_type_idx:  Index into the time interval array supplied via
+ *                          #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   offset:         Offset from the most recent candle (offset 0).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_and_ts(struct trcache *cache,
-	const char *symbol_str, trcache_candle_type candle_type,
-	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
-	struct trcache_candle_batch *batch);
+int trcache_get_time_candles_by_symbol_id_offset(trcache *cache,
+	int symbol_id, int time_type_idx, trcache_candle_field_flags field_mask,
+	int offset, int count, trcache_candle_batch *batch);
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
- *          the most recent candle.
+ * @brief   Copy @count time‑based candles ending at the candle located
+ *          @offset from the most recent candle for a symbol string.
  *
- * @param   cache:       Handle from trcache_init().
- * @param   symbol_id:   Symbol ID from trcache_register_symbol().
- * @param   candle_type: Candle type to query.
- * @param   field_mask:  Bitmask of desired candle fields.
- * @param   offset:      Offset from the most recent candle (0 == most recent).
- * @param   count:       Number of candles to copy.
- * @param   batch:       Pre-allocated destination batch.
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_str:     NULL‑terminated symbol string.
+ * @param   time_type_idx:  Index into the time interval array supplied via
+ *                          #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   offset:         Offset from the most recent candle (offset 0).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_and_offset(struct trcache *cache,
-	int symbol_id, trcache_candle_type candle_type,
+int trcache_get_time_candles_by_symbol_str_offset(trcache *cache,
+	const char *symbol_str, int time_type_idx,
 	trcache_candle_field_flags field_mask, int offset, int count,
-	struct trcache_candle_batch *batch);
+	trcache_candle_batch *batch);
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
- *          the most recent candle for a symbol string.
+ * @brief   Copy @count tick‑based candles ending at the candle located
+ *          @offset from the most recent candle for a symbol ID.
  *
- * @param   cache:       Handle from trcache_init().
- * @param   symbol_str:  NULL-terminated symbol string.
- * @param   candle_type: Candle type to query.
- * @param   field_mask:  Bitmask of desired candle fields.
- * @param   offset:      Offset from the most recent candle (0 == most recent).
- * @param   count:       Number of candles to copy.
- * @param   batch:       Pre-allocated destination batch.
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
+ * @param   tick_type_idx:  Index into the tick interval array supplied via
+ *                          #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   offset:         Offset from the most recent candle (offset 0).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_and_offset(struct trcache *cache,
-	const char *symbol_str, trcache_candle_type candle_type,
+int trcache_get_tick_candles_by_symbol_id_offset(trcache *cache,
+	int symbol_id, int tick_type_idx, trcache_candle_field_flags field_mask,
+	int offset, int count, trcache_candle_batch *batch);
+
+/**
+ * @brief   Copy @count tick‑based candles ending at the candle located
+ *          @offset from the most recent candle for a symbol string.
+ *
+ * @param   cache:          Handle returned by trcache_init().
+ * @param   symbol_str:     NULL‑terminated symbol string.
+ * @param   tick_type_idx:  Index into the tick interval array supplied via
+ *                          #trcache_init_ctx.
+ * @param   field_mask:     Bitmask of desired candle fields.
+ * @param   offset:         Offset from the most recent candle (offset 0).
+ * @param   count:          Number of candles to copy.
+ * @param   batch:          Pre‑allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_tick_candles_by_symbol_str_offset(trcache *cache,
+	const char *symbol_str, int tick_type_idx,
 	trcache_candle_field_flags field_mask, int offset, int count,
-	struct trcache_candle_batch *batch);
+	trcache_candle_batch *batch);
 
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
