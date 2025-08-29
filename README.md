@@ -260,7 +260,7 @@ This stops all threads, flushes any remaining data, and releases all allocated m
 
 The journey of a single trade begins when `trcache_feed_trade_data` is called.
 
-1.  **Ingestion**: The trade is copied into a thread-local `trade_data_buffer` associated with its symbol. This buffer is a linked list of chunks, allowing for lock-free writes from the user thread.
+1.  **Ingestion**: The trade is copied into a thread-local `trade_data_buffer` associated with its symbol. This buffer is a linked list of `trade_data_chunk `s, allowing for lock-free writes from the user thread.
 2.  **Apply Stage**: A worker thread assigned to the `APPLY` stage consumes trades from the `trade_data_buffer`. It updates the currently active (mutable) `trcache_candle` within a `candle_chunk`. Only the most recent candle is mutable; all prior candles are considered immutable.
 3.  **Convert Stage**: Once a candle is complete, a worker thread in the `CONVERT` stage transforms the immutable row-oriented candle data into a column-oriented `trcache_candle_batch`. This AoS-to-SoA (Array of Structs to Struct of Arrays) transformation is key for analytical performance.
 4.  **Flush Stage**: When a `candle_chunk` is fully converted into a columnar batch and the number of unflushed batches exceeds a threshold, a `FLUSH` worker invokes the user-provided `trcache_flush_ops` callbacks to persist the data.
