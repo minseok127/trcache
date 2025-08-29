@@ -211,4 +211,8 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 - **Worker Threads**: Workers are the execution units. Each worker maintains a list of assigned work items (a combination of symbol, candle type, and pipeline stage). They continuously iterate through their work list, executing the corresponding tasks (`worker_do_apply`, `worker_do_convert`, etc.).
 - **Communication**: The admin and worker threads communicate via lock-free queues (`scalable_queue`). This ensures that scheduling messages can be sent and received with minimal contention.
 
+### Opportunistic Apply
+
+While the `APPLY` stage is typically handled asynchronously by worker threads, `trcache` employs a critical optimization. Trading strategies are validated through backtesting, which simulates trades using historical, completed candles. Live trading aims to replicate this backtested logic, meaning trading decisions are made precisely at the moment a candle completes. To ensure the accuracy of these decisions, it is crucial that all buffered trades are applied to a candle just before it finalizes. `trcache` achieves this by allowing the user thread that feeds the data to directly apply buffered trades when a candle (either time-based or tick-based) is nearing completion. At all other times, the apply workload is deferred to worker threads, maximizing throughput without sacrificing decision-making accuracy.
+
 ## Evaluation
