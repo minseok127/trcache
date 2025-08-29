@@ -500,7 +500,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 
 		/* Then move to the next chunk */
-		if (advance_to_new_chunk(list, chunk, ops, trade) == -1) {
+		if (advance_to_new_chunk(list, chunk, trade) == -1) {
 			errmsg(stderr, "Failure on advance_to_new_chunk()\n");
 			return -1;
 		}

@@ -15,9 +15,6 @@
 
 #include "trcache.h"
 
-#define MAX_NUM_THREADS (1024)
-#define MAX_CANDLE_TYPES_PER_BASE (32)
-
 typedef struct trcache trcache;
 
 /*
@@ -83,18 +80,5 @@ struct trcache {
 	struct worker_thread_args *worker_args;
 	struct memory_accounting mem_acc;
 };
-
-/**
- * @brief	Count how many candle-type bits are set in @flags.
- *
- * @param	flags:	Bit-OR of ::trcache_candle_type values.
- *
- * @return	Number of enabled types (0...TRCACHE_NUM_CANDLE_TYPE).
- */
-static inline int trcache_candle_type_count(
-	trcache_candle_type_flags flags)
-{
-	return __builtin_popcount((unsigned int)flags);
-}
 
 #endif /* TRCACHE_INTERNAL_H */

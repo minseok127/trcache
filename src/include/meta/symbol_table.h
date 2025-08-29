@@ -10,7 +10,6 @@
 #include "utils/hash_table.h"
 #include "sched/sched_pipeline_stats.h"
 #include "sched/worker_stat_board.h"
-#include "meta/trcache_internal.h"
 
 #include "trcache.h"
 

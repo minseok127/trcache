@@ -5,8 +5,6 @@
 
 #include "trcache.h"
 
-#include "meta/trcache_interanl.h"
-
 /**
  * Identifiers for pipeline stages executed by workers.
  */

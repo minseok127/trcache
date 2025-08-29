@@ -170,8 +170,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		if (ctx->num_candle_types[i] > MAX_CANDLE_TYPES_PER_BASE) {
 			errmsg(stderr, "Too many candle types for base %d. MAX is %d\n",
 				i, MAX_CANDLE_TYPES_PER_BASE);
-			symbol_table_destroy(tc->symbol_table, tc);
-			pthread_key_delete(&tc->pthread_trcache_key);
+			symbol_table_destroy(tc->symbol_table);
+			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
 			return NULL;
 		}
@@ -484,7 +484,6 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 	int symbol_id, trcache_candle_type type)
 {
 	struct symbol_entry *entry;
-	int bit;
 
 	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 	if (entry == NULL) {
@@ -492,13 +491,14 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 		return NULL;
 	}
 
-	bit = __builtin_ctz(type);
-	if (bit < 0 || bit >= TRCACHE_NUM_CANDLE_TYPE) {
-		errmsg(stderr, "Invalid candle type\n");
+	if (type.base < 0 || type.base >= NUM_CANDLE_BASES ||
+	    type.type_idx < 0 || type.type_idx >= tc->num_candle_types[type.base]) {
+		errmsg(stderr, "Invalid candle type (base=%d, idx=%d)\n",
+			type.base, type.type_idx);
 		return NULL;
 	}
 
-	return entry->candle_chunk_list_ptrs[bit];
+	return entry->candle_chunk_list_ptrs[type.base][type.type_idx];
 }
 
 /*
@@ -512,13 +512,16 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
  * rolls over.
  *
  * @param   idx:      Zero‑based index into the time‑based candle array.
+ * @param   type_idx: Candle type index in the CANDLE_TIME_BASE.
  * @param   admin_ts: Current admin timestamp in milliseconds.
  *
  * @return  true if the candle is in its final admin period, otherwise false.
  */
-static inline bool time_candle_should_apply(int idx, uint64_t admin_ts)
+static inline bool time_candle_should_apply(struct trcache* tc, int type_idx,
+	uint64_t admin_ts)
 {
-	uint64_t interval = candle_time_intervals_ms[idx];
+	uint64_t interval
+		= tc->candle_configs[CANDLE_TIME_BASE][type_idx].threshold.interval_ms;
 	uint64_t remainder = admin_ts % interval;
 	uint64_t time_left = interval - remainder;
 	return time_left <= ADMIN_THREAD_PERIOD_MS;
@@ -534,14 +537,17 @@ static inline bool time_candle_should_apply(int idx, uint64_t admin_ts)
  * candle. Applying buffered trades at this point ensures the candle
  * reflects all trades before it is read.
  *
- * @param   idx:     Zero‑based index into the tick‑based candle array.
+ * @param   idx:      Zero‑based index into the tick‑based candle array.
+ * @param   type_idx: Candle type index in the CANDLE_TICK_BASE.
  * @param   trade_id: Identifier of the incoming trade.
  *
  * @return  true if this trade is the last trade in the candle, otherwise false.
  */
-static inline bool tick_candle_should_apply(int idx, uint64_t trade_id)
+static inline bool tick_candle_should_apply(struct trcache* tc, int type_idx,
+	uint64_t trade_id)
 {
-	int interval_tick = candle_tick_intervals[idx];
+	uint32_t interval_tick
+		= tc->candle_configs[CANDLE_TICK_BASE][type_idx].threshold.num_ticks;
 	return (trade_id % (uint64_t)interval_tick)
 		== (uint64_t)(interval_tick - 1);
 }
@@ -568,51 +574,56 @@ static void maybe_apply_trades(struct trcache *tc,
 {
 	uint64_t admin_ts = atomic_load_explicit(&g_admin_current_ts_ms,
 		memory_order_acquire);
+	struct trade_data_buffer_cursor *cur;
+	struct candle_chunk_list *list;
+	struct trcache_trade_data *array;
+	trcache_candle_type type;
+	int count;
 
-	/* Iterate over all candle types set in the bitmask. */
-	for (uint32_t m = tc->candle_type_flags; m != 0; m &= (m - 1)) {
-		int idx = __builtin_ctz(m);
-		trcache_candle_type type = (trcache_candle_type)(1U << idx);
-		bool should_apply = false;
-
-		if (idx < NUM_TIME_BASED_CANDLE_TYPES) {
-			should_apply = time_candle_should_apply(idx, admin_ts);
-		} else {
-			int tick_idx = idx - NUM_TIME_BASED_CANDLE_TYPES;
-			should_apply = tick_candle_should_apply(tick_idx, data->trade_id);
-		}
-
-		if (!should_apply) {
-			continue;
-		}
-
-		/* 
-		 * Acquire a cursor for this candle type.
-		 * Skip if another worker thread holds it.
-		 */
-		struct trade_data_buffer_cursor *cur
-			= trade_data_buffer_acquire_cursor(buf, type);
-		if (cur == NULL) {
-			continue;
-		}
-
-		struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
-		if (list != NULL) {
-			struct trcache_trade_data *array = NULL;
-			int count = 0;
-
-			/* Consume and apply all trades available for this cursor. */
-			while (trade_data_buffer_peek(buf, cur, &array, &count)
-					&& count > 0) {
-				for (int i = 0; i < count; i++) {
-					candle_chunk_list_apply_trade(list, &array[i]);
-				}
-
-				trade_data_buffer_consume(buf, cur, count);
+	/* Iterate over time-based candles */
+	for (int i = 0; i < tc->num_candle_types[CANDLE_TIME_BASE]; i++) {
+		if (time_candle_should_apply(tc, i, admin_ts)) {
+			type.base = CANDLE_TIME_BASE;
+			type.type_idx = i;
+			cur = trade_data_buffer_acquire_cursor(buf, type);
+			if (cur == NULL) {
+				continue;
 			}
-		}
 
-		trade_data_buffer_release_cursor(cur);
+			list = get_chunk_list(tc, symbol_id, type);
+			while (trade_data_buffer_peek(buf, cur, &array, &count)
+				&& count > 0) {
+					for (int j = 0; j < count; j++) {
+						candle_chunk_list_apply_trade(list, &array[j]);
+					}
+					trade_data_buffer_consume(buf, cur, count);
+				}
+			}
+			trade_data_buffer_release_cursor(cur);
+		}
+	}
+
+	/* Iterate over tick-based candles */
+	for (int i = 0; i < tc->num_candle_types[CANDLE_TICK_BASE]; ++i) {
+		if (tick_candle_should_apply(tc, i, data->trade_id)) {
+			type.base = CANDLE_TICK_BASE;
+			type.type_idx = i;
+			cur = trade_data_buffer_acquire_cursor(buf, type);
+			if (cur == NULL) {
+				continue;
+			}
+
+			list = get_chunk_list(tc, symbol_id, type);
+			while (trade_data_buffer_peek(buf, cur, &array, &count)
+				&& count > 0) {
+					for (int j = 0; j < count; j++) {
+						candle_chunk_list_apply_trade(list, &array[j]);
+					}
+					trade_data_buffer_consume(buf, cur, count);
+				}
+			}
+			trade_data_buffer_release_cursor(cur);
+		}
 	}
 }
 

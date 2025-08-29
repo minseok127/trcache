@@ -80,7 +80,7 @@ void update_all_pipeline_stats(struct trcache *cache)
 	num = table->num_symbols;
 
 	for (int i = 0; i < num; i++) {
-		sched_pipeline_calc_rates(arr[i], cache->candle_type_flags);
+		sched_pipeline_calc_rates(cache, arr[i]);
 	}
 
 	atomsnap_release_version(ver);
@@ -103,17 +103,18 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 
 		for (int w = 0; w < cache->num_workers; w++) {
 			struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-			for (uint32_t m = cache->candle_type_flags; m != 0; m &= m - 1) {
-				idx = __builtin_ctz(m);
-				if (s == WORKER_STAT_STAGE_APPLY) {
-					cycles += b->apply_stat[idx].cycles;
-					count += b->apply_stat[idx].work_count;
-				} else if (s == WORKER_STAT_STAGE_CONVERT) {
-					cycles += b->convert_stat[idx].cycles;
-					count += b->convert_stat[idx].work_count;
-				} else {
-					cycles += b->flush_stat[idx].cycles;
-					count += b->flush_stat[idx].work_count;
+			for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
+				for (int j = 0; j < cache->num_candle_types[i]; ++j) {
+					if (s == WORKER_STAT_STAGE_APPLY) {
+						cycles += b->apply_stat[i][j].cycles;
+						count += b->apply_stat[i][j].work_count;
+					} else if (s == WORKER_STAT_STAGE_CONVERT) {
+						cycles += b->convert_stat[i][j].cycles;
+						count += b->convert_stat[i][j].work_count;
+					} else { // FLUSH
+						cycles += b->flush_stat[i][j].cycles;
+						count += b->flush_stat[i][j].work_count;
+					}
 				}
 			}
 		}
@@ -150,13 +151,15 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 	for (int i = 0; i < num; i++) {
 		struct symbol_entry *e = arr[i];
 
-		for (uint32_t m = cache->candle_type_flags; m != 0; m &= m - 1) {
-			int idx = __builtin_ctz(m);
-			struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[idx];
+		for (int j = 0; j < NUM_CANDLE_BASES; ++j) {
+			for (int k = 0; k < cache->num_candle_types[j]; ++k) {
+				struct sched_stage_rate *r
+					= &e->pipeline_stats.stage_rates[j][k];
 
-			out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
-			out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-			out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
+				out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
+				out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
+				out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
+			}
 		}
 	}
 

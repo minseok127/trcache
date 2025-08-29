@@ -20,6 +20,9 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+#define MAX_NUM_THREADS (1024)
+#define MAX_CANDLE_TYPES_PER_BASE (32)
+
 /*
  * @brief   Alignment (in bytes) of every vector array.
  *

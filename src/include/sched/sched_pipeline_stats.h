@@ -42,22 +42,22 @@ struct sched_stage_rate {
  */
 struct sched_pipeline_stats {
 	uint64_t timestamp_ns;
-	struct sched_stage_snapshot stage_snaps[TRCACHE_NUM_CANDLE_TYPE];
-	struct sched_stage_rate stage_rates[TRCACHE_NUM_CANDLE_TYPE];
+	struct sched_stage_snapshot stage_snaps[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct sched_stage_rate stage_rates[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
 };
 
 /**
  * @brief   Refresh pipeline snapshot and update throughput rates.
  *
- * @param   entry:              Symbol entry whose counters are polled.
- * @param   candle_type_flags:  Valid candle type flags.
+ * @param   cache:  Global cache instance.
+ * @param   entry:  Symbol entry whose counters are polled.
  *
  * The function fetches the latest stage counters from the symbol's pipeline
  * data structures, computes per-stage input rates, updates the exponential
  * moving averages in @entry->pipeline_stats.stage_rates and refreshes the
  * snapshot with the new values.
  */
-void sched_pipeline_calc_rates(struct symbol_entry *entry,
-	trcache_candle_type_flags candle_type_flags);
+void sched_pipeline_calc_rates(struct trcache *cache,
+	struct symbol_entry *entry);
 
 #endif /* SCHED_PIPELINE_STATS_H */
