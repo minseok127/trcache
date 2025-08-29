@@ -102,7 +102,7 @@ const struct candle_update_ops ops_5m_candle = {
 
 #### `trcache_flush_ops`
 
-This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations.
+This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations. Users should provide these callbacks for each candle type.
 
 ```c
 typedef struct trcache_flush_ops {
