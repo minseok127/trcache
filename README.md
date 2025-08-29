@@ -77,7 +77,7 @@ TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 
 ### 3. Implement Update and Flush Operations
 
-`trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `candle_update_ops` and `trcache_flush_ops` structures.
+`trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `candle_update_ops` and `trcache_flush_ops` structures. Users should provide these callbacks for each candle type.
 
 #### `candle_update_ops`
 
@@ -102,7 +102,7 @@ const struct candle_update_ops ops_5m_candle = {
 
 #### `trcache_flush_ops`
 
-This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations. Users should provide these callbacks for each candle type.
+This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations.
 
 ```c
 typedef struct trcache_flush_ops {
