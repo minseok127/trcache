@@ -114,7 +114,7 @@ typedef struct trcache_flush_ops {
 } trcache_flush_ops;
 ```
 
-- Synchronous Flush: The flush callback performs all I/O operations and returns NULL. The engine considers the batch flushed immediately.
+- Synchronous Flush: The flush callback performs all I/O operations and returns `NULL`. The engine considers the batch flushed immediately.
 ```C
 void* sync_flush(trcache *c, trcache_candle_batch *b, void *flush_ctx) {
     // Write candle data from batch 'b' to disk.
@@ -133,7 +133,7 @@ const struct candle_update_ops ops_5m_candle = {
 };
 ```
 
-- Asynchronous Flush: The flush callback initiates an I/O operation and returns a non-NULL handle (e.g., a pointer to a job tracking object). The engine then polls is_done until it returns true, after which it calls destroy_handle for cleanup.
+- Asynchronous Flush: The flush callback initiates an I/O operation and returns a non-NULL handle (e.g., a pointer to a job tracking object). The engine then polls `is_done` until it returns `true`, after which it calls `destroy_handle` for cleanup.
 	- `void* flush(..., void *flush_ctx)`: Initiates the async I/O and returns a unique `handle` to track the operation.
 	- `bool is_done(..., void *handle)`: Receives the `handle` returned by `flush` and checks if the operation is complete. Returns `true` when done.
 	- `void destroy_handle(void *handle, ...)`: Called after `is_done` returns `true`. Frees any resources associated with the `handle`.
