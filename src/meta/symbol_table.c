@@ -161,10 +161,12 @@ void symbol_table_destroy(struct symbol_table *table)
 	for (int i = 0; i < table->num_symbols; i++) {
 		entry = symbol_ptr_array[i];
 
-		for (int j = 0; j < TRCACHE_NUM_CANDLE_TYPE; j++) {
-			if (entry->candle_chunk_list_ptrs[j] != NULL) {
-				candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j]);
-				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
+		for (int j = 0; j < NUM_CANDLE_BASES; j++) {
+			for (int k = 0; k < tc->num_candle_types[j]; k++) {
+				if (entry->candle_chunk_list_ptrs[j][k] != NULL) {
+					candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j][k]);
+					destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j][k]);
+				}
 			}
 		}
 
@@ -253,9 +255,6 @@ static struct symbol_entry *init_symbol_entry(
 	struct candle_chunk_list_init_ctx ctx = { 0, };
 	struct symbol_entry *entry = calloc(1, sizeof(struct symbol_entry));
 	struct candle_chunk_list *candle_chunk_list_ptr;
-	const struct candle_update_ops *update_ops;
-	trcache_candle_type type;
-	int bit;
 
 	if (entry == NULL) {
 		errmsg(stderr, "#symbol_entry allocation failed\n");
@@ -281,39 +280,38 @@ static struct symbol_entry *init_symbol_entry(
 	}
 
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		for (int t = 0; t < TRCACHE_NUM_CANDLE_TYPE; t++) {
-			atomic_init(&entry->in_progress[s][t], -1);
+		for (int i = 0; i < NUM_CANDLE_BASES; i++) {
+			for (int j = 0; j < MAX_CANDLE_TYPES_PER_BASE; j++) {
+				atomic_init(&entry->in_progress[s][i][j], -1);
+			}
 		}
 	}
 
-	for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
-		bit = __builtin_ctz(m);
-		type = 1 << bit;
-		update_ops = get_candle_update_ops(type);
-		assert(update_ops != NULL);
+	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
+		for (int j = 0; j < tc->num_candle_types[i]; j++) {
+			trcache_candle_type type = { .base = i, .type_idx = j };
+			
+			ctx.trc = tc;
+			ctx.candle_type = type;
+			ctx.symbol_id = id;
 
-		ctx.trc = tc;
-		ctx.update_ops = update_ops;
-		ctx.candle_type = type;
-		ctx.symbol_id = id;
-
-		candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
-		if (candle_chunk_list_ptr == NULL) {
-			errmsg(stderr, "Candle chunk list allocation is failed\n");
-
-			for (int i = 0; i < TRCACHE_NUM_CANDLE_TYPE; i++) {
-				if (entry->candle_chunk_list_ptrs[i] != NULL) {
-					destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[i]);
+			candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
+			if (candle_chunk_list_ptr == NULL) {
+				errmsg(stderr, "Candle chunk list allocation is failed\n");
+				for (int b = 0; b < NUM_CANDLE_BASES; b++) {
+					for (int t = 0; t < MAX_CANDLE_TYPES_PER_BASE; t++) {
+						if (entry->candle_chunk_list_ptrs[b][t] != NULL) {
+							destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[b][t]);
+						}
+					}
 				}
+				trade_data_buffer_destroy(entry->trd_buf);
+				free(entry->symbol_str);
+				free(entry);
+				return NULL;
 			}
-
-			trade_data_buffer_destroy(entry->trd_buf);
-			free(entry->symbol_str);
-			free(entry);
-			return NULL;
+			entry->candle_chunk_list_ptrs[i][j] = candle_chunk_list_ptr;
 		}
-
-		entry->candle_chunk_list_ptrs[bit] = candle_chunk_list_ptr;
 	}
 
 	entry->id = id;

@@ -294,22 +294,23 @@ static const struct candle_update_ops ops_##SUFFIX = {                   \
  * and flush behavior.
  *
  * @threshold:  A union holding the threshold value for closing a candle.
- * @update_ops: A pointer to the callbacks for initializing and updating candle.
- * @flush_ops:  A pointer to the callbacks for flushing completed candle batch.
+ * @update_ops: Callbacks for initializing and updating a candle.
+ * @flush_ops:  Callbacks for flushing a completed candle batch.
  */
 typedef struct {
 	union {
 		uint64_t interval_ms; /* For CANDLE_TIME_BASE */
 		uint32_t num_ticks;   /* For CANDLE_TICK_BASE */
 	} threshold;
-	const struct candle_update_ops *update_ops;
-	const struct trcache_flush_ops *flush_ops;
+	const struct candle_update_ops update_ops;
+	const struct trcache_flush_ops flush_ops;
 } trcache_candle_config;
 
 /*
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
  * @candle_types:              Array of pointers to candle configuration arrays.
+ * @num_candle_types:          Number of candle types for each candle base.
  * @batch_candle_count_pow2:   Number of candles per column batch(log2(cap)).
  * @cached_batch_count_pow2:   Number of batches to cache (log2(cap)).
  * @aux_memory_limit:          Maximum number of bytes this trcache may use
@@ -323,6 +324,7 @@ typedef struct {
  */
 typedef struct trcache_init_ctx {
 	const trcache_candle_config *candle_types[NUM_CANDLE_BASES];
+	int num_candle_types[NUM_CANDLE_BASES];
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
 	size_t aux_memory_limit;
@@ -631,7 +633,6 @@ static inline void trcache_batch_alloc_on_stack(
 
 	dst->capacity = capacity;
 	dst->num_candles = 0;
-	dst->candle_type = -1;
 	dst->symbol_id = -1;
 
 	dst->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?

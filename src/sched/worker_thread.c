@@ -19,22 +19,22 @@
 /**
  * @brief   Create a 64-bit identifier for a work item.
  *
- * Combines @p symbol_id, @p stage and @p type (converted to index) so it can
- * be used as a hash table key.
+ * Combines @symbol_id, @stage and @type (converted to base and index),
+ * so it can be used as a hash table key.
  *
  * @param   symbol_id:  Numeric symbol identifier.
  * @param   stage:      Stage in which the work belongs.
- * @param   type:       Candle type mask.
+ * @param   type:       Candle type (base + idx).
  *
  * @return  Packed 64-bit key.
  */
 static uint64_t pack_work_key(int symbol_id, worker_stat_stage_type stage,
         trcache_candle_type type)
 {
-	int idx = worker_ct_to_idx(type);
 	return ((uint64_t)(uint32_t)symbol_id << 32) |
 		((uint64_t)stage << 16) |
-		(uint64_t)idx;
+		((uint64_t)type.base << 8) |
+		(uint64_t)type.type_idx;
 }
 
 /**
@@ -54,7 +54,8 @@ static void worker_insert_work(struct worker_state *state, uint64_t key)
 
 	item->key.symbol_id = (int)(key >> 32);
 	item->key.stage = (uint8_t)((key >> 16) & 0xFF);
-	item->key.candle_idx = (uint8_t)(key & 0xFF);
+	item->key.candle_type.base = (uint8_t)((key >> 8) & 0xFF);
+	item->key.candle_type.type_idx = (uint8_t)(key & 0xFF);
 
 	list_add_tail(&item->node, &state->work_list);
 	ht_insert(state->work_map, (void *)key, sizeof(void *), item);
@@ -93,18 +94,20 @@ static void worker_handle_add_work(struct trcache *cache,
 {
 	struct symbol_entry *entry = symbol_table_lookup_entry(
 		cache->symbol_table, cmd->symbol_id);
-	int idx, cur_val, expected = -1;
+	int base, type_idx, cur_val, expected = -1;
 	uint64_t key;
 
 	if (!entry) {
 		return;
 	}
 
-	idx = worker_ct_to_idx(cmd->candle_type);
-	cur_val = atomic_load(&entry->in_progress[cmd->stage][idx]);
+	base = cmd->candle_type.base;
+	type_idx = cmd->candle_type.type_idx;
 
+	cur_val = atomic_load(&entry->in_progress[cmd->stage][base][type_idx]);
 	if (cur_val == -1) {
-		if (atomic_compare_exchange_strong(&entry->in_progress[cmd->stage][idx],
+		if (atomic_compare_exchange_strong(
+				&entry->in_progress[cmd->stage][base][type_idx],
 				&expected, state->worker_id)) {
 			key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
 			worker_insert_work(state, key);
@@ -125,16 +128,18 @@ static void worker_handle_remove_work(struct trcache *cache,
 	struct symbol_entry *entry = symbol_table_lookup_entry(
 		cache->symbol_table, cmd->symbol_id);
 	uint64_t key;
-	int idx, cur;
+	int base, type_idx, cur;
 
 	if (!entry) {
 		return;
 	}
 
-	idx = worker_ct_to_idx(cmd->candle_type);
-	cur = atomic_load(&entry->in_progress[cmd->stage][idx]);
+	base = cmd->candle_type.base;
+	type_idx = cmd->candle_type.type_idx;
+
+	cur = atomic_load(&entry->in_progress[cmd->stage][base][type_idx]);
 	if (cur == state->worker_id) {
-		atomic_store(&entry->in_progress[cmd->stage][idx], -1);
+		atomic_store(&entry->in_progress[cmd->stage][base][type_idx], -1);
 	}
 	key = pack_work_key(cmd->symbol_id, cmd->stage, cmd->candle_type);
 	worker_remove_work(state, key);
@@ -188,7 +193,7 @@ static void worker_do_apply(struct worker_state *state,
 
 	start = tsc_cycles();
 
-	list = entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+	list = entry->candle_chunk_list_ptrs[type.base][type.type_idx];
 
 	while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
@@ -216,7 +221,7 @@ static void worker_do_convert(struct worker_state *state,
 	struct symbol_entry *entry, trcache_candle_type type)
 {
 	struct candle_chunk_list *list =
-		entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+		entry->candle_chunk_list_ptrs[type.base][type.type_idx];
 	uint64_t start = tsc_cycles();
 
 	candle_chunk_list_convert_to_column_batch(list);
@@ -236,7 +241,7 @@ static void worker_do_flush(struct worker_state *state,
 	struct symbol_entry *entry, trcache_candle_type type)
 {
 	struct candle_chunk_list *list =
-		entry->candle_chunk_list_ptrs[worker_ct_to_idx(type)];
+		entry->candle_chunk_list_ptrs[type.base][type.type_idx];
 	uint64_t start = tsc_cycles();
 
 	candle_chunk_list_flush(list);
@@ -257,7 +262,6 @@ static void worker_execute_item(struct trcache *cache,
 {
 	struct symbol_entry *entry = symbol_table_lookup_entry(
 		cache->symbol_table, item->key.symbol_id);
-	trcache_candle_type type = (1 << item->key.candle_idx);
 
 	if (!entry) {
 		return;
@@ -265,13 +269,13 @@ static void worker_execute_item(struct trcache *cache,
 
 	switch (item->key.stage) {
 		case WORKER_STAT_STAGE_APPLY:
-			worker_do_apply(state, entry, type);
+			worker_do_apply(state, entry, item->key.candle_type);
 			break;
 		case WORKER_STAT_STAGE_CONVERT:
-			worker_do_convert(state, entry, type);
+			worker_do_convert(state, entry, item->key.candle_type);
 			break;
 		case WORKER_STAT_STAGE_FLUSH:
-			worker_do_flush(state, entry, type);
+			worker_do_flush(state, entry, item->key.candle_type);
 			break;
 		default:
 			break;

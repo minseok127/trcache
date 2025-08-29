@@ -16,6 +16,7 @@
 #include "trcache.h"
 
 #define MAX_NUM_THREADS (1024)
+#define MAX_CANDLE_TYPES_PER_BASE (32)
 
 typedef struct trcache trcache;
 
@@ -44,14 +45,13 @@ struct trcache_tls_data {
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
  * @tls_data_ptr_arr:        Pointers to each thread’s tls_data.
  * @symbol_table:            Abstracted symbol table.
- * @candle_type_flags:       Candle type configuration flags.
- * @num_candle_types:        Number of candle types.
+ * @candle_configs:          Candle configurations.
+ * @num_candle_types:        Number of candle types for each base.
  * @num_workers:             Number of worker threads.
  * @batch_candle_count:      Number of candles per column batch.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
  * @flush_threshold:         How many candle batches to buffer before flush.
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
- * @flush_ops:               User-supplied callbacks used for flush.
  * @worker_state_arr:        Per-worker state array of length @num_workers.
  * @stage_ct_mask:           Candle-type ownership mask per stage/worker.
  * @admin_state:             State structure for admin thread.
@@ -67,14 +67,13 @@ struct trcache {
 	_Atomic int tls_id_assigned_flag[MAX_NUM_THREADS];
 	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 	struct symbol_table *symbol_table;
-	trcache_candle_type_flags candle_type_flags;
-	int num_candle_types;
+	trcache_candle_config candle_configs[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	int num_candle_types[NUM_CANDLE_BASES];
 	int num_workers;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
 	int flush_threshold;
 	int flush_threshold_pow2;
-	struct trcache_flush_ops flush_ops;
 	struct worker_state *worker_state_arr;
 	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS];
 	struct admin_state admin_state;

@@ -10,14 +10,14 @@
 /*
  * worker_work_key - Hashable identifier for a work item.
  *
- * @symbol_id: ID of the symbol associated with the work.
- * @stage:     Worker pipeline stage.
- * @candle_idx:Candle type index for the stage.
+ * @symbol_id:  ID of the symbol associated with the work.
+ * @stage:      Worker pipeline stage.
+ * @candle_idx: Candle type for the stage.
  */
 struct worker_work_key {
 	int symbol_id;
 	uint8_t stage;
-	uint8_t candle_idx;
+	trcache_candle_type candle_type;
 };
 
 /*

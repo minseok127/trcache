@@ -7,7 +7,6 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
-#include "pipeline/candle_update_ops.h"
 #include "utils/memstat.h"
 
 #include "trcache.h"
@@ -262,11 +261,13 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
  *
  * @param   trc:       Pointer to the parent trcache instance.
  * @param   chunk:     Pointer to the target candle_chunk.
+ * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush completed synchronously  
  *          0  flush started asynchronously (still pending)  
  */
-int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk);
+int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
+	const struct trcache_flush_ops* flush_ops);
 
 /**
  * @brief   Poll a candle chunk for flush completion.
@@ -276,13 +277,15 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk);
  * flush_ops->is_done(). When the backend signals completion, the flush
  * handle is destroyed and the chunk is marked flushed.
  *
- * @param   trc:    Pointer to the parent trcache instance.
- * @param   chunk:  Pointer to the target candle_chunk.
+ * @param   trc:       Pointer to the parent trcache instance.
+ * @param   chunk:     Pointer to the target candle_chunk.
+ * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush has completed *in this call*.
  *          0  flush has not completed *in this call*.
  */
-int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk);
+int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
+	const struct trcache_flush_ops* flush_ops);
 
 /**
  * @brief   Copy a single mutable candle from a row page into a SoA batch.

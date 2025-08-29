@@ -10,6 +10,7 @@
 #include "utils/hash_table.h"
 #include "sched/sched_pipeline_stats.h"
 #include "sched/worker_stat_board.h"
+#include "meta/trcache_internal.h"
 
 #include "trcache.h"
 
@@ -24,10 +25,10 @@
  * @id:                       Symbol ID.
  */
 struct symbol_entry {
-	struct candle_chunk_list *candle_chunk_list_ptrs[TRCACHE_NUM_CANDLE_TYPE];
+	struct candle_chunk_list *candle_chunk_list_ptrs[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
 	struct trade_data_buffer *trd_buf;
 	struct sched_pipeline_stats pipeline_stats;
-	_Atomic int in_progress[WORKER_STAT_STAGE_NUM][TRCACHE_NUM_CANDLE_TYPE];
+	_Atomic int in_progress[WORKER_STAT_STAGE_NUM][NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
 	char *symbol_str;
 	int id;
 };

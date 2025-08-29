@@ -166,14 +166,28 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	tc->num_candle_types = trcache_candle_type_count(ctx->candle_type_flags);
+	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
+		if (ctx->num_candle_types[i] > MAX_CANDLE_TYPES_PER_BASE) {
+			errmsg(stderr, "Too many candle types for base %d. MAX is %d\n",
+				i, MAX_CANDLE_TYPES_PER_BASE);
+			symbol_table_destroy(tc->symbol_table, tc);
+			pthread_key_delete(&tc->pthread_trcache_key);
+			free(tc);
+			return NULL;
+		}
+
+		tc->num_candle_types[i] = ctx->num_candle_types[i];
+		if (ctx->candle_types[i] && tc->num_candle_types[i] > 0) {
+			memcpy(tc->candle_configs[i], ctx->candle_types[i],
+				sizeof(trcache_candle_config) * tc->num_candle_types[i]);
+		}
+	}
+
 	tc->num_workers = ctx->num_worker_threads;
-	tc->candle_type_flags = ctx->candle_type_flags;
 	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
 	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
 	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
 	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
-	tc->flush_ops = ctx->flush_ops;
 	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
 
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);

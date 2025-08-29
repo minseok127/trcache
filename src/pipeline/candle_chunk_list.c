@@ -150,12 +150,14 @@ free_head_version:
 struct candle_chunk_list *create_candle_chunk_list(
 	struct candle_chunk_list_init_ctx *ctx)
 {
+	trcache_candle_config* config;
 	struct candle_chunk_list *list = NULL;
 	struct atomsnap_init_context atomsnap_ctx = {
 		.atomsnap_alloc_impl = candle_chunk_list_head_alloc,
 		.atomsnap_free_impl = candle_chunk_list_head_free,
 		.num_extra_control_blocks = 0
 	};
+	int base, type_idx;
 
 	if (ctx == NULL || ctx->trc == NULL) {
 		errmsg(stderr, "Argument is NULL\n");
@@ -169,6 +171,14 @@ struct candle_chunk_list *create_candle_chunk_list(
 	}
 
 	list->trc = ctx->trc;
+
+	base = ctx->candle_type.base;
+	type_idx = ctx->candle_type.type_idx;
+	config = &list->trc->candle_configs[base][type_idx];
+
+	list->update_ops = &config->update_ops;
+	list->flush_ops = &config->flush_ops;
+	list->threshold = &config->threshold;
 
 	list->chunk_index = candle_chunk_index_create(
 		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2,
@@ -194,7 +204,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 	atomic_store(&list->last_seq_converted, UINT64_MAX);
 	atomic_store(&list->unflushed_batch_count, 0);
 
-	list->update_ops = ctx->update_ops;
 	list->candle_type = ctx->candle_type;
 	list->symbol_id = ctx->symbol_id;
 
@@ -245,8 +254,10 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	chunk = head_version->head_node;
 	do {
-		if (candle_chunk_flush(chunk_list->trc, chunk) == 0) {
-			while (candle_chunk_flush_poll(chunk_list->trc, chunk) != 1) {
+		if (candle_chunk_flush(chunk_list->trc, chunk,
+				chunk_list->flush_ops) == 0) {
+			while (candle_chunk_flush_poll(chunk_list->trc, chunk,
+				chunk_list->flush_ops) != 1) {
 				/* polling */ ;
 			}
 		}
@@ -267,13 +278,14 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
 static int init_first_candle(struct candle_chunk_list *list,
-	const struct candle_update_ops *ops, struct trcache_trade_data *trade)
+	struct trcache_trade_data *trade)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
 		&list->trc->mem_acc);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
+	const struct candle_update_ops *ops = list->update_ops;
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
@@ -357,9 +369,9 @@ static int advance_to_next_page(struct candle_chunk *chunk,
  * @brief   Allocate a fresh chunk and start its first candle.
  */
 static int advance_to_new_chunk(struct candle_chunk_list *list,
-	struct candle_chunk *prev_chunk, const struct candle_update_ops *ops,
-	struct trcache_trade_data *trade)
+	struct candle_chunk *prev_chunk, struct trcache_trade_data *trade)
 {
+	const struct candle_update_ops *ops = list->update_ops;
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
 		&list->trc->mem_acc);
@@ -428,7 +440,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * the list init function.
 	 */
 	if (chunk == NULL) {
-		if (init_first_candle(list, ops, trade) == -1) {
+		if (init_first_candle(list, trade) == -1) {
 			return -1;
 		}
 
@@ -670,7 +682,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 
 		flush_start_count += 1;
 
-		if (candle_chunk_flush(list->trc, chunk) == 1) {
+		if (candle_chunk_flush(list->trc, chunk, list->flush_ops) == 1) {
 			flush_done_count += 1;
 		}
 
@@ -688,7 +700,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	while (flush_done_count < flush_batch_count) {
 		chunk = head_version->head_node;
 		do {
-			if (candle_chunk_flush_poll(list->trc, chunk) == 1) {
+			if (candle_chunk_flush_poll(list->trc, chunk,
+					list->flush_ops) == 1) {
 				flush_done_count += 1;
 			}
 			chunk = chunk->next;

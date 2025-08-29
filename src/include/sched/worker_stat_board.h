@@ -5,6 +5,8 @@
 
 #include "trcache.h"
 
+#include "meta/trcache_interanl.h"
+
 /**
  * Identifiers for pipeline stages executed by workers.
  */
@@ -30,18 +32,10 @@ struct worker_stage_stat {
  * worker_stat_board - Per-worker performance table split per stage.
  */
 struct worker_stat_board {
-	struct worker_stage_stat apply_stat[TRCACHE_NUM_CANDLE_TYPE];
-	struct worker_stage_stat convert_stat[TRCACHE_NUM_CANDLE_TYPE];
-	struct worker_stage_stat flush_stat[TRCACHE_NUM_CANDLE_TYPE];
+	struct worker_stage_stat apply_stat[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct worker_stage_stat convert_stat[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct worker_stage_stat flush_stat[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
 };
-
-/**
- * @brief Translate candle type bit to a zero-based index.
- */
-static inline int worker_ct_to_idx(trcache_candle_type type)
-{
-	return __builtin_ctz(type);
-}
 
 /**
  * @brief   Add @cycles and @count to APPLY stage statistics.
@@ -49,10 +43,8 @@ static inline int worker_ct_to_idx(trcache_candle_type type)
 static inline void worker_stat_add_apply(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-	int idx = worker_ct_to_idx(type);
-
-	board->apply_stat[idx].cycles += cycles;
-	board->apply_stat[idx].work_count += count;
+	board->apply_stat[type.base][type.type_idx].cycles += cycles;
+	board->apply_stat[type.base][type.type_idx].work_count += count;
 }
 
 /**
@@ -61,10 +53,8 @@ static inline void worker_stat_add_apply(struct worker_stat_board *board,
 static inline void worker_stat_add_convert(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-	int idx = worker_ct_to_idx(type);
-
-	board->convert_stat[idx].cycles += cycles;
-	board->convert_stat[idx].work_count += count;
+	board->convert_stat[type.base][type.type_idx].cycles += cycles;
+	board->convert_stat[type.base][type.type_idx].work_count += count;
 }
 
 /**
@@ -73,10 +63,8 @@ static inline void worker_stat_add_convert(struct worker_stat_board *board,
 static inline void worker_stat_add_flush(struct worker_stat_board *board,
        trcache_candle_type type, uint64_t cycles, uint64_t count)
 {
-	int idx = worker_ct_to_idx(type);
-
-	board->flush_stat[idx].cycles += cycles;
-	board->flush_stat[idx].work_count += count;
+	board->flush_stat[type.base][type.type_idx].cycles += cycles;
+	board->flush_stat[type.base][type.type_idx].work_count += count;
 }
 
 /**
@@ -84,13 +72,15 @@ static inline void worker_stat_add_flush(struct worker_stat_board *board,
  */
 static inline void worker_stat_reset(struct worker_stat_board *board)
 {
-	for (int t = 0; t < TRCACHE_NUM_CANDLE_TYPE; t++) {
-		board->apply_stat[t].cycles = 0;
-		board->apply_stat[t].work_count = 0;
-		board->convert_stat[t].cycles = 0;
-		board->convert_stat[t].work_count = 0;
-		board->flush_stat[t].cycles = 0;
-		board->flush_stat[t].work_count = 0;
+	for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
+		for (int j = 0; j < MAX_CANDLE_TYPES_PER_BASE; ++j) {
+			board->apply_stat[i][j].cycles = 0;
+			board->apply_stat[i][j].work_count = 0;
+			board->convert_stat[i][j].cycles = 0;
+			board->convert_stat[i][j].work_count = 0;
+			board->flush_stat[i][j].cycles = 0;
+			board->flush_stat[i][j].work_count = 0;
+		}
 	}
 }
 
