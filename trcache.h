@@ -80,6 +80,36 @@ typedef uint32_t trcache_candle_field_flags;
 	(((trcache_candle_field_flags)1 << TRCACHE_NUM_CANDLE_FIELD) - 1)
 
 /*
+ * This enum serves as a high-level classifier for different candle aggregation
+ * strategies. For example, CANDLE_TIME_BASE groups all candles formed based on
+ * time intervals, while CANDLE_TICK_BASE groups those formed by a fixed
+ * number of trades. This design allows for the flexible addition of entirely
+ * new candle formation concepts in the future.
+ */
+typedef enum {
+	CANDLE_TIME_BASE,
+	CANDLE_TICK_BASE,
+	NUM_CANDLE_BASES
+} trcache_candle_base;
+
+/**
+ * trcache_candle_type - Uniquely identifies a specific candle type.
+ *
+ * This structure is used for all communication between the user and the trcache
+ * system regarding candle types. It specifies both the fundamental base
+ * (e.g., time-based) and the specific instance within that base (e.g., the
+ * second time-based candle type, which might be a 5-minute candle).
+ *
+ * @base:      The fundamental category of the candle (e.g., CANDLE_TIME_BASE).
+ * @type_idx:  A zero-based index identifying the specific candle type within
+ *             the given base.
+ */
+typedef struct {
+	trcache_candle_base base;
+	int type_idx;
+} trcache_candle_type;
+
+/*
  * trcache_candle - Single candle data structured in row-oriented format.
  *
  * @start_timestamp:    Start timestamp covered by the candle
@@ -112,7 +142,7 @@ typedef struct trcache_candle {
  * @{field}_array: Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned).
  * @capacity:      Capacity of vector arrays.
  * @num_candles:   Number of candles stored in every array.
- * @candle_type:   Engine-defined enum identifying timeframe / n-tick size.
+ * @candle_type:   The candle type identifier.
  * @symbol_id:     Integer symbol ID resolved via symbol table.
  *
  * All array members point into **one contiguous, SIMD-aligned block** so the
@@ -136,7 +166,7 @@ typedef struct trcache_candle_batch {
 	bool *is_closed_array;
 	int capacity;
 	int num_candles;
-	int candle_type;
+	trcache_candle_type candle_type;
 	int symbol_id;
 } trcache_candle_batch;
 
@@ -255,45 +285,48 @@ static const struct candle_update_ops ops_##SUFFIX = {                   \
 	.update = update_##SUFFIX,                                           \
 }
 
+/**
+ * trcache_candle_config - Defines the properties and callbacks
+ *                         for a single candle type.
+ *
+ * This structure encapsulates all user-provided information needed to manage
+ * a specific candle type, including its closing condition, update logic,
+ * and flush behavior.
+ *
+ * @threshold:  A union holding the threshold value for closing a candle.
+ * @update_ops: A pointer to the callbacks for initializing and updating candle.
+ * @flush_ops:  A pointer to the callbacks for flushing completed candle batch.
+ */
+typedef struct {
+	union {
+		uint64_t interval_ms; /* For CANDLE_TIME_BASE */
+		uint32_t num_ticks;   /* For CANDLE_TICK_BASE */
+	} threshold;
+	const struct candle_update_ops *update_ops;
+	const struct trcache_flush_ops *flush_ops;
+} trcache_candle_config;
 
 /*
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
- * @num_worker_threads:        Number of worker threads.
+ * @candle_types:              Array of pointers to candle configuration arrays.
  * @batch_candle_count_pow2:   Number of candles per column batch(log2(cap)).
  * @cached_batch_count_pow2:   Number of batches to cache (log2(cap)).
- * @time_candle_intervals_ms:  Array of time‑based intervals in milliseconds.
- * @num_time_candle_intervals: Number of entries in @time_candle_intervals_ms.
- * @tick_candle_intervals:     Array of tick‑based intervals (trades per candle).
- * @num_tick_candle_intervals: Number of entries in @tick_candle_intervals.
- * @time_candle_update_ops:    Array of pointers to update operations for time
- *                             candles; one entry per interval in
- *                             @time_candle_intervals_ms.
- * @tick_candle_update_ops:    Array of pointers to update operations for tick
- *                             candles; one entry per interval in
- *                             @tick_candle_intervals.
- * @flush_ops:                 User-supplied callbacks used for flush.
  * @aux_memory_limit:          Maximum number of bytes this trcache may use
  *                             for auxiliary data structures (i.e. everything
  *                             other than candle chunk list/index).
+ * @num_worker_threads:        Number of worker threads.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
  * 'trcache_init()' signature).
  */
 typedef struct trcache_init_ctx {
-	int num_worker_threads;
+	const trcache_candle_config *candle_types[NUM_CANDLE_BASES];
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
-	trcache_candle_type_flags candle_type_flags;
-	const int *time_candle_intervals_ms;
-	int num_time_candle_intervals;
-	const int *tick_candle_intervals;
-	int num_tick_candle_intervals;
-	const struct candle_update_ops **time_candle_update_ops;
-	const struct candle_update_ops **tick_candle_update_ops;
-	struct trcache_flush_ops flush_ops;
 	size_t aux_memory_limit;
+	int num_worker_threads;
 } trcache_init_ctx;
 
 /**
