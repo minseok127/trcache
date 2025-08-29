@@ -231,6 +231,17 @@ void atomsnap_release_version(struct atomsnap_version *version)
  * @param   gate:        Target gate.
  * @param   slot_idx:    Control block slot index.
  * @param   new_version: New version to register.
+ *
+ * Atomically swaps the control block to point to the new version. It then
+ * decrements the inner reference count of the old version by the value of its
+ * outer reference count at the time of the swap.
+ *
+ * The logic handles a potential wraparound of the 16-bit outer reference
+ * counter. If the inner counter is still positive after the initial
+ * decrement, it means the outer counter has wrapped around. In this case,
+ * we subtract the wraparound factor (2^16) to correct the inner count.
+ * The final inner count should be <= 0. If it is exactly 0, this writer
+ * is the last user, and it can safely free the old version.
  */
 void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
         struct atomsnap_version *new_version)

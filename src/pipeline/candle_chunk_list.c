@@ -60,6 +60,20 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
  * @brief   Frees the chunks covered by the given head version.
  *
  * @param   version: Version holding the #candle_chunk_list_head_version.
+ *
+ * This function implements a "chain-freeing" mechanism. When a head version
+ * is freed, it checks if it's the current end of the retired list (i.e., its
+ * prev pointer is NULL). If so, it frees its associated chunks.
+ *
+ * After freeing its own chunks, it attempts to free the *next* head version
+ * in the chain. This is necessary because the thread that retired the next
+ * version might have returned early, delegating the cleanup responsibility.
+ *
+ * The race between multiple threads trying to free adjacent versions
+ * is handled by atomically marking the `head_version_prev` pointer using
+ * `atomic_fetch_or` and then using `atomic_compare_exchange_weak`.
+ * This ensures that only one thread can successfully claim the responsibility
+ * for freeing a subsequent version in the chain, preventing double-frees.
  */
 static void candle_chunk_list_head_free(struct atomsnap_version *version)
 {
