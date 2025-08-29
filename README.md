@@ -134,7 +134,7 @@ const struct candle_update_ops ops_5m_candle = {
 ```
 
 - Asynchronous Flush: The flush callback initiates an I/O operation and returns a `non-NULL` handle (e.g., a pointer to a job tracking object). The engine then polls `is_done` until it returns `true`, after which it calls `destroy_handle` for cleanup.
-	- `void* flush(...,)`: Initiates the async I/O and returns a unique `handle` to track the operation.
+	- `void* flush(...)`: Initiates the async I/O and returns a unique `handle` to track the operation.
 	- `bool is_done(..., void *handle)`: Receives the `handle` returned by `flush` and checks if the operation is complete. Returns `true` when done.
 	- `void destroy_handle(void *handle, ...)`: Called after `is_done` returns `true`. Frees any resources associated with the `handle`.
 ```C
