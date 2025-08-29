@@ -210,3 +210,5 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
     - Dispatches `ADD_WORK` and `REMOVE_WORK` messages to worker threads to dynamically rebalance assignments.
 - **Worker Threads**: Workers are the execution units. Each worker maintains a list of assigned work items (a combination of symbol, candle type, and pipeline stage). They continuously iterate through their work list, executing the corresponding tasks (`worker_do_apply`, `worker_do_convert`, etc.).
 - **Communication**: The admin and worker threads communicate via lock-free queues (`scalable_queue`). This ensures that scheduling messages can be sent and received with minimal contention.
+
+## Evaluation
