@@ -87,7 +87,7 @@ This structure defines the logic for how a candle is initialized from the first 
 
 The library provides helper macros to easily define standard time-based and tick-based candle logic.
 ```c
-// Define logic for a 5-minute candle
+// Define logic for a 5-minute (300000 milliseconds) candle
 DEFINE_TIME_CANDLE_OPS(5m, 300000);
 
 // Define logic for a 100-tick candle
