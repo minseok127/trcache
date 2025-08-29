@@ -140,7 +140,6 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 	b->num_candles = 0;
 	b->capacity = capacity;
 	b->symbol_id = -1;
-	b->candle_type = -1;
 
 	b->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
 		(uint64_t *)((uint8_t *)base + off_start_ts) : NULL;

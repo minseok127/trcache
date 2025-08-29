@@ -162,7 +162,7 @@ void symbol_table_destroy(struct symbol_table *table)
 		entry = symbol_ptr_array[i];
 
 		for (int j = 0; j < NUM_CANDLE_BASES; j++) {
-			for (int k = 0; k < tc->num_candle_types[j]; k++) {
+			for (int k = 0; k < MAX_CANDLE_TYPES_PER_BASE; k++) {
 				if (entry->candle_chunk_list_ptrs[j][k] != NULL) {
 					candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j][k]);
 					destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j][k]);

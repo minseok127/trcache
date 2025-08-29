@@ -50,7 +50,7 @@ struct trcache_tls_data {
  * @flush_threshold:         How many candle batches to buffer before flush.
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
  * @worker_state_arr:        Per-worker state array of length @num_workers.
- * @stage_ct_mask:           Candle-type ownership mask per stage/worker.
+ * @stage_ct_mask:           Candle-type ownership mask per stage/worker/base.
  * @admin_state:             State structure for admin thread.
  * @sched_msg_free_list:     Free list for scheduler message objects.
  * @admin_thread:            Handle for admin thread.
@@ -72,7 +72,7 @@ struct trcache {
 	int flush_threshold;
 	int flush_threshold_pow2;
 	struct worker_state *worker_state_arr;
-	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS];
+	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS][NUM_CANDLE_BASES];
 	struct admin_state admin_state;
 	sched_work_msg_free_list *sched_msg_free_list;
 	pthread_t admin_thread;

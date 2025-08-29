@@ -592,12 +592,11 @@ static void maybe_apply_trades(struct trcache *tc,
 
 			list = get_chunk_list(tc, symbol_id, type);
 			while (trade_data_buffer_peek(buf, cur, &array, &count)
-				&& count > 0) {
-					for (int j = 0; j < count; j++) {
-						candle_chunk_list_apply_trade(list, &array[j]);
-					}
-					trade_data_buffer_consume(buf, cur, count);
+					&& count > 0) {
+				for (int j = 0; j < count; j++) {
+					candle_chunk_list_apply_trade(list, &array[j]);
 				}
+				trade_data_buffer_consume(buf, cur, count);
 			}
 			trade_data_buffer_release_cursor(cur);
 		}
@@ -615,12 +614,11 @@ static void maybe_apply_trades(struct trcache *tc,
 
 			list = get_chunk_list(tc, symbol_id, type);
 			while (trade_data_buffer_peek(buf, cur, &array, &count)
-				&& count > 0) {
-					for (int j = 0; j < count; j++) {
-						candle_chunk_list_apply_trade(list, &array[j]);
-					}
-					trade_data_buffer_consume(buf, cur, count);
+					&& count > 0) {
+				for (int j = 0; j < count; j++) {
+					candle_chunk_list_apply_trade(list, &array[j]);
 				}
+				trade_data_buffer_consume(buf, cur, count);
 			}
 			trade_data_buffer_release_cursor(cur);
 		}
@@ -863,7 +861,7 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	int start[WORKER_STAT_STAGE_NUM];
 	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
-	int end, idx;
+	int end;
 
 	if (!tc) {
 		return;
@@ -877,17 +875,18 @@ void trcache_print_worker_distribution(struct trcache *tc)
 			uint64_t cycles = 0, count = 0;
 			for (int w = 0; w < tc->num_workers; w++) {
 				struct worker_stat_board *b = &tc->worker_state_arr[w].stat;
-				for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
-					idx = __builtin_ctz(m);
-					if (s == WORKER_STAT_STAGE_APPLY) {
-						cycles += b->apply_stat[idx].cycles;
-						count  += b->apply_stat[idx].work_count;
-					} else if (s == WORKER_STAT_STAGE_CONVERT) {
-						cycles += b->convert_stat[idx].cycles;
-						count  += b->convert_stat[idx].work_count;
-					} else {
-						cycles += b->flush_stat[idx].cycles;
-						count  += b->flush_stat[idx].work_count;
+				for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
+					for (int j = 0; j < tc->num_candle_types[i]; ++j) {
+						if (s == WORKER_STAT_STAGE_APPLY) {
+							cycles += b->apply_stat[i][j].cycles;
+							count  += b->apply_stat[i][j].work_count;
+						} else if (s == WORKER_STAT_STAGE_CONVERT) {
+							cycles += b->convert_stat[i][j].cycles;
+							count  += b->convert_stat[i][j].work_count;
+						} else {
+							cycles += b->flush_stat[i][j].cycles;
+							count  += b->flush_stat[i][j].work_count;
+						}
 					}
 				}
 			}
@@ -908,12 +907,13 @@ void trcache_print_worker_distribution(struct trcache *tc)
 
 		for (int i = 0; i < num; i++) {
 			struct symbol_entry *e = arr[i];
-			for (uint32_t m = tc->candle_type_flags; m != 0; m &= m - 1) {
-				int idx = __builtin_ctz(m);
-				struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[idx];
-				demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
-				demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-				demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
+			for (int j = 0; j < NUM_CANDLE_BASES; ++j) {
+				for (int k = 0; k < tc->num_candle_types[j]; ++k) {
+					struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[j][k];
+					demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
+					demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
+					demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
+				}
 			}
 		}
 		atomsnap_release_version(ver);
