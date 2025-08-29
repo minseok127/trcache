@@ -101,18 +101,22 @@ Configure and initialize the `trcache` instance using `trcache_init_ctx`.
 
 ```c
 // Define candle update logic using helper macros
+DEFINE_TIME_CANDLE_OPS(1m, 300000); // 5-minute candle
 DEFINE_TIME_CANDLE_OPS(1m, 60000); // 1-minute candle
 DEFINE_TICK_CANDLE_OPS(100t, 100);   // 100-tick candle
+DEFINE_TICK_CANDLE_OPS(100t, 20);   // 20-tick candle
 
 // Define flush operations
 struct trcache_flush_ops flush_ops = { .flush = sync_flush };
 
 // Define candle configurations
 trcache_candle_config time_candles[] = {
+    { .threshold.interval_ms = 300000, .update_ops = ops_5m, .flush_ops = flush_ops },
     { .threshold.interval_ms = 60000, .update_ops = ops_1m, .flush_ops = flush_ops },
 };
 trcache_candle_config tick_candles[] = {
     { .threshold.num_ticks = 100, .update_ops = ops_100t, .flush_ops = flush_ops },
+    { .threshold.num_ticks = 20, .update_ops = ops_20t, .flush_ops = flush_ops },
 };
 
 // Create initialization context
