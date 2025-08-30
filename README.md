@@ -4,7 +4,7 @@
 
 `trcache` is a C library for ingesting real-time trade data and converting it into **column-oriented OHLCV candle arrays** optimized for analysis. The library targets multicore machines and relies on lock-free data structures together with dedicated worker threads to scale with available CPU cores.
 
-## Features
+# Features
 
 - **Lock-Free Pipeline**: Apply, Convert, and Flush stages run concurrently on dedicated threads without locks.
   - **Apply**: Aggregates raw trades into row-oriented candles.
@@ -14,7 +14,7 @@
 - **Pluggable Flushing**: Applications supply synchronous or asynchronous callbacks to persist finished batches.
 - **Multiple Candle Types**: Time-based and tick-based candles can be configured and processed simultaneously.
 
-## Build
+# Build
 
 ```bash
 make            # build static and shared libraries
@@ -26,7 +26,7 @@ To generate debug binaries, set `BUILD_MODE=debug`:
 make BUILD_MODE=debug
 ```
 
-## Basic Usage
+# Basic Usage
 
 ### 1. Candle and Field Types
 
@@ -294,7 +294,7 @@ trcache_destroy(cache);
 
 This stops all threads, flushes any remaining data, and releases all allocated memory.
 
-## Implementation Details
+# Implementation Details
 
 ### Core Lock-Free Primitives
 
@@ -340,4 +340,4 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 - **Worker Threads**: Workers are the execution units. Each worker maintains a list of assigned work items (a combination of symbol, candle type, and pipeline stage). They continuously iterate through their work list, executing the corresponding tasks (`worker_do_apply`, `worker_do_convert`, etc.).
 - **Communication**: The admin and worker threads communicate via lock-free queues (`scalable_queue`). This ensures that scheduling messages can be sent and received with minimal contention.
 
-## Evaluation
+# Evaluation
