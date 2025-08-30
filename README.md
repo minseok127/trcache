@@ -298,8 +298,8 @@ This stops all threads, flushes any remaining data, and releases all allocated m
 
 ### Core Lock-Free Primitives
 
-- **`atomsnap`**: A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `symbol_table`'s main array or the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
-- **`scalable_queue`**: A highly concurrent queue designed to minimize contention between threads. It is used for dispatching scheduling commands from the admin thread to the workers.
+- [**`atomsnap`**](https://github.com/minseok127/atomsnap): A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `symbol_table`'s main array or the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
+- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention between threads. It is used for dispatching scheduling commands from the admin thread to the workers.
 
 ### Data Flow and Pipeline
 
