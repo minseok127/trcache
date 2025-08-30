@@ -174,7 +174,7 @@ typedef struct trcache_candle_batch {
 } trcache_candle_batch;
 
 /*
- * trcache_flush_ops - User-defined batch flush operation callbacks
+ * trcache_batch_flush_ops - User-defined batch flush operation callbacks.
  *
  * @flush:              User-defined batch flush function.
  * @is_done:            Checks whether the asynchronous flush has completed.
@@ -198,16 +198,16 @@ typedef struct trcache_candle_batch {
  *      After completion the worker will call @destroy_handle (if it is not
  *      NULL) to free any resources associated with the handle.
  */
-typedef struct trcache_flush_ops {
+typedef struct trcache_batch_flush_ops {
 	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
 	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
 	void (*destroy_handle)(void *handle, void *destroy_handle_ctx);
 	void *flush_ctx;
 	void *destroy_handle_ctx;
-} trcache_flush_ops;
+} trcache_batch_flush_ops;
 
 /*
- * candle_update_ops - Callbacks for updating candles.
+ * trcache_candle_update_ops - Callbacks for updating candles.
  *
  * @init:    Initialise a new candle using the first trade. This is
  *           invoked exactly once per candle before any calls to update().
@@ -216,10 +216,10 @@ typedef struct trcache_flush_ops {
  *           if the candle is already complete and the trade belongs in
  *           the subsequent candle.
  */
-typedef struct candle_update_ops {
+typedef struct trcache_candle_update_ops {
 	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
 	bool (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
-} candle_update_ops;
+} trcache_candle_update_ops;
 
 /* Helper macros for time-interval candles */
 #define DEFINE_TIME_CANDLE_OPS(SUFFIX, INTERVAL_MS)                      \
@@ -250,7 +250,7 @@ static bool update_##SUFFIX(struct trcache_candle *c,                    \
 	c->trade_count += 1;                                                 \
 	return true;                                                         \
 }                                                                        \
-static const struct candle_update_ops ops_##SUFFIX = {                   \
+static const struct trcache_candle_update_ops ops_##SUFFIX = {           \
 	.init = init_##SUFFIX,                                               \
 	.update = update_##SUFFIX,                                           \
 }
@@ -283,7 +283,7 @@ static void update_##SUFFIX(struct trcache_candle *c,                    \
 	c->trade_count += 1;                                                 \
 	return true;                                                         \
 }                                                                        \
-static const struct candle_update_ops ops_##SUFFIX = {                   \
+static const struct trcache_candle_update_ops ops_##SUFFIX = {           \
 	.init = init_##SUFFIX,                                               \
 	.update = update_##SUFFIX,                                           \
 }
@@ -305,8 +305,8 @@ typedef struct {
 		uint64_t interval_ms; /* For CANDLE_TIME_BASE */
 		uint32_t num_ticks;   /* For CANDLE_TICK_BASE */
 	} threshold;
-	const struct candle_update_ops update_ops;
-	const struct trcache_flush_ops flush_ops;
+	const struct trcache_candle_update_ops update_ops;
+	const struct trcache_batch_flush_ops flush_ops;
 } trcache_candle_config;
 
 /*
@@ -404,120 +404,78 @@ int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
 /**
- * @brief   Copy @count time‑based candles ending at @ts_end for a symbol ID.
+ * @brief   Copy @p count candles ending at @p ts_end.
  *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
- * @param   time_type_idx:  Zero‑based index into the time interval array
- *                          supplied via #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   ts_end:         Timestamp belonging to the last candle (inclusive).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_time_candles_by_symbol_id_ts(trcache *cache,
-	int symbol_id, int time_type_idx, trcache_candle_field_flags field_mask,
-	uint64_t ts_end, int count, trcache_candle_batch *batch);
-
-/**
- * @brief   Copy @count time‑based candles ending at @ts_end
- *          for a symbol string.
- *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_str:     NULL‑terminated symbol string.
- * @param   time_type_idx:  Zero‑based index into the time interval array
- *                          supplied via #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   ts_end:         Timestamp belonging to the last candle (inclusive).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_time_candles_by_symbol_str_ts(trcache *cache,
-	const char *symbol_str, int time_type_idx,
+int trcache_get_candles_by_symbol_id_and_ts(struct trcache *tc,
+	int symbol_id, trcache_candle_type type,
 	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
-	trcache_candle_batch *batch);
+	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @count time‑based candles ending at the candle located
- *          @offset from the most recent candle for a symbol ID.
+ * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
  *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
- * @param   time_type_idx:  Index into the time interval array supplied via
- *                          #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   offset:         Offset from the most recent candle (offset 0).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_time_candles_by_symbol_id_offset(trcache *cache,
-	int symbol_id, int time_type_idx, trcache_candle_field_flags field_mask,
-	int offset, int count, trcache_candle_batch *batch);
+int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
+	const char *symbol_str, trcache_candle_type type,
+	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @count time‑based candles ending at the candle located
- *          @offset from the most recent candle for a symbol string.
+ * @brief   Copy @p count candles ending at the candle located @p offset from
+ * the most recent candle.
  *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_str:     NULL‑terminated symbol string.
- * @param   time_type_idx:  Index into the time interval array supplied via
- *                          #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   offset:         Offset from the most recent candle (offset 0).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   offset:     Offset from the most recent candle (0 == most recent).
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_time_candles_by_symbol_str_offset(trcache *cache,
-	const char *symbol_str, int time_type_idx,
+int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
+	int symbol_id, trcache_candle_type type,
 	trcache_candle_field_flags field_mask, int offset, int count,
-	trcache_candle_batch *batch);
+	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @count tick‑based candles ending at the candle located
- *          @offset from the most recent candle for a symbol ID.
+ * @brief   Copy @p count candles ending at the candle located @p offset from
+ * the most recent candle for a symbol string.
  *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_id:      Symbol ID obtained from trcache_register_symbol().
- * @param   tick_type_idx:  Index into the tick interval array supplied via
- *                          #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   offset:         Offset from the most recent candle (offset 0).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   type:       Candle type to query.
+ * @param   field_mask: Bitmask of desired candle fields.
+ * @param   offset:     Offset from the most recent candle (0 == most recent).
+ * @param   count:      Number of candles to copy.
+ * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_tick_candles_by_symbol_id_offset(trcache *cache,
-	int symbol_id, int tick_type_idx, trcache_candle_field_flags field_mask,
-	int offset, int count, trcache_candle_batch *batch);
-
-/**
- * @brief   Copy @count tick‑based candles ending at the candle located
- *          @offset from the most recent candle for a symbol string.
- *
- * @param   cache:          Handle returned by trcache_init().
- * @param   symbol_str:     NULL‑terminated symbol string.
- * @param   tick_type_idx:  Index into the tick interval array supplied via
- *                          #trcache_init_ctx.
- * @param   field_mask:     Bitmask of desired candle fields.
- * @param   offset:         Offset from the most recent candle (offset 0).
- * @param   count:          Number of candles to copy.
- * @param   batch:          Pre‑allocated destination batch.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_tick_candles_by_symbol_str_offset(trcache *cache,
-	const char *symbol_str, int tick_type_idx,
+int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
+	const char *symbol_str, trcache_candle_type type,
 	trcache_candle_field_flags field_mask, int offset, int count,
-	trcache_candle_batch *batch);
+	struct trcache_candle_batch *dst);
 
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.

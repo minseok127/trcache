@@ -79,8 +79,8 @@ struct candle_chunk_list {
 	struct candle_chunk *candle_mutable_chunk;
 	struct candle_chunk *converting_chunk;
 	struct atomsnap_gate *head_gate;
-	const struct candle_update_ops *update_ops;
-	const struct trcache_flush_ops *flush_ops;
+	const struct trcache_candle_update_ops *update_ops;
+	const struct trcache_batch_flush_ops *flush_ops;
 	const void* threshold;
 	struct trcache *trc;
 	struct candle_chunk_index *chunk_index;

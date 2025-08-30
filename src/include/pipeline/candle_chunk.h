@@ -43,7 +43,7 @@ struct candle_row_page {
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
  * @is_flushed:           Flag to indicate flush state.
- * @flush_handle:         Returned pointer of trcache_flush_ops->flush().
+ * @flush_handle:         Returned pointer of trcache_batch_flush_ops->flush().
  * @next:                 Linked list pointer to the next chunk.
  * @prev:                 Linked list pointer to the previous chunk.
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
@@ -237,7 +237,8 @@ void candle_chunk_destroy(struct candle_chunk *chunk);
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
-	const struct candle_update_ops *ops, struct trcache_trade_data *trade);
+	const struct trcache_candle_update_ops *ops,
+	struct trcache_trade_data *trade);
 
 /**
  * @brief   Convert all immutable row candles within the given chunk.
@@ -267,7 +268,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
  *          0  flush started asynchronously (still pending)  
  */
 int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
-	const struct trcache_flush_ops* flush_ops);
+	const struct trcache_batch_flush_ops* flush_ops);
 
 /**
  * @brief   Poll a candle chunk for flush completion.
@@ -285,7 +286,7 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
  *          0  flush has not completed *in this call*.
  */
 int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
-	const struct trcache_flush_ops* flush_ops);
+	const struct trcache_batch_flush_ops* flush_ops);
 
 /**
  * @brief   Copy a single mutable candle from a row page into a SoA batch.

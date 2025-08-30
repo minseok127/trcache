@@ -200,7 +200,8 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
-	const struct candle_update_ops *ops, struct trcache_trade_data *trade)
+	const struct trcache_candle_update_ops *ops,
+	struct trcache_trade_data *trade)
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version
@@ -318,7 +319,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
  *          0  flush started asynchronously (still pending)  
  */
 int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
-	const struct trcache_flush_ops* flush_ops)
+	const struct trcache_batch_flush_ops* flush_ops)
 {
 	chunk->flush_handle = flush_ops->flush(
 		trc, chunk->column_batch, flush_ops->flush_ctx);
@@ -350,7 +351,7 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
  *          0  flush has not completed *in this call*.
  */
 int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
-	const struct trcache_flush_ops* flush_ops)
+	const struct trcache_batch_flush_ops* flush_ops)
 {
 	/* Synchronous flush already finished earlier. */
 	if (chunk->is_flushed) {

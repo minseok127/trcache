@@ -297,7 +297,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 		&list->trc->mem_acc);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
-	const struct candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_update_ops *ops = list->update_ops;
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
@@ -350,7 +350,8 @@ static int init_first_candle(struct candle_chunk_list *list,
  * @brief   Start the next candle within the same page.
  */
 static void advance_within_same_page(struct candle_chunk *chunk, 
-	struct candle_row_page *row_page, const struct candle_update_ops *ops,
+	struct candle_row_page *row_page,
+	const struct trcache_candle_update_ops *ops,
 	struct trcache_trade_data *trade)
 {
 	ops->init(&row_page->rows[++chunk->mutable_row_idx], trade);
@@ -363,7 +364,8 @@ static void advance_within_same_page(struct candle_chunk *chunk,
  *          start its first candle.
  */
 static int advance_to_next_page(struct candle_chunk *chunk,
-	const struct candle_update_ops *ops, struct trcache_trade_data *trade)
+	const struct trcache_candle_update_ops *ops,
+	struct trcache_trade_data *trade)
 {
 	int new_page_idx = chunk->mutable_page_idx + 1;
 
@@ -383,7 +385,7 @@ static int advance_to_next_page(struct candle_chunk *chunk,
 static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *prev_chunk, struct trcache_trade_data *trade)
 {
-	const struct candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_update_ops *ops = list->update_ops;
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
 		&list->trc->mem_acc);
@@ -437,7 +439,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
 	struct candle_chunk *chunk = list->candle_mutable_chunk;
-	const struct candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_update_ops *ops = list->update_ops;
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle *candle = NULL;
