@@ -32,7 +32,7 @@ make BUILD_MODE=debug
 
 `trcache` exposes enums to define candle aggregation strategies (`trcache_candle_base`) and to select specific data fields (`trcache_candle_field_type`).
 
-```c
+```C
 // From trcache.h
 typedef enum {
 	CANDLE_TIME_BASE,
@@ -64,7 +64,7 @@ These constants are used to configure the engine and request specific data field
 
 A `trcache_candle_batch` represents a column-oriented array of OHLCV candles. It can be allocated on the heap or the stack.
 
-```c
+```C
 /* Heap allocation */
 struct trcache_candle_batch *heap_batch = trcache_batch_alloc_on_heap(512, TRCACHE_HIGH | TRCACHE_CLOSE);
 // ... use batch ...
@@ -85,7 +85,7 @@ This structure defines the logic for how a candle is initialized from the first 
 - `init(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called once per candle to initialize it using the first trade data `d`.
 - `update(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called for subsequent trades to update an existing candle `c`. It must return `true` if the trade was consumed by the current candle, or `false` if the candle is considered complete and the trade should start a new candle.
 
-```c
+```C
 typedef struct trcache_candle_update_ops {
 	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
 	bool (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
@@ -93,7 +93,7 @@ typedef struct trcache_candle_update_ops {
 ```
 
 The library provides helper macros to easily define standard time-based and tick-based candle logic.
-```c
+```C
 // Define logic for a 5-minute (300000 milliseconds) candle
 DEFINE_TIME_CANDLE_OPS(5m, 300000);
 
@@ -111,7 +111,7 @@ const struct trcache_candle_update_ops ops_5m_candle = {
 
 This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations.
 
-```c
+```C
 typedef struct trcache_batch_flush_ops {
 	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
 	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
@@ -178,7 +178,7 @@ const struct trcache_batch_flush_ops ops_5m_candle = {
 
 Configure and initialize the `trcache` instance using `trcache_init_ctx`.
 
-```c
+```C
 // Define candle update logic using helper macros
 DEFINE_TIME_CANDLE_OPS(5m, 300000);   // 5-minute candle
 DEFINE_TIME_CANDLE_OPS(1m, 60000);    // 1-minute candle
@@ -225,7 +225,7 @@ Calling `trcache_init()` spawns one admin thread and the specified number of wor
 
 Symbols must be registered before use.
 
-```c
+```C
 int aapl_id = trcache_register_symbol(cache, "AAPL");
 const char *name = trcache_lookup_symbol_str(cache, aapl_id); // "AAPL"
 int again = trcache_lookup_symbol_id(cache, "AAPL");       // same ID
@@ -235,7 +235,7 @@ int again = trcache_lookup_symbol_id(cache, "AAPL");       // same ID
 
 Push real-time trade data into the pipeline.
 
-```c
+```C
 struct trcache_trade_data td = {
     .timestamp = 1620000000000ULL, // Unix timestamp in milliseconds
     .trade_id = 1,
@@ -255,7 +255,7 @@ trcache_feed_trade_data(cache, &td, aapl_id);
 
 Both query types can identify the symbol by its string name (_str) or its integer ID.
 
-```c
+```C
 // Define a candle type to query (e.g., 5-minute time-based candles)
 trcache_candle_type candle_type = { .base = CANDLE_TIME_BASE, .type_idx = 0 };
 
@@ -288,7 +288,7 @@ if (trcache_get_candles_by_symbol_id_and_offset(cache, aapl_id, candle_type,
 
 Clean up all resources.
 
-```c
+```C
 trcache_destroy(cache);
 ```
 
