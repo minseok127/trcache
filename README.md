@@ -299,7 +299,7 @@ This stops all threads, flushes any remaining data, and releases all allocated m
 ### Core Lock-Free Primitives
 
 - [**`atomsnap`**](https://github.com/minseok127/atomsnap): A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `symbol_table`'s main array or the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
-- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention between threads. It is used for dispatching scheduling commands from the admin thread to the workers.
+- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention between threads. Its default version is used for dispatching scheduling commands from the admin thread to the workers. A linearizable version is employed within the `candle_chunk_list` to enable lock-free memory reclamation of flushed `candle_chunk`s.
 
 ### Data Flow and Pipeline
 
@@ -317,6 +317,18 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 - **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, which are 4KB pages holding row-oriented `trcache_candle` structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
 - **`atomsnap` for Row Pages**: The pointers to these row pages within a chunk are managed by `atomsnap`. This allows the `CONVERT` worker to read a stable version of a page for conversion while the `APPLY` worker might be writing to a newer page, all without locks. Once a page is fully converted, `atomsnap` ensures it's safely reclaimed after all reader threads have finished with it.
 - **`trcache_candle_batch`**: The final output is a struct where each candle field (`open`, `high`, `low`, `close`, etc.) is a separate array. All these arrays are allocated in a single contiguous memory block and are aligned to 64 bytes to enable efficient SIMD vector instructions for analytical queries.
+
+### Memory Reclamation of Flushed Chunks
+
+`trcache` employs a lock-free, grace-period-based memory reclamation scheme to safely deallocate `candle_chunk` structures after they have been flushed. This mechanism is built upon `atomsnap`, an RCU-like (Read-Copy-Update) primitive that ensures reader threads can safely traverse the list of chunks even while `FLUSH` workers are removing old chunks.
+
+1. **Versioned List Head**: The `candle_chunk_list` maintains a linked list of chunks. The head of this list, representing the oldest available data, is not a direct pointer but is managed through an `atomsnap` version (`candle_chunk_list_head_version`). Reader threads that query candle data first acquire this version to get a stable snapshot of the list's head.
+
+2. **Graceful Retirement**: When a `FLUSH` worker successfully persists a range of chunks, it doesn't immediately deallocate them. Instead, it advances the logical head of the list past these flushed chunks by publishing a new `atomsnap` version pointing to the next live chunk. The old version, which references the now-obsolete chunks, is retired.
+
+3. **Delayed Deallocation**: The `atomsnap` primitive guarantees a grace period. The retired version is only deallocated after all reader threads that might have acquired it have finished their operations and released their references. This prevents a classic use-after-free race condition where a reader might attempt to access a chunk that has already been freed by the `FLUSH` worker.
+
+4. **Callback-Driven Freeing**: The actual memory deallocation is performed inside `candle_chunk_list_head_free`, a callback function that is invoked by `atomsnap` when a retired version's reference count drops to zero. This callback iterates through the list of flushed chunks covered by that version and safely calls `candle_chunk_destroy` on each one, releasing its memory.
 
 ### Concurrency and Scheduling
 
