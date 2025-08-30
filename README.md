@@ -246,7 +246,45 @@ struct trcache_trade_data td = {
 trcache_feed_trade_data(cache, &td, aapl_id);
 ```
 
-### 7. Destroy the Engine
+### 7. Querying Candle Data
+
+`trcache` provides functions to retrieve candle data for a given symbol. You can query data based on a specific end-point in time or relative to the most recent candle. All query functions are thread-safe.
+
+- `trcache_get_candles_by_symbol_..._and_ts(...,uint64_t ts_end, int count,...)`: Retrieves a `count` of candles ending at the candle whose time range includes the specified `ts_end` (a Unix timestamp in milliseconds).
+- `trcache_get_candles_by_symbol_..._and_offset(...,int offset, int count,...)`: Retrieves a `count` of candles ending at a specific `offset` from the most recent candle, where `offset = 0` refers to the latest (potentially still open) candle.
+
+Both query types can identify the symbol by its string name (_str) or its integer ID.
+
+```c
+// Define a candle type to query (e.g., 5-minute time-based candles)
+trcache_candle_type candle_type = { .base = CANDLE_TIME_BASE, .type_idx = 0 };
+
+// Allocate a destination batch on the stack
+TRCACHE_DEFINE_BATCH_ON_STACK(batch, 100, TRCACHE_FIELD_MASK_ALL);
+
+// Example: Get the last 50 candles ending at a specific timestamp
+uint64_t end_ts = 1620005400000ULL; // An exact timestamp
+int count = 50;
+
+if (trcache_get_candles_by_symbol_str_and_ts(cache, "AAPL", candle_type,
+        TRCACHE_OPEN | TRCACHE_CLOSE, end_ts, count, &batch) == 0) {
+    printf("Successfully retrieved %d candles for AAPL\n", batch.num_candles);
+    for (int i = 0; i < batch.num_candles; i++) {
+        // Access data via columnar arrays
+        printf("Timestamp: %llu, Close: %f\n",
+               batch.start_timestamp_array[i], batch.close_array[i]);
+    }
+}
+
+// Example: Get the 10 most recent candles
+if (trcache_get_candles_by_symbol_id_and_offset(cache, aapl_id, candle_type,
+        TRCACHE_HIGH | TRCACHE_TRADING_VALUE, 0, 10, &batch) == 0) {
+    printf("Successfully retrieved the %d most recent candles for AAPL\n", batch.num_candles);
+    // ... process data
+}
+```
+
+### 8. Destroy the Engine
 
 Clean up all resources.
 
