@@ -267,7 +267,7 @@ uint64_t end_ts = 1620005400000ULL; // An exact timestamp
 int count = 50;
 
 if (trcache_get_candles_by_symbol_str_and_ts(cache, "AAPL", candle_type,
-        TRCACHE_OPEN | TRCACHE_CLOSE, end_ts, count, &batch) == 0) {
+        TRCACHE_START_TIMESTAMP | TRCACHE_CLOSE, end_ts, count, &batch) == 0) {
     printf("Successfully retrieved %d candles for AAPL\n", batch.num_candles);
     for (int i = 0; i < batch.num_candles; i++) {
         // Access data via columnar arrays
@@ -278,7 +278,7 @@ if (trcache_get_candles_by_symbol_str_and_ts(cache, "AAPL", candle_type,
 
 // Example: Get the 10 most recent candles
 if (trcache_get_candles_by_symbol_id_and_offset(cache, aapl_id, candle_type,
-        TRCACHE_HIGH | TRCACHE_TRADING_VALUE, 0, 10, &batch) == 0) {
+        TRCACHE_FIELD_MASK_ALL , 0, 10, &batch) == 0) {
     printf("Successfully retrieved the %d most recent candles for AAPL\n", batch.num_candles);
     // ... process data
 }
