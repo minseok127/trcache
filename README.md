@@ -79,11 +79,18 @@ TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 
 `trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `candle_update_ops` and `trcache_flush_ops` structures. Users should provide these callbacks for each candle type.
 
-#### `candle_update_ops`
+#### `trcache_candle_update_ops`
 
 This structure defines the logic for how a candle is initialized from the first trade and updated with subsequent trades.
 - `init(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called once per candle to initialize it using the first trade data `d`.
 - `update(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called for subsequent trades to update an existing candle `c`. It must return `true` if the trade was consumed by the current candle, or `false` if the candle is considered complete and the trade should start a new candle.
+
+```c
+typedef struct trcache_candle_update_ops {
+	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
+	bool (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
+} trcache_candle_update_ops;
+```
 
 The library provides helper macros to easily define standard time-based and tick-based candle logic.
 ```c
@@ -94,24 +101,24 @@ DEFINE_TIME_CANDLE_OPS(5m, 300000);
 DEFINE_TICK_CANDLE_OPS(100t, 100);
 
 // Assign the defined logic to a struct instance
-const struct candle_update_ops ops_5m_candle = {
+const struct trcache_candle_update_ops ops_5m_candle = {
     .init = init_5m,
     .update = update_5m,
 };
 ```
 
-#### `trcache_flush_ops`
+#### `trcache_batch_flush_ops`
 
 This structure defines how completed candle batches are persisted (e.g., written to a file, sent to a database). It supports both synchronous and asynchronous operations.
 
 ```c
-typedef struct trcache_flush_ops {
+typedef struct trcache_batch_flush_ops {
 	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
 	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
 	void (*destroy_handle)(void *handle, void *destroy_handle_ctx);
 	void *flush_ctx;
 	void *destroy_handle_ctx;
-} trcache_flush_ops;
+} trcache_batch_flush_ops;
 ```
 
 - Synchronous Flush: The flush callback performs all I/O operations and returns `NULL`. The engine considers the batch flushed immediately.
@@ -124,7 +131,7 @@ void* sync_flush(trcache *c, trcache_candle_batch *b, void *flush_ctx) {
 }
 
 // Assign the defined logic to a struct instance
-const struct candle_update_ops ops_5m_candle = {
+const struct trcache_batch_flush_ops ops_5m_candle = {
     .flush = sync_flush,
 	.is_done = NULL,
 	.destroy_handle = NULL,
@@ -158,7 +165,7 @@ void async_destroy(void *handle, void *destroy_handle_ctx) {
 }
 
 // Assign the defined logic to a struct instance
-const struct candle_update_ops ops_5m_candle = {
+const struct trcache_batch_flush_ops ops_5m_candle = {
     .flush = async_flush,
 	.is_done = async_is_done,
 	.destroy_handle = async_destroy,
