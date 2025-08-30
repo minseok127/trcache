@@ -180,10 +180,10 @@ Configure and initialize the `trcache` instance using `trcache_init_ctx`.
 
 ```c
 // Define candle update logic using helper macros
-DEFINE_TIME_CANDLE_OPS(5m, 300000); // 5-minute candle
-DEFINE_TIME_CANDLE_OPS(1m, 60000); // 1-minute candle
-DEFINE_TICK_CANDLE_OPS(100t, 100);   // 100-tick candle
-DEFINE_TICK_CANDLE_OPS(20t, 20);   // 20-tick candle
+DEFINE_TIME_CANDLE_OPS(5m, 300000);   // 5-minute candle
+DEFINE_TIME_CANDLE_OPS(1m, 60000);    // 1-minute candle
+DEFINE_TICK_CANDLE_OPS(100t, 100);    // 100-tick candle
+DEFINE_TICK_CANDLE_OPS(20t, 20);      // 20-tick candle
 
 // Define flush operations
 struct trcache_batch_flush_ops flush_ops = { .flush = sync_flush };
