@@ -77,7 +77,7 @@ TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 
 ### 3. Implement Update and Flush Operations
 
-`trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `candle_update_ops` and `trcache_flush_ops` structures. Users should provide these callbacks for each candle type.
+`trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `trcache_candle_update_ops` and `trcache_batch_flush_ops` structures. Users should provide these callbacks for each candle type.
 
 #### `trcache_candle_update_ops`
 
@@ -186,7 +186,7 @@ DEFINE_TICK_CANDLE_OPS(100t, 100);   // 100-tick candle
 DEFINE_TICK_CANDLE_OPS(20t, 20);   // 20-tick candle
 
 // Define flush operations
-struct trcache_flush_ops flush_ops = { .flush = sync_flush };
+struct trcache_batch_flush_ops flush_ops = { .flush = sync_flush };
 
 // Define candle configurations
 trcache_candle_config time_candles[] = {
@@ -308,7 +308,7 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 1.  **Ingestion**: The trade is copied into a thread-local `trade_data_buffer` associated with its symbol. This buffer is a linked list of `trade_data_chunk`s, allowing for lock-free writes from the user thread.
 2.  **Apply Stage**: A worker thread assigned to the `APPLY` stage consumes trades from the `trade_data_buffer`. It updates the currently active (mutable) `trcache_candle` within a `candle_chunk`. Only the most recent candle is mutable; all prior candles are considered immutable.
 3.  **Convert Stage**: Once a candle is complete, a worker thread in the `CONVERT` stage transforms the immutable row-oriented candle data into a column-oriented `trcache_candle_batch`. This AoS-to-SoA (Array of Structs to Struct of Arrays) transformation is key for analytical performance.
-4.  **Flush Stage**: When a `candle_chunk` is fully converted into a columnar batch and the number of unflushed batches exceeds a threshold, a `FLUSH` worker invokes the user-provided `trcache_flush_ops` callbacks to persist the data.
+4.  **Flush Stage**: When a `candle_chunk` is fully converted into a columnar batch and the number of unflushed batches exceeds a threshold, a `FLUSH` worker invokes the user-provided `trcache_batch_flush_ops` callbacks to persist the data.
 
 > Trading strategies are validated through backtesting, which simulates trades using historical, completed candles. Live trading aims to replicate this backtested logic, meaning trading decisions are made precisely at the moment a candle completes. To ensure the accuracy of these decisions, it is crucial that all buffered trades are applied to a candle just before it finalizes. `trcache` achieves this by allowing the user thread that feeds the data to directly apply buffered trades when a candle (either time-based or tick-based) is nearing completion. At all other times, the apply workload is deferred to worker threads, maximizing throughput without sacrificing decision-making accuracy.
 
