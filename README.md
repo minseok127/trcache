@@ -326,7 +326,7 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 
 2. **Graceful Retirement**: When a `FLUSH` worker successfully persists a range of chunks, it doesn't immediately deallocate them. Instead, it advances the logical head of the list past these flushed chunks by publishing a new `atomsnap` version pointing to the next live chunk. The old version, which references the now-obsolete chunks, is retired.
 
-3. **Delayed Deallocation**: The `atomsnap` primitive guarantees a grace period. The retired version is only deallocated after all reader threads that might have acquired it have finished their operations and released their references. This prevents a classic use-after-free race condition where a reader might attempt to access a chunk that has already been freed by the `FLUSH` worker.
+3. **Delayed Deallocation**: The `atomsnap` primitive guarantees a grace period. The retired version is only deallocated after all threads that might have acquired it have finished their operations and released their references.
 
 4. **Callback-Driven Freeing**: The actual memory deallocation is performed inside `candle_chunk_list_head_free`, a callback function that is invoked by `atomsnap` when a retired version's reference count drops to zero. This callback iterates through the list of flushed chunks covered by that version and safely calls `candle_chunk_destroy` on each one, releasing its memory.
 
