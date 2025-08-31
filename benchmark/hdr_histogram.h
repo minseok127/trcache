@@ -103,13 +103,6 @@ int64_t hdr_histogram_value_at_percentile(
 	const struct hdr_histogram* h, double percentile);
 
 
-// --- Minimal Implementation ---
-
-static int64_t power_of_2(int64_t exp)
-{
-	return 1LL << exp;
-}
-
 int hdr_histogram_init(
 	int64_t lowest, int64_t highest, int sf, struct hdr_histogram** result)
 {

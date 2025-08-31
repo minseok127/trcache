@@ -23,7 +23,7 @@
 #include <ctype.h>
 
 #include "trcache.h"
-#include "include/utils/tsc_clock.h"
+#include "utils/tsc_clock.h"
 #include "hdr_histogram.h"
 
 #define PER_SYMBOL_BUFFER_SIZE (1 * 10 * 1000) // 10K trades per symbol
@@ -166,20 +166,14 @@ int main(int argc, char *argv[])
 	if (config.duration_sec <= 0 || config.warmup_sec < 0) return 1;
 
 	// --- trcache Initialization ---
-	const struct trcache_candle_update_ops time_ops = {
-		.init = init_1m, .update = update_1m
-	};
-	const struct trcache_candle_update_ops tick_ops = {
-		.init = init_100t, .update = update_100t
-	};
 	trcache_candle_config time_candles[] = {
 		{ .threshold.interval_ms = TIME_CANDLE_INTERVAL_MS,
-		  .update_ops = time_ops,
+		  .update_ops = ops_1m,
 		  .flush_ops = { .flush = dummy_sync_flush } }
 	};
 	trcache_candle_config tick_candles[] = {
 		{ .threshold.num_ticks = TICK_CANDLE_INTERVAL,
-		  .update_ops = tick_ops,
+		  .update_ops = ops_100t,
 		  .flush_ops = { .flush = dummy_sync_flush } }
 	};
 
@@ -222,10 +216,14 @@ int main(int argc, char *argv[])
 	ctx.trade_creation_times_per_symbol =
 		malloc(config.num_symbols * sizeof(timestamp_entry*));
 	for (int i = 0; i < config.num_symbols; i++) {
-		posix_memalign(
-			(void**)&ctx.trade_creation_times_per_symbol[i],
-			CACHE_LINE_SIZE,
-			PER_SYMBOL_BUFFER_SIZE * sizeof(timestamp_entry));
+		if (posix_memalign(
+				(void**)&ctx.trade_creation_times_per_symbol[i],
+				CACHE_LINE_SIZE,
+				PER_SYMBOL_BUFFER_SIZE * sizeof(timestamp_entry)) != 0) {
+			fprintf(stderr,
+				"Failed to allocate aligned memory for symbol %d\n", i);
+			return 1;
+		}
 	}
 	ctx.time_closing_trade_ids = calloc(
 		config.num_symbols, sizeof(_Atomic uint64_t));
@@ -279,7 +277,7 @@ int main(int argc, char *argv[])
 	hdr_histogram_close(ctx.time_latency_hist);
 	hdr_histogram_close(ctx.closing_trade_latency_hist);
 	free(ctx.time_series_stats);
-	pthread_mutex_destroy(&ctx.hist_mutex, NULL);
+	pthread_mutex_destroy(&ctx.hist_mutex);
 
 	return 0;
 }
@@ -454,7 +452,7 @@ void* querier_thread_main(void *arg)
 
 						atomic_thread_fence(memory_order_acquire);
 						local_entry.creation_ns = entry_ptr->creation_ns;
-						local_entry.full_global_id = entry_ptr->full_global_id;
+						local_entry.full_trade_id = entry_ptr->full_trade_id;
 						atomic_thread_fence(memory_order_acquire);
 	
 						seq2 = atomic_load_explicit(&entry_ptr->sequence,
@@ -515,7 +513,7 @@ void* querier_thread_main(void *arg)
 
 						atomic_thread_fence(memory_order_acquire);
 						local_entry.creation_ns = entry_ptr->creation_ns;
-						local_entry.full_global_id = entry_ptr->full_global_id;
+						local_entry.full_trade_id = entry_ptr->full_trade_id;
 						atomic_thread_fence(memory_order_acquire);
 	
 						seq2 = atomic_load_explicit(&entry_ptr->sequence,

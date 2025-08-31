@@ -268,7 +268,7 @@ static void init_##SUFFIX(struct trcache_candle *c,                      \
 	c->trade_count = (uint32_t)rem + 1;                                  \
 	c->is_closed = false;                                                \
 }                                                                        \
-static void update_##SUFFIX(struct trcache_candle *c,                    \
+static bool update_##SUFFIX(struct trcache_candle *c,                    \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
 	if (c->trade_count >= (INTERVAL_TICK)) {                             \
