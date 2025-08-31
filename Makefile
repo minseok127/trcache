@@ -42,6 +42,7 @@ clean:
 	done
 	rm -f $(STATIC_LIB) $(SHARED_LIB)
 
-test:
-	$(MAKE) -C tests CFLAGS="$(CFLAGS)" INCLUDES="$(INCLUDES)" \
-	PROJECT_ROOT="$(PROJECT_ROOT)" run
+benchmark: $(STATIC_LIB)
+	@echo "==> Building benchmark in release mode..."
+	$(MAKE) -C benchmark all CFLAGS="$(CFLAGS_RELEASE)"
+
