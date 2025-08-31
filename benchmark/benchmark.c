@@ -86,6 +86,7 @@ typedef struct {
 	_Atomic uint64_t trade_id_counter;
 	int *symbol_ids;
 	_Atomic uint64_t* trade_creation_times_ns;
+	_Atomic uint64_t* time_closing_trade_ids; // For time-based closing trade
 
 	struct hdr_histogram* tick_latency_hist;
 	struct hdr_histogram* time_latency_hist;
@@ -205,6 +206,7 @@ int main(int argc, char *argv[])
 	pthread_mutex_init(&ctx.hist_mutex, NULL);
 	ctx.trade_creation_times_ns = calloc(
 		TIMESTAMP_BUFFER_SIZE, sizeof(uint64_t));
+	ctx.time_closing_trade_ids = calloc(config.num_symbols, sizeof(uint64_t));
 	hdr_histogram_init(1, 1000000000, 3, &ctx.tick_latency_hist);
 	hdr_histogram_init(1, 1000000000, 3, &ctx.time_latency_hist);
 	hdr_histogram_init(1, 1000000000, 3, &ctx.closing_trade_latency_hist);
@@ -242,6 +244,7 @@ int main(int argc, char *argv[])
 	trcache_destroy(cache);
 	free(symbol_ids);
 	free(ctx.trade_creation_times_ns);
+	free(ctx.time_closing_trade_ids);
 	hdr_histogram_close(ctx.tick_latency_hist);
 	hdr_histogram_close(ctx.time_latency_hist);
 	hdr_histogram_close(ctx.closing_trade_latency_hist);
@@ -296,6 +299,8 @@ void* feeder_thread_main(void *arg)
 
 	double price = 150.0 + (f_args->feeder_id * 10);
 	double mu = 0.0000001, sigma = 0.0001, dt = 1.0;
+	uint64_t last_timestamp_ms[config->num_symbols];
+	memset(last_timestamp_ms, 0, sizeof(last_timestamp_ms));
 
 	int num_feeders = config->num_feeder_threads;
 	int symbols_per_feeder = config->num_symbols / num_feeders;
@@ -310,12 +315,8 @@ void* feeder_thread_main(void *arg)
 
 	while (!atomic_load(&ctx->should_stop)) {
 		time_t elapsed_sec = time(NULL) - start_time;
-
 		if (config->scenario == SCENARIO_FLASH_CRASH) {
-			// Burst for 5 seconds every minute
-			if ((elapsed_sec % 60) > 5) {
-				usleep(1000); // Low volume period
-			}
+			if ((elapsed_sec % 60) > 5) usleep(1000);
 		} else if (config->scenario == SCENARIO_GAPPING) {
 			if (rand() % 100 < 5) {
 				usleep(50000 + (rand() % 50000));
@@ -324,9 +325,7 @@ void* feeder_thread_main(void *arg)
 		}
 
 		for (int i = start_idx; i < end_idx; ++i) {
-			price *= exp(
-				(mu - 0.5 * sigma * sigma) * dt +
-				sigma * sqrt(dt) * generate_normal_random());
+			price *= exp((mu-0.5*sigma*sigma)*dt + sigma*sqrt(dt)*generate_normal_random());
 			if (price <= 0) price = 0.01;
 
 			uint64_t trade_id = atomic_fetch_add(&ctx->trade_id_counter, 1);
@@ -335,16 +334,21 @@ void* feeder_thread_main(void *arg)
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			uint64_t creation_time =
 				(uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
-			atomic_store(
-				&ctx->trade_creation_times_ns[buffer_idx], creation_time);
+			atomic_store(&ctx->trade_creation_times_ns[buffer_idx], creation_time);
+
+			uint64_t current_ts_ms =
+				(uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+
+			if (last_timestamp_ms[i] > 0 &&
+				(current_ts_ms / TIME_CANDLE_INTERVAL_MS) >
+				(last_timestamp_ms[i] / TIME_CANDLE_INTERVAL_MS)) {
+				atomic_store(&ctx->time_closing_trade_ids[i], trade_id);
+			}
+			last_timestamp_ms[i] = current_ts_ms;
 
 			struct trcache_trade_data td = {
-				.timestamp =
-					(uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000,
-				.trade_id = trade_id, .price = price,
-				.volume = (rand() % 10 == 0) ?
-					(double)(rand() % 1000 + 100) :
-					(double)(rand() % 100 + 1),
+				.timestamp = current_ts_ms, .trade_id = trade_id, .price = price,
+				.volume = (rand() % 10 == 0) ? (double)(rand() % 1000 + 100) : (double)(rand() % 100 + 1),
 			};
 			trcache_feed_trade_data(ctx->cache, &td, ctx->symbol_ids[i]);
 
@@ -375,13 +379,9 @@ void* querier_thread_main(void *arg)
 	memset(last_seen_time_ts, 0, sizeof(last_seen_time_ts));
 
 	TRCACHE_DEFINE_BATCH_ON_STACK(
-		batch, 1, TRCACHE_TRADE_COUNT | TRCACHE_START_TIMESTAMP);
-	trcache_candle_type tick_type = {
-		.base = CANDLE_TICK_BASE, .type_idx = 0
-	};
-	trcache_candle_type time_type = {
-		.base = CANDLE_TIME_BASE, .type_idx = 0
-	};
+		batch, 1, TRCACHE_TRADE_COUNT | TRCACHE_START_TIMESTAMP | TRCACHE_IS_CLOSED);
+	trcache_candle_type tick_type = {.base = CANDLE_TICK_BASE, .type_idx = 0};
+	trcache_candle_type time_type = {.base = CANDLE_TIME_BASE, .type_idx = 0};
 
 	while (!atomic_load(&ctx->should_stop)) {
 		int symbol_idx = rand() % config->num_symbols;
@@ -394,9 +394,10 @@ void* querier_thread_main(void *arg)
 				TRCACHE_TRADE_COUNT | TRCACHE_START_TIMESTAMP, 1, 1, &batch);
 
 			if (ret == 0 && batch.num_candles > 0) {
+				uint64_t approx_first_id =
+					(uint64_t)(batch.start_timestamp_array[0] / 1000) * 10000;
 				uint64_t last_trade_id =
-					(uint64_t)batch.start_timestamp_array[0] +
-					batch.trade_count_array[0] - 1;
+					approx_first_id + batch.trade_count_array[0] - 1;
 				uint64_t buffer_idx = last_trade_id % TIMESTAMP_BUFFER_SIZE;
 
 				if (last_trade_id > last_seen_tick_id[symbol_idx]) {
@@ -432,16 +433,21 @@ void* querier_thread_main(void *arg)
 				uint64_t closed_ts = batch.start_timestamp_array[0];
 				
 				if (closed_ts > last_seen_time_ts[symbol_idx]) {
-					struct timespec now;
-					clock_gettime(CLOCK_MONOTONIC, &now);
-					uint64_t now_ns =
-						(uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
-					uint64_t candle_end_ns = (closed_ts + TIME_CANDLE_INTERVAL_MS) * 1000000;
+					uint64_t closing_trade_id =
+						atomic_load(&ctx->time_closing_trade_ids[symbol_idx]);
+					uint64_t buffer_idx = closing_trade_id % TIMESTAMP_BUFFER_SIZE;
+					uint64_t creation_ns = atomic_load(&ctx->trade_creation_times_ns[buffer_idx]);
 					
-					if (atomic_load(&ctx->warmup_done)) {
-						uint64_t latency = now_ns - candle_end_ns;
+					if (creation_ns > 0 && atomic_load(&ctx->warmup_done)) {
+						struct timespec now;
+						clock_gettime(CLOCK_MONOTONIC, &now);
+						uint64_t now_ns =
+							(uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+						uint64_t latency = now_ns - creation_ns;
+
 						pthread_mutex_lock(&ctx->hist_mutex);
 						hdr_histogram_record_value(ctx->time_latency_hist, latency);
+						hdr_histogram_record_value(ctx->closing_trade_latency_hist, latency);
 						pthread_mutex_unlock(&ctx->hist_mutex);
 					}
 					last_seen_time_ts[symbol_idx] = closed_ts;
@@ -524,6 +530,7 @@ void print_final_summary(
 }
 
 /**
+
  * @brief   Prints the collected time-series data in a CSV-friendly format.
  */
 void print_time_series_data(
@@ -569,7 +576,6 @@ int parse_duration(const char* str)
 	if (unit == 'm' || unit == 'M') return val * 60;
 	return val;
 }
-
 
 /**
  * @brief   Returns a string representation of a scenario_type.
