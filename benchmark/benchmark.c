@@ -26,7 +26,7 @@
 #include "include/utils/tsc_clock.h"
 #include "hdr_histogram.h"
 
-#define PER_SYMBOL_BUFFER_SIZE (1 * 1000 * 1000) // 1M trades per symbol
+#define PER_SYMBOL_BUFFER_SIZE (1 * 10 * 1000) // 10K trades per symbol
 #define TICK_CANDLE_INTERVAL 100
 #define TIME_CANDLE_INTERVAL_MS 60000
 #define CACHE_LINE_SIZE 64
