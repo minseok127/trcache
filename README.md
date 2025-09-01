@@ -76,12 +76,12 @@ These constants are used to configure the engine and request specific data field
 A `trcache_candle_batch` represents a column-oriented array of OHLCV candles. It can be allocated on the heap or the stack.
 
 ```C
-/* Heap allocation */
+/* Heap allocation (the size of each array is 512) */
 struct trcache_candle_batch *heap_batch = trcache_batch_alloc_on_heap(512, TRCACHE_HIGH | TRCACHE_CLOSE);
 // ... use batch ...
 trcache_batch_free(heap_batch);
 
-/* Stack allocation */
+/* Stack allocation (the size of each array is 512) */
 TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 // ... stack_batch is valid within this scope
 ```
