@@ -30,21 +30,32 @@ make BUILD_MODE=debug
 
 ### 1. Candle and Field Types
 
-`trcache` exposes enums to define candle aggregation strategies (`trcache_candle_base`) and to select specific data fields (`trcache_candle_field_type`).
+`trcache` exposes enums to define candle aggregation strategies (`trcache_candle_type`) and to select specific data fields (`trcache_candle_field_type`).
+
+A `trcache_candle_type` struct is used to uniquely identify a specific kind of candle you want to work with. It has two parts: a `base` and a `type_idx`.
 
 ```C
 // From trcache.h
 typedef enum {
-	CANDLE_TIME_BASE,
-	CANDLE_TICK_BASE,
+	CANDLE_TIME_BASE, // For candles based on time intervals (e.g., 1-minute, 5-minute)
+	CANDLE_TICK_BASE, // For candles based on a number of trades (e.g., 100-tick)
 	NUM_CANDLE_BASES
 } trcache_candle_base;
 
-typedef struct {
+typedef struct trcache_candle_type {
 	trcache_candle_base base;
 	int type_idx;
 } trcache_candle_type;
+```
 
+- `base`: This field determines the fundamental aggregation strategy. For example, `CANDLE_TIME_BASE` groups all candles that are formed based on fixed time intervals.
+- `type_idx`: This field is a zero-based index that specifies which configured candle of that base you are referring to. When you initialize `trcache`, you provide an array of configurations for each base (e.g., an array for time-based candles, another for tick-based). The `type_idx` corresponds to the index in that configuration array.
+
+For instance, if you configure two time-based candles—a 1-minute candle at index 0 and a 5-minute candle at index 1—you would use `{ .base = CANDLE_TIME_BASE, .type_idx = 0 }` to refer to the 1-minute candles and `{ .base = CANDLE_TIME_BASE, .type_idx = 1 }` for the 5-minute candles.
+
+Additionally, you can select which data fields you want to retrieve using the `trcache_candle_field_type` enum flags:
+
+```C
 typedef enum {
 	TRCACHE_START_TIMESTAMP     = 1 << 0,
 	TRCACHE_OPEN                = 1 << 1,
@@ -58,7 +69,7 @@ typedef enum {
 } trcache_candle_field_type;
 ```
 
-These constants are used to configure the engine and request specific data fields when querying candles.
+These constants are used to configure the engine and request specific data fields when querying candles. To request multiple field types, you can combine them using the bitwise OR operator (e.g., `TRCACHE_HIGH | TRCACHE_LOW`).
 
 ### 2. Allocate Candle Batches
 
