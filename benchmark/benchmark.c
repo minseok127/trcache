@@ -83,6 +83,8 @@ typedef struct {
 	double p99_time_us;
 	double p99_closing_us;
 	long discarded_samples;
+	trcache_worker_distribution_stats worker_stats;
+	trcache_memory_stats mem_stats;
 } periodic_stats;
 
 /**
@@ -591,6 +593,9 @@ void* monitor_thread_main(void *arg)
 		hdr_histogram_reset(ctx->time_latency_hist);
 		hdr_histogram_reset(ctx->closing_trade_latency_hist);
 		pthread_mutex_unlock(&ctx->hist_mutex);
+
+		trcache_get_worker_distribution(ctx->cache, &stats->worker_stats);
+		trcache_get_total_memory_breakdown(ctx->cache, &stats->mem_stats);
 	}
 	return NULL;
 }
@@ -630,21 +635,33 @@ void print_time_series_data(
 {
 	printf("\n--- Time-Series Performance Data (1-second intervals) ---\n");
 	printf(
-		"%-8s %-15s %-15s %-15s %-15s %-10s\n",
+		"%-8s %-15s %-15s %-15s %-15s %-10s %-10s %-10s %-10s %-12s %-12s %-12s %-12s %-12s\n",
 		"Time(s)", "Throughput", "p99_Tick(us)", "p99_Time(us)",
-		"p99_Closing(us)", "Discarded");
+		"p99_Closing(us)", "Discarded", "Apply", "Convert", "Flush",
+		"TDBuf(KB)", "CCList(KB)", "CCIdx(KB)", "SCQ(KB)", "SchedMsg(KB)");
 	printf("-----------------------------------------------------------------"
-		"----------\n");
+		"-----------------------------------------------------------------"
+		"--------------------------------------------------\n");
 	for(int i = 0; i < config->duration_sec; ++i) {
 		periodic_stats* s = &ctx->time_series_stats[i];
 		if (s->timestamp == 0) continue;
+
 		printf(
-			"%-8d %-15.0f %-15.3f %-15.3f %-15.3f %-10ld\n",
+			"%-8d %-15.0f %-15.3f %-15.3f %-15.3f %-10ld %-10d %-10d %-10d %-12zu %-12zu %-12zu %-12zu %-12zu\n",
 			s->timestamp, s->throughput, s->p99_tick_us,
-			s->p99_time_us, s->p99_closing_us, s->discarded_samples);
+			s->p99_time_us, s->p99_closing_us, s->discarded_samples,
+			s->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
+			s->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
+			s->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
+			s->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER] / 1024,
+			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST] / 1024,
+			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX] / 1024,
+			s->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE] / 1024,
+			s->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG] / 1024);
 	}
 	printf("-----------------------------------------------------------------"
-		"----------\n");
+		"-----------------------------------------------------------------"
+		"--------------------------------------------------\n");
 }
 
 /**
