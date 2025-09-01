@@ -6,16 +6,6 @@
 #include "trcache.h"
 
 /**
- * Identifiers for pipeline stages executed by workers.
- */
-typedef enum worker_stat_stage_type {
-	WORKER_STAT_STAGE_APPLY = 0,
-	WORKER_STAT_STAGE_CONVERT,
-	WORKER_STAT_STAGE_FLUSH,
-	WORKER_STAT_STAGE_NUM
-} worker_stat_stage_type;
-
-/**
  * worker_stage_stat - Accumulated performance counters for one stage.
  *
  * @cycles:     Total cycle count spent on this stage.

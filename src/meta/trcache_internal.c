@@ -997,3 +997,131 @@ void trcache_print_total_memory_breakdown(struct trcache *cache)
 	struct memstat *ms = &cache->mem_acc.ms;
 	memstat_errmsg_status(ms, false);
 }
+
+/**
+ * @brief   Get the current worker distribution and scheduler statistics.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_worker_distribution(struct trcache *cache,
+	trcache_worker_distribution_stats *stats)
+{
+	if (!cache || !stats) {
+		return -1;
+	}
+
+	update_all_pipeline_stats(cache);
+
+	{
+		double hz = tsc_cycles_per_sec();
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			uint64_t cycles = 0, count = 0;
+			for (int w = 0; w < cache->num_workers; w++) {
+				struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
+				for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
+					for (int j = 0; j < cache->num_candle_types[i]; ++j) {
+						if (s == WORKER_STAT_STAGE_APPLY) {
+							cycles += b->apply_stat[i][j].cycles;
+							count += b->apply_stat[i][j].work_count;
+						} else if (s == WORKER_STAT_STAGE_CONVERT) {
+							cycles += b->convert_stat[i][j].cycles;
+							count += b->convert_stat[i][j].work_count;
+						} else {
+							cycles += b->flush_stat[i][j].cycles;
+							count += b->flush_stat[i][j].work_count;
+						}
+					}
+				}
+			}
+			stats->stage_speeds[s] = (cycles != 0) ?
+				((double)count * hz / (double)cycles) : 0.0;
+		}
+	}
+
+	{
+		struct symbol_table *table = cache->symbol_table;
+		struct atomsnap_version *ver
+			= atomsnap_acquire_version(table->symbol_ptr_array_gate);
+		struct symbol_entry **arr = (struct symbol_entry **)ver->object;
+		int num = table->num_symbols;
+
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			stats->pipeline_demand[s] = 0.0;
+		}
+
+		for (int i = 0; i < num; i++) {
+			struct symbol_entry *e = arr[i];
+			for (int j = 0; j < NUM_CANDLE_BASES; ++j) {
+				for (int k = 0; k < cache->num_candle_types[j]; ++k) {
+					struct sched_stage_rate *r
+						= &e->pipeline_stats.stage_rates[j][k];
+					stats->pipeline_demand[WORKER_STAT_STAGE_APPLY]
+						+= (double)r->produced_rate;
+					stats->pipeline_demand[WORKER_STAT_STAGE_CONVERT]
+						+= (double)r->completed_rate;
+					stats->pipeline_demand[WORKER_STAT_STAGE_FLUSH]
+						+= (double)r->converted_rate;
+				}
+			}
+		}
+		atomsnap_release_version(ver);
+	}
+
+	compute_stage_limits(cache, stats->stage_limits);
+	compute_stage_starts(cache, stats->stage_limits, stats->stage_starts);
+
+	return 0;
+}
+
+/**
+ * @brief   Get a snapshot of the auxiliary memory usage.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_aux_memory_breakdown(struct trcache *cache,
+	trcache_memory_stats *stats)
+{
+	if (cache == NULL || stats == NULL) {
+		return -1;
+	}
+
+	struct memstat *ms = &cache->mem_acc.ms;
+	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
+		if (i == MEMSTAT_CANDLE_CHUNK_LIST || i == MEMSTAT_CANDLE_CHUNK_INDEX) {
+			stats->usage_bytes[i] = 0;
+			continue;
+		}
+		stats->usage_bytes[i] = memstat_get(ms, (memstat_category)i);
+	}
+
+	return 0;
+}
+
+/**
+ * @brief   Get a snapshot of the total memory usage.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_total_memory_breakdown(struct trcache *cache,
+	trcache_memory_stats *stats)
+{
+	if (cache == NULL || stats == NULL) {
+		return -1;
+	}
+
+	struct memstat *ms = &cache->mem_acc.ms;
+	for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
+		stats->usage_bytes[i] = memstat_get(ms, (memstat_category)i);
+	}
+
+	return 0;
+}

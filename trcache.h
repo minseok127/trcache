@@ -501,30 +501,6 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
 /**
- * @brief   Print current worker distribution per pipeline stage.
- *
- * Updates pipeline statistics and computes the number of workers allocated
- * to each pipeline stage according to the admin scheduler.
- *
- * @param   cache:  Handle from trcache_init().
- */
-void trcache_print_worker_distribution(struct trcache *cache);
-
-/**
- * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
- *
- * @param   cache: Pointer to a trcache instance as returned from trcache_init().
- */
-void trcache_print_aux_memory_breakdown(struct trcache *cache);
-
-/**
- * @brief   Print a breakdown of the total memory usage of a trcache.
- *
- * @param   cache: Pointer to a trcache instance as returned from trcache_init().
- */
-void trcache_print_total_memory_breakdown(struct trcache *cache);
-
-/**
  * @brief   Align a pointer upward to the next @p a-byte boundary.
  *
  * @param   p: Raw pointer to be aligned.
@@ -634,6 +610,115 @@ static inline void trcache_batch_alloc_on_stack(
 #define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap, mask) \
 	trcache_candle_batch var; \
 	trcache_batch_alloc_on_stack(&(var), (cap), (mask))
+
+/**
+ * Identifiers for pipeline stages executed by workers.
+ */
+typedef enum worker_stat_stage_type {
+	WORKER_STAT_STAGE_APPLY = 0,
+	WORKER_STAT_STAGE_CONVERT,
+	WORKER_STAT_STAGE_FLUSH,
+	WORKER_STAT_STAGE_NUM
+} worker_stat_stage_type;
+
+/**
+ * Identifiers for memory usage categories tracked by memstat.
+ */
+typedef enum memstat_category {
+	MEMSTAT_TRADE_DATA_BUFFER = 0,
+	MEMSTAT_CANDLE_CHUNK_LIST,
+	MEMSTAT_CANDLE_CHUNK_INDEX,
+	MEMSTAT_SCQ_NODE,
+	MEMSTAT_SCHED_MSG,
+	MEMSTAT_CATEGORY_NUM
+} memstat_category;
+
+/**
+ * trcache_worker_distribution_stats - Statistics on worker distribution
+ *                                     and performance.
+ *
+ * @stage_speeds:     Measured processing speed (items/sec) for each stage,
+ *                    indexed by 'worker_stat_stage_type'.
+ * @pipeline_demand:  Estimated demand (items/sec) for each pipeline stage,
+ *                    indexed by 'worker_stat_stage_type'.
+ * @stage_limits:     Number of workers allocated to each stage,
+ *                    indexed by 'worker_stat_stage_type'.
+ * @stage_starts:     Starting worker index for each stage,
+ *                    indexed by 'worker_stat_stage_type'.
+ */
+typedef struct trcache_worker_distribution_stats {
+	double stage_speeds[WORKER_STAT_STAGE_NUM];
+	double pipeline_demand[WORKER_STAT_STAGE_NUM];
+	int stage_limits[WORKER_STAT_STAGE_NUM];
+	int stage_starts[WORKER_STAT_STAGE_NUM];
+} trcache_worker_distribution_stats;
+
+/**
+ * trcache_memory_stats - A snapshot of memory usage by category.
+ *
+ * @usage_bytes: An array holding the memory usage in bytes for each category,
+ *               indexed by 'memstat_category'.
+ */
+typedef struct trcache_memory_stats {
+	size_t usage_bytes[MEMSTAT_CATEGORY_NUM];
+} trcache_memory_stats;
+
+/**
+ * @brief   Print current worker distribution per pipeline stage.
+ *
+ * Updates pipeline statistics and computes the number of workers allocated
+ * to each pipeline stage according to the admin scheduler.
+ *
+ * @param   cache:  Handle from trcache_init().
+ */
+void trcache_print_worker_distribution(struct trcache *cache);
+
+/**
+ * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_aux_memory_breakdown(struct trcache *cache);
+
+/**
+ * @brief   Print a breakdown of the total memory usage of a trcache.
+ *
+ * @param   cache: Pointer to a trcache instance as returned from trcache_init().
+ */
+void trcache_print_total_memory_breakdown(struct trcache *cache);
+
+/**
+ * @brief   Get the current worker distribution and scheduler statistics.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_worker_distribution(struct trcache *cache,
+	trcache_worker_distribution_stats *stats);
+
+/**
+ * @brief   Get a snapshot of the auxiliary memory usage.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_aux_memory_breakdown(struct trcache *cache,
+	trcache_memory_stats *stats);
+
+/**
+ * @brief   Get a snapshot of the total memory usage.
+ *
+ * @param   cache:  Handle from trcache_init().
+ * @param   stats:  Pointer to a user-allocated struct to be filled.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_total_memory_breakdown(struct trcache *cache,
+	trcache_memory_stats *stats);
 
 #ifdef __cplusplus
 }

@@ -379,8 +379,7 @@ _Static_assert(TRCACHE_NUM_CANDLE_FIELD == 9, "Field count/dispatch mismatch");
  *
  * The function jumps directly to the code block that handles the first set-bit
  * in @mask, copies one field, clears that bit, and jumps again until all
- * requested fields are processed. It never executes an indirect *call*,
- * only indirect *jumps*, so there is no call/return overhead.
+ * requested fields are processed.
  *
  * @param   c:     Pointer to the source candle (AoS).
  * @param   d:     Pointer to the destination batch (SoA).

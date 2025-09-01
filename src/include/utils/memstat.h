@@ -5,21 +5,11 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "trcache.h"
+
 #ifndef TRCACHE_CACHELINE_SIZE
 #define TRCACHE_CACHELINE_SIZE 64
 #endif
-
-/*
- * memstat_category - Memory usage categories tracked by memstat.
- */
-typedef enum memstat_category {
-	MEMSTAT_TRADE_DATA_BUFFER = 0,
-	MEMSTAT_CANDLE_CHUNK_LIST,
-	MEMSTAT_CANDLE_CHUNK_INDEX,
-	MEMSTAT_SCQ_NODE,
-	MEMSTAT_SCHED_MSG,
-	MEMSTAT_CATEGORY_NUM
-} memstat_category;
 
 /*
  * memstat_entry - Atomic counter padded to one cacheline.
