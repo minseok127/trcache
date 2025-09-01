@@ -86,6 +86,8 @@ TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 // ... stack_batch is valid within this scope
 ```
 
+When a batch is created, the arrays for the requested fields (e.g., open_array, high_array) are allocated together as a single, contiguous block of memory. The starting address of each array is also aligned to 64 bytes. This memory layout is intentionally designed to be friendly for SIMD operations.
+
 ### 3. Implement Update and Flush Operations
 
 `trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `trcache_candle_update_ops` and `trcache_batch_flush_ops` structures. Users should provide these callbacks for each candle type.
