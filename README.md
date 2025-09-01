@@ -30,7 +30,7 @@ make BUILD_MODE=debug
 
 ### 1. Candle and Field Types
 
-`trcache` exposes enums to define candle aggregation strategies (`trcache_candle_type`) and to select specific data fields (`trcache_candle_field_type`).
+`trcache` exposes structure to define candle aggregation strategies (`trcache_candle_type`) and enum to select specific data fields (`trcache_candle_field_type`).
 
 A `trcache_candle_type` struct is used to uniquely identify a specific kind of candle you want to work with. It has two parts: a `base` and a `type_idx`.
 
