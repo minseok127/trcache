@@ -375,4 +375,24 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 - **Worker Threads**: Workers are the execution units. Each worker maintains a list of assigned work items (a combination of symbol, candle type, and pipeline stage). They continuously iterate through their work list, executing the corresponding tasks (`worker_do_apply`, `worker_do_convert`, etc.).
 - **Communication**: The admin and worker threads communicate via lock-free queues (`scalable_queue`). This ensures that scheduling messages can be sent and received with minimal contention.
 
+### SIMD Optimization and Verification
+
+`trcache` is engineered to leverage the SIMD (Single Instruction, Multiple Data) capabilities of modern CPUs for maximum performance, particularly in data-intensive operations like transforming and copying candle data. This is achieved not through manual architecture-specific intrinsics, but by enabling the compiler's powerful auto-vectorization features.
+
+This optimization is made possible by three key principles:
+
+1. **Data Layout (SoA, Structure of Arrays)**: The `trcache_candle_batch` struct uses a **Structure of Arrays** layout. Storing identical fields contiguously (e.g., all open prices together) is efficient memory pattern for vector processing.
+
+2. **Memory Alignment**: All columnar arrays within a `trcache_candle_batch` are aligned to a 64-byte boundary. This satisfies the alignment requirements for modern SIMD instruction sets like AVX2 and AVX-512, preventing performance penalties from unaligned memory access.
+
+3. **Compiler Flags**: The build process uses the `-march=native` flag. This instructs the compiler to generate code optimized for the specific instruction sets of the host machine, automatically enabling the most advanced SIMD features available.
+
+SIMD instructions are utilized in several key functions within `src/pipeline/candle_chunk.c`:
+
+- `candle_chunk_copy_from_column_batch`: This is the most heavily vectorized function. Its helper inlines, `copy_segment_u64` and `copy_segment_u32`, are transformed by the compiler into `AVX2` instructions. The assembly shows that loops are unrolled to use `vmovdqu` instructions, which operate on 256-bit `ymm` registers. This allows the function to copy four double or eight uint32_t values in a single instruction, accelerating bulk data transfers between candle batches.
+
+- `candle_chunk_convert_to_batch`: This function converts row-oriented data (Array of Structs) to the columnar format (Struct of Arrays). While this "scatter" operation is not fully vectorized into parallel loops, the compiler still uses scalar `AVX` instructions like `vmovsd` to efficiently move individual double values into SIMD registers before writing them to the destination arrays.
+  
+- `candle_copy_dispatch_tbl`: Similar to the conversion function, this helper uses `vmovsd` for copying individual floating-point fields. Although it processes data element by element, it still benefits from using modern CPU instructions for scalar floating-point operations.
+
 # Evaluation
