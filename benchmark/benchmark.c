@@ -1,14 +1,6 @@
 /**
  * @file   benchmark.c
  * @brief  A production-level performance benchmark for the trcache library.
- *
- * This program implements a fully partitioned measurement system to eliminate
- * contention and accurately reflect trcache's performance. Each symbol uses
- * an independent circular buffer for timestamps, preventing both software
- * and hardware (false sharing) contention between threads. Latency is
- * measured with nanosecond precision using HDR Histograms to analyze the
- * full distribution, including critical tail latencies. The benchmark is
- * designed for long-duration runs, ensuring stability and data consistency.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -71,6 +63,7 @@ typedef struct {
 	int start_cpu_core;
 	scenario_type scenario;
 	candle_mode_type candle_mode;
+	char* output_file_path;
 } benchmark_config;
 
 /**
@@ -81,7 +74,7 @@ typedef struct {
 	double throughput;
 	double p99_tick_us;
 	double p99_time_us;
-	double p99_closing_us;
+	double p99_overall_us;
 	long discarded_samples;
 	trcache_worker_distribution_stats worker_stats;
 	trcache_memory_stats mem_stats;
@@ -105,7 +98,7 @@ typedef struct {
 
 	struct hdr_histogram* tick_latency_hist;
 	struct hdr_histogram* time_latency_hist;
-	struct hdr_histogram* closing_trade_latency_hist;
+	struct hdr_histogram* overall_latency_hist;
 	pthread_mutex_t hist_mutex;
 
 	periodic_stats* time_series_stats;
@@ -126,9 +119,9 @@ void* feeder_thread_main(void *arg);
 void* querier_thread_main(void *arg);
 void* monitor_thread_main(void *arg);
 void print_final_summary(
-	const benchmark_config *config, shared_context *ctx);
+	const benchmark_config *config, shared_context *ctx, FILE* out_file);
 void print_time_series_data(
-	const benchmark_config *config, shared_context *ctx);
+	const benchmark_config *config, shared_context *ctx, FILE* out_file);
 void set_thread_affinity(int core_id);
 int parse_duration(const char* str);
 const char* scenario_to_string(scenario_type s);
@@ -233,7 +226,7 @@ int main(int argc, char *argv[])
 		config.num_symbols, sizeof(_Atomic uint64_t));
 	hdr_histogram_init(1, 1000000000, 3, &ctx.tick_latency_hist);
 	hdr_histogram_init(1, 1000000000, 3, &ctx.time_latency_hist);
-	hdr_histogram_init(1, 1000000000, 3, &ctx.closing_trade_latency_hist);
+	hdr_histogram_init(1, 1000000000, 3, &ctx.overall_latency_hist);
 	ctx.time_series_stats =
 		calloc(config.duration_sec, sizeof(periodic_stats));
 
@@ -262,8 +255,16 @@ int main(int argc, char *argv[])
 	pthread_join(querier, NULL);
 	pthread_join(monitor, NULL);
 
-	print_final_summary(&config, &ctx);
-	print_time_series_data(&config, &ctx);
+	FILE* out_file = fopen(config.output_file_path, "w");
+	if (!out_file) {
+		perror("Failed to open output file");
+		return 1;
+	}
+
+	print_final_summary(&config, &ctx, out_file);
+	print_time_series_data(&config, &ctx, out_file);
+
+	fclose(out_file);
 
 	// --- Cleanup ---
 	trcache_destroy(cache);
@@ -277,7 +278,7 @@ int main(int argc, char *argv[])
 	free(ctx.last_known_closing_trade_id);
 	hdr_histogram_close(ctx.tick_latency_hist);
 	hdr_histogram_close(ctx.time_latency_hist);
-	hdr_histogram_close(ctx.closing_trade_latency_hist);
+	hdr_histogram_close(ctx.overall_latency_hist);
 	free(ctx.time_series_stats);
 	pthread_mutex_destroy(&ctx.hist_mutex);
 
@@ -477,7 +478,7 @@ void* querier_thread_main(void *arg)
 						hdr_histogram_record_value(
 							ctx->tick_latency_hist, latency);
 						hdr_histogram_record_value(
-							ctx->closing_trade_latency_hist, latency);
+							ctx->overall_latency_hist, latency);
 						pthread_mutex_unlock(&ctx->hist_mutex);
 					} else {
 						atomic_fetch_add(&ctx->discarded_sample_count, 1);
@@ -538,7 +539,7 @@ void* querier_thread_main(void *arg)
 						hdr_histogram_record_value(
 							ctx->time_latency_hist, latency);
 						hdr_histogram_record_value(
-							ctx->closing_trade_latency_hist, latency);
+							ctx->overall_latency_hist, latency);
 						pthread_mutex_unlock(&ctx->hist_mutex);
 					} else {
 						atomic_fetch_add(&ctx->discarded_sample_count, 1);
@@ -585,18 +586,47 @@ void* monitor_thread_main(void *arg)
 			ctx->tick_latency_hist, 99.0) / 1000.0;
 		stats->p99_time_us = (double)hdr_histogram_value_at_percentile(
 			ctx->time_latency_hist, 99.0) / 1000.0;
-		stats->p99_closing_us = (double)hdr_histogram_value_at_percentile(
-			ctx->closing_trade_latency_hist, 99.0) / 1000.0;
+		stats->p99_overall_us = (double)hdr_histogram_value_at_percentile(
+			ctx->overall_latency_hist, 99.0) / 1000.0;
 		stats->discarded_samples =
 			atomic_exchange(&ctx->discarded_sample_count, 0);
 		hdr_histogram_reset(ctx->tick_latency_hist);
 		hdr_histogram_reset(ctx->time_latency_hist);
-		hdr_histogram_reset(ctx->closing_trade_latency_hist);
+		hdr_histogram_reset(ctx->overall_latency_hist);
 		pthread_mutex_unlock(&ctx->hist_mutex);
 
 		trcache_get_worker_distribution(ctx->cache, &stats->worker_stats);
 		trcache_get_total_memory_breakdown(ctx->cache, &stats->mem_stats);
+
+		double mem_tdb_gb
+			= (double)stats->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER]
+				/ (1024*1024*1024);
+		double mem_ccl_gb
+			= (double)stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST]
+				/ (1024*1024*1024);
+		double mem_cci_gb
+			= (double)stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX]
+				/ (1024*1024*1024);
+		double mem_scq_gb
+			= (double)stats->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE]
+				/ (1024*1024*1024);
+		double mem_msg_gb
+			= (double)stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]
+				/ (1024*1024*1024);
+
+		printf("\r[Time: %3ds] Throughput: %8.0f trades/s | p99 Latency (us) - Tick: %7.3f, Time: %7.3f, Overall: %7.3f | Workers (A/C/F): %d/%d/%d | Mem (GB) - TDB:%.2f, CCL:%.2f, CCI:%.2f, SCQ:%.2f, MSG:%.2f",
+			stats->timestamp,
+			stats->throughput,
+			stats->p99_tick_us,
+			stats->p99_time_us,
+			stats->p99_overall_us,
+			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
+			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
+			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
+			mem_tdb_gb, mem_ccl_gb, mem_cci_gb, mem_scq_gb, mem_msg_gb);
+		fflush(stdout);
 	}
+	printf("\n");
 	return NULL;
 }
 
@@ -605,63 +635,74 @@ void* monitor_thread_main(void *arg)
  * @brief   Prints a final summary of the benchmark run.
  */
 void print_final_summary(
-	const benchmark_config *config, shared_context *ctx)
+	const benchmark_config *config, shared_context *ctx, FILE* out_file)
 {
 	long total_trades = atomic_load(&ctx->total_trades_fed);
 	double throughput = (double)total_trades / config->duration_sec;
-	printf("\n--- Benchmark Summary ---\n");
-	printf("  Scenario: %s, Candle Mode: %s\n",
+	fprintf(out_file, "\n--- Benchmark Summary ---\n");
+	fprintf(out_file, "  Scenario: %s, Candle Mode: %s\n",
 		scenario_to_string(config->scenario),
 		candle_mode_to_string(config->candle_mode));
-	printf(
+	fprintf(out_file,
 		"  Config: %d workers, %d feeders, %d symbols, "
 		"%ds duration (%ds warmup)\n",
 		config->num_worker_threads, config->num_feeder_threads,
 		config->num_symbols, config->duration_sec, config->warmup_sec);
-	printf("-----------------------------------------------------------------\n");
-	printf("  Average Ingestion Throughput: %.2f trades/sec\n", throughput);
-	printf("\n--- System Status at Shutdown ---\n");
-	trcache_print_total_memory_breakdown(ctx->cache);
-	printf("\n");
-	trcache_print_worker_distribution(ctx->cache);
-	printf("-----------------------------------------------------------------\n");
+	fprintf(out_file, "-----------------------------------------------------------------\n");
+	fprintf(out_file, "  Average Ingestion Throughput: %.2f trades/sec\n", throughput);
+	fprintf(out_file, "\n--- System Status at Shutdown ---\n");
+    if (config->duration_sec > 0) {
+        periodic_stats* last_stats = &ctx->time_series_stats[config->duration_sec - 1];
+        fprintf(out_file, "Final Memory Usage:\n");
+        fprintf(out_file, "  Trade Data Buffer: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER]);
+        fprintf(out_file, "  Candle Chunk List: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST]);
+        fprintf(out_file, "  Candle Chunk Index: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX]);
+        fprintf(out_file, "  SCQ Nodes: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE]);
+        fprintf(out_file, "  Scheduler Messages: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
+        fprintf(out_file, "\nFinal Worker Distribution:\n");
+        fprintf(out_file, "  Apply: %d, Convert: %d, Flush: %d\n",
+               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
+               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
+               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH]);
+    }
+	fprintf(out_file, "-----------------------------------------------------------------\n");
 }
 
 /**
  * @brief   Prints the collected time-series data in a CSV-friendly format.
  */
 void print_time_series_data(
-	const benchmark_config *config, shared_context *ctx)
+	const benchmark_config *config, shared_context *ctx, FILE* out_file)
 {
-	printf("\n--- Time-Series Performance Data (1-second intervals) ---\n");
-	printf(
-		"%-8s %-15s %-15s %-15s %-15s %-10s %-10s %-10s %-10s %-12s %-12s %-12s %-12s %-12s\n",
+	fprintf(out_file, "\n--- Time-Series Performance Data (1-second intervals) ---\n");
+	fprintf(out_file,
+		"%-8s %-15s %-15s %-15s %-15s %-10s %-10s %-10s %-10s %-15s %-15s %-15s %-15s %-15s\n",
 		"Time(s)", "Throughput", "p99_Tick(us)", "p99_Time(us)",
-		"p99_Closing(us)", "Discarded", "Apply", "Convert", "Flush",
-		"TDBuf(KB)", "CCList(KB)", "CCIdx(KB)", "SCQ(KB)", "SchedMsg(KB)");
-	printf("-----------------------------------------------------------------"
+		"p99_Overall(us)", "Discarded", "Apply", "Convert", "Flush",
+		"TDBuf(Bytes)", "CCList(Bytes)", "CCIdx(Bytes)", "SCQ(Bytes)", "SchedMsg(Bytes)");
+	fprintf(out_file, "-----------------------------------------------------------------"
 		"-----------------------------------------------------------------"
-		"--------------------------------------------------\n");
+		"----------------------------------------------------------------------\n");
 	for(int i = 0; i < config->duration_sec; ++i) {
 		periodic_stats* s = &ctx->time_series_stats[i];
 		if (s->timestamp == 0) continue;
 
-		printf(
-			"%-8d %-15.0f %-15.3f %-15.3f %-15.3f %-10ld %-10d %-10d %-10d %-12zu %-12zu %-12zu %-12zu %-12zu\n",
+		fprintf(out_file,
+			"%-8d %-15.0f %-15.3f %-15.3f %-15.3f %-10ld %-10d %-10d %-10d %-15zu %-15zu %-15zu %-15zu %-15zu\n",
 			s->timestamp, s->throughput, s->p99_tick_us,
-			s->p99_time_us, s->p99_closing_us, s->discarded_samples,
+			s->p99_time_us, s->p99_overall_us, s->discarded_samples,
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
-			s->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER] / 1024,
-			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST] / 1024,
-			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX] / 1024,
-			s->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE] / 1024,
-			s->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG] / 1024);
+			s->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER],
+			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST],
+			s->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX],
+			s->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE],
+			s->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
 	}
-	printf("-----------------------------------------------------------------"
+	fprintf(out_file, "-----------------------------------------------------------------"
 		"-----------------------------------------------------------------"
-		"--------------------------------------------------\n");
+		"----------------------------------------------------------------------\n");
 }
 
 /**
