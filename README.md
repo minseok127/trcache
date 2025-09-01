@@ -189,8 +189,18 @@ const struct trcache_batch_flush_ops ops_5m_candle = {
 
 ### 4. Initialize the Engine
 
-Configure and initialize the `trcache` instance using `trcache_init_ctx`.
+To configure and initialize the trcache instance, you must use the `trcache_init_ctx` struct. This struct encapsulates all the essential parameters that control the library's behavior.
 
+The fields of `trcache_init_ctx` are:
+
+- `num_worker_threads`: The number of worker threads to spawn for data processing.
+- `batch_candle_count_pow2`: Specifies the number of candles per column-oriented batch as a power of two (e.g., 10 means 1024 candles).
+- `cached_batch_count_pow2`: Sets the number of candle batches to cache in memory before a flush is triggered, as a power of two (e.g., 3 means 8 batches).
+- `candle_types`: An array of pointers to arrays of `trcache_candle_config` structs. Each inner array defines the configurations for a specific candle base, such as `CANDLE_TIME_BASE` or `CANDLE_TICK_BASE`.
+- `num_candle_types`: An array specifying the number of configurations provided for each candle base.
+- `aux_memory_limit`: The maximum amount of memory (in bytes) that `trcache` can use for auxiliary data structures (e.g., scheduler messages, internal buffers). A value of 0 means no limit. This limit does not apply to the memory used for the candle data itself.
+
+Here is an example of how to initialize the trcache engine:
 ```C
 // Define candle update logic using helper macros
 DEFINE_TIME_CANDLE_OPS(5m, 300000);   // 5-minute candle
@@ -232,7 +242,17 @@ if (!cache) {
 }
 ```
 
-Calling `trcache_init()` spawns one admin thread and the specified number of worker threads.
+In this example, we:
+
+1. **Define Candle Logic**: Use the `DEFINE_TIME_CANDLE_OPS` and `DEFINE_TICK_CANDLE_OPS` helper macros to generate the update logic for several time-based (5-minute, 1-minute) and tick-based (100-tick, 20-tick) candles.
+
+2. **Set Up Flush Operations**: Define a `trcache_batch_flush_ops` that points to a `sync_flush` function for synchronous flushing.
+
+3. **Configure Candles**: Create two arrays, `time_candles` and `tick_candles`. Each element in these arrays specifies the threshold, update logic, and flush behavior for a specific candle type (e.g., the 5-minute candle).
+
+4. **Populate the Init Context**: Fill the `trcache_init_ctx` struct with all settings, including the number of worker threads, batch size, flush threshold, auxiliary memory limit, and the candle configuration arrays.
+
+5. **Initialize the Engine**: Call `trcache_init()` with the context to create the `trcache` instance. This function spawns the specified number of worker threads and one admin thread.
 
 ### 5. Register and Query Symbols
 
@@ -246,7 +266,7 @@ int again = trcache_lookup_symbol_id(cache, "AAPL");       // same ID
 
 ### 6. Feed Trade Data
 
-Push real-time trade data into the pipeline.
+Push real-time trade data into the `trcache` by calling `trcache_feed_trade_data()`.
 
 ```C
 struct trcache_trade_data td = {
@@ -258,6 +278,8 @@ struct trcache_trade_data td = {
 
 trcache_feed_trade_data(cache, &td, aapl_id);
 ```
+
+The data is processed through `trcache`'s internal lock-free pipeline. Each trade is first aggregated into row-oriented candles in the Apply stage, then transformed into column-oriented batches for efficient analysis in the Convert stage. Finally, the Flush stage hands off completed batches to your user-defined callbacks for persistence.
 
 ### 7. Querying Candle Data
 
