@@ -96,7 +96,7 @@ When a batch is created, the arrays for the requested fields (e.g., open_array, 
 
 This structure defines the logic for how a candle is initialized from the first trade and updated with subsequent trades.
 - `init(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called once per candle to initialize it using the first trade data `d`.
-- `update(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called for subsequent trades to update an existing candle `c`. It must return `true` if the trade was consumed by the current candle, or `false` if the candle is considered complete and the trade should start a new candle.
+- `update(struct trcache_candle *c, struct trcache_trade_data *d)`: This function is called for subsequent trades to update an existing candle `c`. The function returns `true` if the given trade is consumed by the current candle. Conversely, it returns `false` if the current candle is considered complete, meaning the trade is not applied to it and should instead be used to initialize a new candle.
 
 ```C
 typedef struct trcache_candle_update_ops {
