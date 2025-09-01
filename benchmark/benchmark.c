@@ -135,11 +135,11 @@ DEFINE_TICK_CANDLE_OPS(100t, TICK_CANDLE_INTERVAL);
  */
 int main(int argc, char *argv[])
 {
-	if (argc < 8) {
+	if (argc < 9) {
 		fprintf(
 			stderr,
 			"Usage: %s <workers> <symbols> <duration> <warmup> "
-			"<scenario> <candle_mode> <start_core>\n",
+			"<scenario> <candle_mode> <start_core> <output_file>\n",
 			argv[0]);
 		fprintf(stderr, "  Duration format: e.g., 1h, 30m, 10s\n");
 		fprintf(stderr, "  Scenario: 0=HFT, 1=FlashCrash, 2=Gapping\n");
@@ -156,6 +156,7 @@ int main(int argc, char *argv[])
 		.scenario = (scenario_type)atoi(argv[5]),
 		.candle_mode = (candle_mode_type)atoi(argv[6]),
 		.start_cpu_core = atoi(argv[7]),
+		.output_file_path = argv[8],
 		.num_feeder_threads = 4
 	};
 	if (config.duration_sec <= 0 || config.warmup_sec < 0) return 1;
