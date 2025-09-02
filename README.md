@@ -82,7 +82,7 @@ typedef struct trcache_candle {
 } trcache_candle;
 ```
 
-You can select which data fields you want to retrieve using the trcache_candle_field_type enum flags:
+You can select which data fields you want to retrieve using the `trcache_candle_field_type` enum flags:
 
 ```C
 typedef enum {
