@@ -81,6 +81,7 @@ typedef struct {
 	_Atomic long total_trades_fed;
 	int *symbol_ids;
 	_Atomic uint64_t* latest_creation_ns_per_symbol;
+	_Atomic uint64_t* trade_id_per_symbol;
 	_Atomic long discarded_sample_count;
 	struct hdr_histogram* overall_latency_hist;
 	pthread_mutex_t hist_mutex;
@@ -191,6 +192,11 @@ int main(int argc, char *argv[])
 	pthread_mutex_init(&ctx.hist_mutex, NULL);
 	ctx.latest_creation_ns_per_symbol
 		= calloc(config.num_symbols, sizeof(_Atomic uint64_t));
+	ctx.trade_id_per_symbol
+		= calloc(config.num_symbols, sizeof(_Atomic uint64_t));
+	for (int i = 0; i < config.num_symbols; ++i) {
+		atomic_init(&ctx.trade_id_per_symbol[i], 0);
+	}
 	hdr_histogram_init(1, 1000000000, 3, &ctx.overall_latency_hist);
 	ctx.time_series_stats =
 		calloc(config.duration_sec, sizeof(periodic_stats));
@@ -235,6 +241,7 @@ int main(int argc, char *argv[])
 	trcache_destroy(cache);
 	free(symbol_ids);
     free(ctx.latest_creation_ns_per_symbol);
+	free(ctx.trade_id_per_symbol);
 	hdr_histogram_close(ctx.overall_latency_hist);
 	free(ctx.time_series_stats);
 	pthread_mutex_destroy(&ctx.hist_mutex);
@@ -274,7 +281,6 @@ void* feeder_thread_main(void *arg)
 		set_thread_affinity(core_id + f_args->feeder_id);
 	}
 
-	uint64_t trade_id_counter = 0;
 	time_t start_time = time(NULL);
 
 	int num_feeders = config->num_feeder_threads;
@@ -299,10 +305,11 @@ void* feeder_thread_main(void *arg)
 			struct timespec now;
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+			uint64_t trade_id = ctx->trade_id_per_symbol[i]++;
 
 			struct trcache_trade_data td = {
 				.timestamp = now_ns / 1000000,
-                .trade_id = trade_id_counter++,
+                .trade_id = trade_id,
 				.price = (double)now_ns,
                 .volume = (rand() % 10 == 0) ?
 					(double)(rand() % 1000 + 100) : (double)(rand() % 100 + 1),
