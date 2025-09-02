@@ -28,9 +28,7 @@ make BUILD_MODE=debug
 
 # Basic Usage
 
-### 1. Candle and Field Types
-
-`trcache` exposes structure to define candle aggregation strategies (`trcache_candle_type`) and enum to select specific data fields (`trcache_candle_field_type`).
+### 1. Candle Types
 
 A `trcache_candle_type` struct is used to uniquely identify a specific kind of candle you want to work with. It has two parts: a `base` and a `type_idx`.
 
@@ -42,6 +40,13 @@ typedef enum {
 	NUM_CANDLE_BASES
 } trcache_candle_base;
 
+/*
+ * This enum serves as a high-level classifier for different candle aggregation
+ * strategies. For example, CANDLE_TIME_BASE groups all candles formed based on
+ * time intervals, while CANDLE_TICK_BASE groups those formed by a fixed
+ * number of trades. This design allows for the flexible addition of entirely
+ * new candle formation concepts in the future.
+ */
 typedef struct trcache_candle_type {
 	trcache_candle_base base;
 	int type_idx;
@@ -53,7 +58,31 @@ typedef struct trcache_candle_type {
 
 For instance, if you configure two time-based candles—a 1-minute candle at index 0 and a 5-minute candle at index 1—you would use `{ .base = CANDLE_TIME_BASE, .type_idx = 0 }` to refer to the 1-minute candles and `{ .base = CANDLE_TIME_BASE, .type_idx = 1 }` for the 5-minute candles.
 
-Additionally, you can select which data fields you want to retrieve using the `trcache_candle_field_type` enum flags:
+### 2. Field Types
+
+Each candle is uniquely identified by a 64-bit key. This key is defined as a `union` to provide semantic clarity based on the candle's `base`. Your `init` callback is responsible for setting this key, which must be monotonically increasing. This design allows you to define a candle's identifier flexibly (e.g., using its start time or end time).
+
+```C
+// From trcache.h
+typedef struct trcache_candle {
+	union {
+		uint64_t timestamp;
+		uint64_t trade_id;
+		uint64_t value;
+	} key;
+	double open;
+	double high;
+	double low;
+	double close;
+	double volume;
+	double trading_value;
+	uint32_t trade_count;
+	bool is_closed;
+	uint8_t pad[3];
+} trcache_candle;
+```
+
+You can select which data fields you want to retrieve using the trcache_candle_field_type enum flags:
 
 ```C
 typedef enum {
@@ -71,7 +100,7 @@ typedef enum {
 
 These constants are used to configure the engine and request specific data fields when querying candles. To request multiple field types, you can combine them using the bitwise OR operator (e.g., `TRCACHE_HIGH | TRCACHE_LOW`).
 
-### 2. Allocate Candle Batches
+### 3. Allocate Candle Batches
 
 A `trcache_candle_batch` represents a column-oriented array of OHLCV candles. It can be allocated on the heap or the stack.
 
@@ -88,7 +117,7 @@ TRCACHE_DEFINE_BATCH_ON_STACK(stack_batch, 512, TRCACHE_HIGH | TRCACHE_CLOSE);
 
 When a batch is created, the arrays for the requested fields (e.g., open_array, high_array) are allocated together as a single, contiguous block of memory. The starting address of each array is also aligned to 64 bytes. This memory layout is intentionally designed to be friendly for SIMD operations.
 
-### 3. Implement Update and Flush Operations
+### 4. Implement Update and Flush Operations
 
 `trcache` provides a callback-based interface for users to define how candle data is processed and stored. This is done through the `trcache_candle_update_ops` and `trcache_batch_flush_ops` structures. Users should provide these callbacks for each candle type.
 
@@ -187,7 +216,7 @@ const struct trcache_batch_flush_ops ops_5m_candle = {
 };
 ```
 
-### 4. Initialize the Engine
+### 5. Initialize the Engine
 
 To configure and initialize the trcache instance, you must use the `trcache_init_ctx` struct. This struct encapsulates all the essential parameters that control the library's behavior.
 
@@ -254,7 +283,7 @@ In this example, we:
 
 5. **Initialize the Engine**: Call `trcache_init()` with the context to create the `trcache` instance. This function spawns the specified number of worker threads and one admin thread.
 
-### 5. Register and Query Symbols
+### 6. Register and Query Symbols
 
 Symbols must be registered before use.
 
@@ -264,7 +293,7 @@ const char *name = trcache_lookup_symbol_str(cache, aapl_id); // "AAPL"
 int again = trcache_lookup_symbol_id(cache, "AAPL");       // same ID
 ```
 
-### 6. Feed Trade Data
+### 7. Feed Trade Data
 
 Push real-time trade data into the `trcache` by calling `trcache_feed_trade_data()`.
 
@@ -281,12 +310,12 @@ trcache_feed_trade_data(cache, &td, aapl_id);
 
 The data is processed through `trcache`'s internal lock-free pipeline. Each trade is first aggregated into row-oriented candles in the Apply stage, then transformed into column-oriented batches for efficient analysis in the Convert stage. Finally, the Flush stage hands off completed batches to your user-defined callbacks for persistence.
 
-### 7. Querying Candle Data
+### 8. Querying Candle Data
 
-`trcache` provides functions to retrieve candle data for a given symbol. You can query data based on a specific end-point in time or relative to the most recent candle. All query functions are thread-safe.
+`trcache` provides functions to retrieve candle data for a given symbol. You can query data based on a specific identifying key or relative to the most recent candle. All query functions are thread-safe.
 
-- `trcache_get_candles_by_symbol_..._and_ts(...,uint64_t ts_end, int count,...)`: Retrieves a `count` of candles ending at the candle whose time range includes the specified `ts_end` (a Unix timestamp in milliseconds).
-- `trcache_get_candles_by_symbol_..._and_offset(...,int offset, int count,...)`: Retrieves a `count` of candles ending at a specific `offset` from the most recent candle, where `offset = 0` refers to the latest (potentially still open) candle.
+- `trcache_get_candles_by_symbol_..._and_key(..., uint64_t key, int count, ...)`: Retrieves `count` candles ending at the candle with the specified `key`.
+- `trcache_get_candles_by_symbol_..._and_offset(...,int offset, int count,...)`: Retrieves a `count` of candles ending at a specific `offset` from the most recent candle, where `offset = 0` refers to the latest candle.
 
 Both query types can identify the symbol by its string name (_str) or its integer ID.
 
@@ -298,16 +327,16 @@ trcache_candle_type candle_type = { .base = CANDLE_TIME_BASE, .type_idx = 0 };
 TRCACHE_DEFINE_BATCH_ON_STACK(batch, 100, TRCACHE_FIELD_MASK_ALL);
 
 // Example: Get the last 50 candles ending at a specific timestamp
-uint64_t end_ts = 1620005400000ULL; // An exact timestamp
+uint64_t end_key = 1620005400000ULL; // A specific start timestamp
 int count = 50;
 
-if (trcache_get_candles_by_symbol_str_and_ts(cache, "AAPL", candle_type,
-        TRCACHE_START_TIMESTAMP | TRCACHE_CLOSE, end_ts, count, &batch) == 0) {
+if (trcache_get_candles_by_symbol_str_and_key(cache, "AAPL", candle_type,
+        TRCACHE_KEY | TRCACHE_CLOSE, end_key, count, &batch) == 0) {
     printf("Successfully retrieved %d candles for AAPL\n", batch.num_candles);
     for (int i = 0; i < batch.num_candles; i++) {
         // Access data via columnar arrays
-        printf("Timestamp: %llu, Close: %f\n",
-               batch.start_timestamp_array[i], batch.close_array[i]);
+        printf("Key (Timestamp): %llu, Close: %f\n",
+               batch.key_array[i], batch.close_array[i]);
     }
 }
 
@@ -319,7 +348,7 @@ if (trcache_get_candles_by_symbol_id_and_offset(cache, aapl_id, candle_type,
 }
 ```
 
-### 8. Destroy the Engine
+### 9. Destroy the Engine
 
 Clean up all resources.
 
