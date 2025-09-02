@@ -1,6 +1,8 @@
 /**
  * @file   benchmark.c
- * @brief  A production-level performance benchmark for the trcache library.
+ * @brief  A benchmark measuring the data ingestion latency for the trcache
+ * library. It measures the time from when a trade is created until it becomes
+ * visible in the latest queryable candle.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -42,16 +44,6 @@ typedef enum {
 } candle_mode_type;
 
 /**
- * @brief A 16-byte structure for timestamp data, protected by a seqlock.
- */
-typedef struct {
-	_Atomic unsigned int sequence;
-	uint64_t creation_ns;
-	uint64_t full_trade_id; // Per-symbol trade id
-} timestamp_entry;
-
-
-/**
  * @brief Benchmark configuration parameters, set via command-line arguments.
  */
 typedef struct {
@@ -72,9 +64,7 @@ typedef struct {
 typedef struct {
 	int timestamp;
 	double throughput;
-	double p99_tick_us;
-	double p99_time_us;
-	double p99_overall_us;
+	double p99_latency_us;
 	long discarded_samples;
 	trcache_worker_distribution_stats worker_stats;
 	trcache_memory_stats mem_stats;
@@ -89,18 +79,11 @@ typedef struct {
 	_Atomic bool should_stop;
 	_Atomic bool warmup_done;
 	_Atomic long total_trades_fed;
-	uint64_t* symbol_trade_id_counters;
 	int *symbol_ids;
-	timestamp_entry** trade_creation_times_per_symbol;
-	_Atomic uint64_t* time_closing_trade_ids;
-	_Atomic uint64_t* last_known_closing_trade_id;
+	_Atomic uint64_t* latest_creation_ns_per_symbol;
 	_Atomic long discarded_sample_count;
-
-	struct hdr_histogram* tick_latency_hist;
-	struct hdr_histogram* time_latency_hist;
 	struct hdr_histogram* overall_latency_hist;
 	pthread_mutex_t hist_mutex;
-
 	periodic_stats* time_series_stats;
 } shared_context;
 
@@ -114,14 +97,13 @@ typedef struct {
 
 // --- Function Prototypes ---
 void* dummy_sync_flush(trcache *c, trcache_candle_batch *b, void *flush_ctx);
-double generate_normal_random();
 void* feeder_thread_main(void *arg);
 void* querier_thread_main(void *arg);
 void* monitor_thread_main(void *arg);
-void print_final_summary(
-	const benchmark_config *config, shared_context *ctx, FILE* out_file);
-void print_time_series_data(
-	const benchmark_config *config, shared_context *ctx, FILE* out_file);
+void print_final_summary(const benchmark_config *config, shared_context *ctx,
+	FILE* out_file);
+void print_time_series_data(const benchmark_config *config, shared_context *ctx,
+	FILE* out_file);
 void set_thread_affinity(int core_id);
 int parse_duration(const char* str);
 const char* scenario_to_string(scenario_type s);
@@ -207,26 +189,8 @@ int main(int argc, char *argv[])
 	atomic_init(&ctx.total_trades_fed, 0);
 	atomic_init(&ctx.discarded_sample_count, 0);
 	pthread_mutex_init(&ctx.hist_mutex, NULL);
-	ctx.symbol_trade_id_counters =
-		calloc(config.num_symbols, sizeof(uint64_t));
-	ctx.trade_creation_times_per_symbol =
-		malloc(config.num_symbols * sizeof(timestamp_entry*));
-	for (int i = 0; i < config.num_symbols; i++) {
-		if (posix_memalign(
-				(void**)&ctx.trade_creation_times_per_symbol[i],
-				CACHE_LINE_SIZE,
-				PER_SYMBOL_BUFFER_SIZE * sizeof(timestamp_entry)) != 0) {
-			fprintf(stderr,
-				"Failed to allocate aligned memory for symbol %d\n", i);
-			return 1;
-		}
-	}
-	ctx.time_closing_trade_ids = calloc(
-		config.num_symbols, sizeof(_Atomic uint64_t));
-	ctx.last_known_closing_trade_id = calloc(
-		config.num_symbols, sizeof(_Atomic uint64_t));
-	hdr_histogram_init(1, 1000000000, 3, &ctx.tick_latency_hist);
-	hdr_histogram_init(1, 1000000000, 3, &ctx.time_latency_hist);
+	ctx.latest_creation_ns_per_symbol
+		= calloc(config.num_symbols, sizeof(_Atomic uint64_t));
 	hdr_histogram_init(1, 1000000000, 3, &ctx.overall_latency_hist);
 	ctx.time_series_stats =
 		calloc(config.duration_sec, sizeof(periodic_stats));
@@ -270,15 +234,7 @@ int main(int argc, char *argv[])
 	// --- Cleanup ---
 	trcache_destroy(cache);
 	free(symbol_ids);
-	free(ctx.symbol_trade_id_counters);
-	for (int i = 0; i < config.num_symbols; i++) {
-		free(ctx.trade_creation_times_per_symbol[i]);
-	}
-	free(ctx.trade_creation_times_per_symbol);
-	free(ctx.time_closing_trade_ids);
-	free(ctx.last_known_closing_trade_id);
-	hdr_histogram_close(ctx.tick_latency_hist);
-	hdr_histogram_close(ctx.time_latency_hist);
+    free(ctx.latest_creation_ns_per_symbol);
 	hdr_histogram_close(ctx.overall_latency_hist);
 	free(ctx.time_series_stats);
 	pthread_mutex_destroy(&ctx.hist_mutex);
@@ -305,17 +261,6 @@ void set_thread_affinity(int core_id)
 }
 
 /**
- * @brief   Generates a normally distributed random number.
- * @return  A random number from a standard normal distribution.
- */
-double generate_normal_random()
-{
-	double u1 = (double)rand() / RAND_MAX;
-	double u2 = (double)rand() / RAND_MAX;
-	return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-}
-
-/**
  * @brief   Feeder thread that generates and ingests trade data.
  */
 void* feeder_thread_main(void *arg)
@@ -329,10 +274,8 @@ void* feeder_thread_main(void *arg)
 		set_thread_affinity(core_id + f_args->feeder_id);
 	}
 
-	double price = 150.0 + (f_args->feeder_id * 10);
-	double mu = 0.0000001, sigma = 0.0001, dt = 1.0;
-	uint64_t last_timestamp_ms[config->num_symbols];
-	memset(last_timestamp_ms, 0, sizeof(last_timestamp_ms));
+	uint64_t trade_id_counter = 0;
+	time_t start_time = time(NULL);
 
 	int num_feeders = config->num_feeder_threads;
 	int symbols_per_feeder = config->num_symbols / num_feeders;
@@ -342,9 +285,6 @@ void* feeder_thread_main(void *arg)
 		end_idx = config->num_symbols;
 	}
 
-	struct timespec now;
-	time_t start_time = time(NULL);
-
 	while (!atomic_load(&ctx->should_stop)) {
 		time_t elapsed_sec = time(NULL) - start_time;
 		if (config->scenario == SCENARIO_FLASH_CRASH) {
@@ -352,49 +292,26 @@ void* feeder_thread_main(void *arg)
 		} else if (config->scenario == SCENARIO_GAPPING) {
 			if (rand() % 100 < 5) {
 				usleep(50000 + (rand() % 50000));
-				price += ((double)rand() / RAND_MAX - 0.5) * 5.0;
 			}
 		}
 
 		for (int i = start_idx; i < end_idx; ++i) {
-			price *= exp((mu-0.5*sigma*sigma)*dt + sigma*sqrt(dt)*generate_normal_random());
-			if (price <= 0) price = 0.01;
-
-			uint64_t trade_id = ctx->symbol_trade_id_counters[i]++;
-			uint64_t buffer_idx = trade_id % PER_SYMBOL_BUFFER_SIZE;
-			timestamp_entry* symbol_buffer = ctx->trade_creation_times_per_symbol[i];
-
+			struct timespec now;
 			clock_gettime(CLOCK_MONOTONIC, &now);
-			
-			timestamp_entry* entry = &symbol_buffer[buffer_idx];
-			atomic_fetch_add(&entry->sequence, 1);
-			atomic_thread_fence(memory_order_release);
-			entry->creation_ns =
-				(uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
-			entry->full_trade_id = trade_id;
-			atomic_thread_fence(memory_order_release);
-			atomic_fetch_add(&entry->sequence, 1);
-
-			uint64_t current_ts_ms =
-				(uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
-
-			if (last_timestamp_ms[i] > 0 &&
-				(current_ts_ms / TIME_CANDLE_INTERVAL_MS) >
-				(last_timestamp_ms[i] / TIME_CANDLE_INTERVAL_MS)) {
-				atomic_store(&ctx->time_closing_trade_ids[i], trade_id);
-			}
-			last_timestamp_ms[i] = current_ts_ms;
-
-			if ((trade_id + 1) % TICK_CANDLE_INTERVAL == 0) {
-				atomic_store(&ctx->last_known_closing_trade_id[i], trade_id);
-			}
+			uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000 + now.tv_nsec;
 
 			struct trcache_trade_data td = {
-				.timestamp = current_ts_ms, .trade_id = trade_id,
-				.price = price, .volume = (rand() % 10 == 0) ?
+				.timestamp = now_ns / 1000000,
+                .trade_id = trade_id_counter++,
+				.price = (double)now_ns,
+                .volume = (rand() % 10 == 0) ?
 					(double)(rand() % 1000 + 100) : (double)(rand() % 100 + 1),
 			};
+
 			trcache_feed_trade_data(ctx->cache, &td, ctx->symbol_ids[i]);
+
+			atomic_store_explicit(&ctx->latest_creation_ns_per_symbol[i],
+				now_ns, memory_order_release);
 
 			if (atomic_load(&ctx->warmup_done)) {
 				atomic_fetch_add(&ctx->total_trades_fed, 1);
@@ -405,7 +322,7 @@ void* feeder_thread_main(void *arg)
 }
 
 /**
- * @brief   Querier thread that measures end-to-end latency.
+ * @brief   Querier thread that measures end-to-end data propagation latency.
  */
 void* querier_thread_main(void *arg)
 {
@@ -417,143 +334,59 @@ void* querier_thread_main(void *arg)
 		set_thread_affinity(core_id + config->num_feeder_threads);
 	}
 
-	uint64_t last_processed_closing_id[config->num_symbols];
-	uint64_t last_seen_time_ts[config->num_symbols];
-	memset(last_processed_closing_id, 0, sizeof(last_processed_closing_id));
-	memset(last_seen_time_ts, 0, sizeof(last_seen_time_ts));
-
-	TRCACHE_DEFINE_BATCH_ON_STACK(
-		batch, 1, TRCACHE_START_TIMESTAMP | TRCACHE_IS_CLOSED);
-	trcache_candle_type tick_type = {.base = CANDLE_TICK_BASE, .type_idx = 0};
-	trcache_candle_type time_type = {.base = CANDLE_TIME_BASE, .type_idx = 0};
+	TRCACHE_DEFINE_BATCH_ON_STACK(batch, 1, TRCACHE_CLOSE);
+	trcache_candle_type any_candle_type = { .base = 0, .type_idx = 0 };
+    if (config->candle_mode == MODE_TICK_ONLY) {
+        any_candle_type.base = CANDLE_TICK_BASE;
+    } else {
+        any_candle_type.base = CANDLE_TIME_BASE;
+    }
 
 	while (!atomic_load(&ctx->should_stop)) {
 		int symbol_idx = rand() % config->num_symbols;
 		int target_symbol_id = ctx->symbol_ids[symbol_idx];
+		uint64_t latest_ts_marker = atomic_load_explicit(
+				&ctx->latest_creation_ns_per_symbol[symbol_idx],
+				memory_order_acquire);
 
-		// --- Measure Tick Candle Latency ---
-		if (config->candle_mode != MODE_TIME_ONLY) {
-			uint64_t closing_trade_id =
-				atomic_load(&ctx->last_known_closing_trade_id[symbol_idx]);
-
-			if (closing_trade_id > last_processed_closing_id[symbol_idx]) {
-				int ret = trcache_get_candles_by_symbol_id_and_offset(
-					ctx->cache, target_symbol_id, tick_type, 0, 1, 1, &batch);
-
-				if (ret == 0 && batch.num_candles > 0) {
-					uint64_t buffer_idx =
-						closing_trade_id % PER_SYMBOL_BUFFER_SIZE;
-					timestamp_entry* entry_ptr =
-						&ctx->trade_creation_times_per_symbol[symbol_idx][buffer_idx];
-					timestamp_entry local_entry;
-					unsigned int seq1, seq2;
-					while (1) {
-						seq1 = atomic_load_explicit(&entry_ptr->sequence,
-							memory_order_acquire);
-						if (seq1 & 1) {
-							continue;
-						}
-
-						atomic_thread_fence(memory_order_acquire);
-						local_entry.creation_ns = entry_ptr->creation_ns;
-						local_entry.full_trade_id = entry_ptr->full_trade_id;
-						atomic_thread_fence(memory_order_acquire);
-	
-						seq2 = atomic_load_explicit(&entry_ptr->sequence,
-							memory_order_acquire);
-
-						if (seq1 == seq2) {
-							break;
-						}
-					}
-					
-					if (local_entry.full_trade_id == closing_trade_id &&
-						atomic_load(&ctx->warmup_done)) {
-						struct timespec now;
-						clock_gettime(CLOCK_MONOTONIC, &now);
-						uint64_t now_ns =
-							(uint64_t)now.tv_sec*1000000000 + now.tv_nsec;
-						uint64_t latency = now_ns - local_entry.creation_ns;
-						
-						pthread_mutex_lock(&ctx->hist_mutex);
-						hdr_histogram_record_value(
-							ctx->tick_latency_hist, latency);
-						hdr_histogram_record_value(
-							ctx->overall_latency_hist, latency);
-						pthread_mutex_unlock(&ctx->hist_mutex);
-					} else {
-						atomic_fetch_add(&ctx->discarded_sample_count, 1);
-					}
-					last_processed_closing_id[symbol_idx] = closing_trade_id;
-				}
-			}
+		if (latest_ts_marker == 0) {
+			usleep(100);
+			continue;
 		}
 
-		// --- Measure Time Candle Latency ---
-		if (config->candle_mode != MODE_TICK_ONLY) {
+		struct timespec start_time, end_time;
+		clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+		while(true) {
 			int ret = trcache_get_candles_by_symbol_id_and_offset(
-				ctx->cache, target_symbol_id, time_type,
-				TRCACHE_START_TIMESTAMP | TRCACHE_IS_CLOSED, 1, 1, &batch);
-			
-			if (ret == 0 && batch.num_candles > 0 && batch.is_closed_array[0]) {
-				uint64_t closed_ts = batch.start_timestamp_array[0];
-				
-				if (closed_ts > last_seen_time_ts[symbol_idx]) {
-					uint64_t closing_trade_id =
-						atomic_load(&ctx->time_closing_trade_ids[symbol_idx]);
-					uint64_t buffer_idx =
-						closing_trade_id % PER_SYMBOL_BUFFER_SIZE;
-					timestamp_entry* entry_ptr =
-						&ctx->trade_creation_times_per_symbol[symbol_idx][buffer_idx];
-					timestamp_entry local_entry;
-					unsigned int seq1, seq2;
+				ctx->cache, target_symbol_id, any_candle_type,
+				TRCACHE_CLOSE, 0, 1, &batch);
 
-					while (1) {
-						seq1 = atomic_load_explicit(&entry_ptr->sequence,
-							memory_order_acquire);
-						if (seq1 & 1) {
-							continue;
-						}
-
-						atomic_thread_fence(memory_order_acquire);
-						local_entry.creation_ns = entry_ptr->creation_ns;
-						local_entry.full_trade_id = entry_ptr->full_trade_id;
-						atomic_thread_fence(memory_order_acquire);
-	
-						seq2 = atomic_load_explicit(&entry_ptr->sequence,
-							memory_order_acquire);
-
-						if (seq1 == seq2) {
-							break;
-						}
-					}
-					
-					if (local_entry.full_trade_id == closing_trade_id &&
-						atomic_load(&ctx->warmup_done)) {
-						struct timespec now;
-						clock_gettime(CLOCK_MONOTONIC, &now);
-						uint64_t now_ns =
-							(uint64_t)now.tv_sec*1000000000 + now.tv_nsec;
-						uint64_t latency = now_ns - local_entry.creation_ns;
-
-						pthread_mutex_lock(&ctx->hist_mutex);
-						hdr_histogram_record_value(
-							ctx->time_latency_hist, latency);
-						hdr_histogram_record_value(
-							ctx->overall_latency_hist, latency);
-						pthread_mutex_unlock(&ctx->hist_mutex);
-					} else {
-						atomic_fetch_add(&ctx->discarded_sample_count, 1);
-					}
-					last_seen_time_ts[symbol_idx] = closed_ts;
+			if (ret == 0 && batch.num_candles > 0) {
+                /*
+				 * The close price holds the timestamp marker of the last trade
+				 * in the candle.
+				 */
+				if (batch.close_array[0] >= (double)latest_ts_marker) {
+					break; // The latest trade is now visible.
 				}
 			}
 		}
-		usleep(100);
+
+		clock_gettime(CLOCK_MONOTONIC, &end_time);
+
+		if (atomic_load(&ctx->warmup_done)) {
+			uint64_t latency_ns
+				= (uint64_t)(end_time.tv_sec - start_time.tv_sec) * 1000000000
+					+ (end_time.tv_nsec - start_time.tv_nsec);
+			pthread_mutex_lock(&ctx->hist_mutex);
+			hdr_histogram_record_value(ctx->overall_latency_hist, latency_ns);
+			pthread_mutex_unlock(&ctx->hist_mutex);
+		}
+		usleep(500); // Wait a bit before the next measurement
 	}
 	return NULL;
 }
-
 
 /**
  * @brief   Monitor thread that periodically records performance metrics.
@@ -583,16 +416,10 @@ void* monitor_thread_main(void *arg)
 		last_trade_count = current_trade_count;
 
 		pthread_mutex_lock(&ctx->hist_mutex);
-		stats->p99_tick_us = (double)hdr_histogram_value_at_percentile(
-			ctx->tick_latency_hist, 99.0) / 1000.0;
-		stats->p99_time_us = (double)hdr_histogram_value_at_percentile(
-			ctx->time_latency_hist, 99.0) / 1000.0;
-		stats->p99_overall_us = (double)hdr_histogram_value_at_percentile(
+		stats->p99_latency_us = (double)hdr_histogram_value_at_percentile(
 			ctx->overall_latency_hist, 99.0) / 1000.0;
 		stats->discarded_samples =
 			atomic_exchange(&ctx->discarded_sample_count, 0);
-		hdr_histogram_reset(ctx->tick_latency_hist);
-		hdr_histogram_reset(ctx->time_latency_hist);
 		hdr_histogram_reset(ctx->overall_latency_hist);
 		pthread_mutex_unlock(&ctx->hist_mutex);
 
@@ -615,12 +442,10 @@ void* monitor_thread_main(void *arg)
 			= (double)stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]
 				/ (1024*1024*1024);
 
-		printf("\r[Time: %3ds] Throughput: %8.0f trades/s | p99 Latency (us) - Tick: %7.3f, Time: %7.3f, Overall: %7.3f | Workers (A/C/F): %d/%d/%d | Mem (GB) - TDB:%.2f, CCL:%.2f, CCI:%.2f, SCQ:%.2f, MSG:%.2f",
+		printf("\r[Time: %3ds] Throughput: %8.0f trades/s | p99 Latency (us): %7.3f | Workers (A/C/F): %d/%d/%d | Mem (GB) - TDB:%.2f, CCL:%.2f, CCI:%.2f, SCQ:%.2f, MSG:%.2f",
 			stats->timestamp,
 			stats->throughput,
-			stats->p99_tick_us,
-			stats->p99_time_us,
-			stats->p99_overall_us,
+			stats->p99_latency_us,
 			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
 			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
 			stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
@@ -635,12 +460,13 @@ void* monitor_thread_main(void *arg)
 /**
  * @brief   Prints a final summary of the benchmark run.
  */
-void print_final_summary(
-	const benchmark_config *config, shared_context *ctx, FILE* out_file)
+void print_final_summary(const benchmark_config *config, shared_context *ctx,
+	FILE* out_file)
 {
 	long total_trades = atomic_load(&ctx->total_trades_fed);
 	double throughput = (double)total_trades / config->duration_sec;
 	fprintf(out_file, "\n--- Benchmark Summary ---\n");
+	fprintf(out_file, "  Benchmark Type: Data Propagation Latency\n");
 	fprintf(out_file, "  Scenario: %s, Candle Mode: %s\n",
 		scenario_to_string(config->scenario),
 		candle_mode_to_string(config->candle_mode));
@@ -655,43 +481,47 @@ void print_final_summary(
     if (config->duration_sec > 0) {
         periodic_stats* last_stats = &ctx->time_series_stats[config->duration_sec - 1];
         fprintf(out_file, "Final Memory Usage:\n");
-        fprintf(out_file, "  Trade Data Buffer: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER]);
-        fprintf(out_file, "  Candle Chunk List: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST]);
-        fprintf(out_file, "  Candle Chunk Index: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX]);
-        fprintf(out_file, "  SCQ Nodes: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE]);
-        fprintf(out_file, "  Scheduler Messages: %zu Bytes\n", last_stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
-        fprintf(out_file, "\nFinal Worker Distribution:\n");
-        fprintf(out_file, "  Apply: %d, Convert: %d, Flush: %d\n",
-               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
-               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
-               last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH]);
-    }
+        fprintf(out_file, "  Trade Data Buffer: %zu Bytes\n",
+			last_stats->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER]);
+        fprintf(out_file, "  Candle Chunk List: %zu Bytes\n",
+			last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST]);
+        fprintf(out_file, "  Candle Chunk Index: %zu Bytes\n",
+			last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX]);
+        fprintf(out_file, "  SCQ Nodes: %zu Bytes\n",
+			last_stats->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE]);
+        fprintf(out_file, "  Scheduler Messages: %zu Bytes\n",
+			last_stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
+		fprintf(out_file, "\nFinal Worker Distribution:\n");
+		fprintf(out_file, "  Apply: %d, Convert: %d, Flush: %d\n",
+			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
+			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
+			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH]);
+	}
 	fprintf(out_file, "-----------------------------------------------------------------\n");
 }
 
 /**
  * @brief   Prints the collected time-series data in a CSV-friendly format.
  */
-void print_time_series_data(
-	const benchmark_config *config, shared_context *ctx, FILE* out_file)
+void print_time_series_data(const benchmark_config *config, shared_context *ctx,
+	FILE* out_file)
 {
 	fprintf(out_file, "\n--- Time-Series Performance Data (1-second intervals) ---\n");
 	fprintf(out_file,
-		"%-8s %-15s %-15s %-15s %-15s %-10s %-10s %-10s %-10s %-15s %-15s %-15s %-15s %-15s\n",
-		"Time(s)", "Throughput", "p99_Tick(us)", "p99_Time(us)",
-		"p99_Overall(us)", "Discarded", "Apply", "Convert", "Flush",
+		"%-8s %-15s %-15s %-10s %-10s %-10s %-10s %-15s %-15s %-15s %-15s %-15s\n",
+		"Time(s)", "Throughput", "p99_Lat(us)", "Discarded", "Apply", "Convert", "Flush",
 		"TDBuf(Bytes)", "CCList(Bytes)", "CCIdx(Bytes)", "SCQ(Bytes)", "SchedMsg(Bytes)");
-	fprintf(out_file, "-----------------------------------------------------------------"
+	fprintf(out_file,
 		"-----------------------------------------------------------------"
-		"----------------------------------------------------------------------\n");
+		"-----------------------------------------------------------------"
+		"----------------------------------------------------\n");
 	for(int i = 0; i < config->duration_sec; ++i) {
 		periodic_stats* s = &ctx->time_series_stats[i];
 		if (s->timestamp == 0) continue;
 
 		fprintf(out_file,
-			"%-8d %-15.0f %-15.3f %-15.3f %-15.3f %-10ld %-10d %-10d %-10d %-15zu %-15zu %-15zu %-15zu %-15zu\n",
-			s->timestamp, s->throughput, s->p99_tick_us,
-			s->p99_time_us, s->p99_overall_us, s->discarded_samples,
+			"%-8d %-15.0f %-15.3f %-10ld %-10d %-10d %-10d %-15zu %-15zu %-15zu %-15zu %-15zu\n",
+			s->timestamp, s->throughput, s->p99_latency_us, s->discarded_samples,
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
 			s->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
@@ -701,9 +531,10 @@ void print_time_series_data(
 			s->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE],
 			s->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
 	}
-	fprintf(out_file, "-----------------------------------------------------------------"
+	fprintf(out_file,
 		"-----------------------------------------------------------------"
-		"----------------------------------------------------------------------\n");
+		"-----------------------------------------------------------------"
+		"----------------------------------------------------\n");
 }
 
 /**
@@ -727,7 +558,6 @@ int parse_duration(const char* str)
 	if (unit == 'm' || unit == 'M') return val * 60;
 	return val;
 }
-
 
 /**
  * @brief   Returns a string representation of a scenario_type.
