@@ -102,7 +102,28 @@ These constants are used to configure the engine and request specific data field
 
 ### 3. Allocate Candle Batches
 
-A `trcache_candle_batch` represents a column-oriented array of OHLCV candles. It can be allocated on the heap or the stack.
+A `trcache_candle_batch` represents a column-oriented array of OHLCV candles.
+
+```C
+// From trcache.h
+typedef struct trcache_candle_batch {
+	uint64_t *key_array;
+	double *open_array;
+	double *high_array;
+	double *low_array;
+	double *close_array;
+	double *volume_array;
+	double *trading_value_array;
+	uint32_t *trade_count_array;
+	bool *is_closed_array;
+	int capacity;
+	int num_candles;
+	trcache_candle_type candle_type;
+	int symbol_id;
+} trcache_candle_batch;
+```
+
+It can be allocated on the heap or the stack:
 
 ```C
 /* Heap allocation (the size of each array is 512) */
