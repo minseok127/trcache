@@ -329,7 +329,7 @@ struct trcache_trade_data td = {
 trcache_feed_trade_data(cache, &td, aapl_id);
 ```
 
-The data is processed through `trcache`'s internal lock-free pipeline. Each trade is first aggregated into row-oriented candles in the Apply stage, then transformed into column-oriented batches for efficient analysis in the Convert stage. Finally, the Flush stage hands off completed batches to your user-defined callbacks for persistence.
+The data is processed through `trcache`'s internal lock-free pipeline. Each trade is first aggregated into row-oriented candles in the `APPLY` stage, then transformed into column-oriented batches for efficient analysis in the `CONVERT` stage. Finally, the `FLUSH` stage hands off completed batches to your user-defined callbacks for persistence.
 
 ### 8. Querying Candle Data
 
