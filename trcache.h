@@ -64,7 +64,7 @@ typedef struct trcache_trade_data {
  * fields, so the values should be a power of two.
  */
 typedef enum {
-	TRCACHE_START_TIMESTAMP     = 1 << 0,
+	TRCACHE_KEY                 = 1 << 0,
 	TRCACHE_OPEN                = 1 << 1,
 	TRCACHE_HIGH                = 1 << 2,
 	TRCACHE_LOW                 = 1 << 3,
@@ -115,19 +115,25 @@ typedef struct {
 /*
  * trcache_candle - Single candle data structured in row-oriented format.
  *
- * @start_timestamp:    Start timestamp covered by the candle
- *                      (unix epoch in milliseconds).
- * @open:               Price of the very first trade.
- * @high:               Highest traded price inside the candle.
- * @low:                Lowest traded price inside the candle.
- * @close:              Price of the very last trade.
- * @volume:             Sum of traded volume.
- * @trading_value:      Sum of each trade's price multiplied by its volume.
- * @trade_count:        Number of trades aggregated into this candle.
- * @is_closed:          Non-zero when the candle has closed.
+ * @key:            Union holding the unique identifier for the candle.
+ *  - timestamp:    For time-based candles (e.g., Unix ms).
+ *  - trade_id:     For tick-based candles.
+ *  - value:        Generic access to the 64-bit key.
+ * @open:           Price of the very first trade.
+ * @high:           Highest traded price inside the candle.
+ * @low:            Lowest traded price inside the candle.
+ * @close:          Price of the very last trade.
+ * @volume:         Sum of traded volume.
+ * @trading_value:  Sum of each trade's price multiplied by its volume.
+ * @trade_count:    Number of trades aggregated into this candle.
+ * @is_closed:      Non-zero when the candle has closed.
  */
 typedef struct trcache_candle {
-	uint64_t start_timestamp;
+	union {
+		uint64_t timestamp;
+		uint64_t trade_id;
+		uint64_t value;
+	} key;
 	double open;
 	double high;
 	double low;
@@ -158,7 +164,7 @@ typedef struct trcache_candle {
  * maximise SIMD load/store efficiency.
  */
 typedef struct trcache_candle_batch {
-	uint64_t *start_timestamp_array;
+	uint64_t *key_array;
 	double *open_array;
 	double *high_array;
 	double *low_array;
@@ -226,8 +232,8 @@ typedef struct trcache_candle_update_ops {
 static void init_##SUFFIX(struct trcache_candle *c,                      \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
-	uint64_t start = d->timestamp - (d->timestamp % (INTERVAL_MS));      \
-	c->start_timestamp = start;                                          \
+	uint64_t key = d->timestamp - (d->timestamp % (INTERVAL_MS));        \
+	c->key.timestamp = key;                                              \
 	c->open = c->high = c->low = c->close = d->price;                    \
 	c->volume = d->volume;                                               \
 	c->trading_value = d->price * d->volume;                             \
@@ -238,7 +244,7 @@ static bool update_##SUFFIX(struct trcache_candle *c,                    \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
 	if ((d->timestamp / (INTERVAL_MS))                                   \
-			!= (c->start_timestamp / (INTERVAL_MS))) {                   \
+			!= (c->key.timestamp / (INTERVAL_MS))) {                     \
 		c->is_closed = true;                                             \
 		return false;                                                    \
 	}                                                                    \
@@ -261,7 +267,7 @@ static void init_##SUFFIX(struct trcache_candle *c,                      \
 	struct trcache_trade_data *d)                                        \
 {                                                                        \
 	uint64_t rem = d->trade_id % (INTERVAL_TICK);                        \
-	c->start_timestamp = d->timestamp;                                   \
+	c->key.trade_id = d->trade_id - rem;                                 \
 	c->open = c->high = c->low = c->close = d->price;                    \
 	c->volume = d->volume;                                               \
 	c->trading_value = d->price * d->volume;                             \
@@ -404,44 +410,45 @@ int trcache_feed_trade_data(struct trcache *cache,
 	struct trcache_trade_data *trade_data, int symbol_id);
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end.
+ * @brief   Copy @count candles ending at the candle with key @key.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
  * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_and_ts(struct trcache *tc,
+int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	trcache_candle_field_flags field_mask, uint64_t key, int count,
 	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
+ * @brief   Copy @count candles ending at the candle with key @key
+ *          for a symbol string.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
  * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
+int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	trcache_candle_field_flags field_mask, uint64_t key, int count,
 	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
- * the most recent candle.
+ * @brief   Copy @count candles ending at the candle located @offset from
+ *          the most recent candle.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
@@ -459,8 +466,8 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 	struct trcache_candle_batch *dst);
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
- * the most recent candle for a symbol string.
+ * @brief   Copy @count candles ending at the candle located @offset from
+ *          the most recent candle for a symbol string.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
@@ -539,7 +546,7 @@ static inline void trcache_batch_alloc_on_stack(
 	size_t u32b = (size_t)capacity * sizeof(uint32_t);
 	size_t boolb = (size_t)capacity * sizeof(bool);
 
-	uint8_t *buf_ts = NULL;
+	uint8_t *buf_key = NULL;
 	uint8_t *buf_op = NULL;
 	uint8_t *buf_hi = NULL;
 	uint8_t *buf_lo = NULL;
@@ -549,8 +556,8 @@ static inline void trcache_batch_alloc_on_stack(
 	uint8_t *buf_tc = NULL;
 	uint8_t *buf_ic = NULL;
 
-	if (field_mask & TRCACHE_START_TIMESTAMP)
-		buf_ts = alloca(u64b + a - 1);
+	if (field_mask & TRCACHE_KEY)
+		buf_key = alloca(u64b + a - 1);
 	if (field_mask & TRCACHE_OPEN)
 		buf_op = alloca(dblb + a - 1);
 	if (field_mask & TRCACHE_HIGH)
@@ -572,8 +579,8 @@ static inline void trcache_batch_alloc_on_stack(
 	dst->num_candles = 0;
 	dst->symbol_id = -1;
 
-	dst->start_timestamp_array = (field_mask & TRCACHE_START_TIMESTAMP) ?
-		(uint64_t *)trcache_align_up_ptr(buf_ts, a) : NULL;
+	dst->key_array = (field_mask & TRCACHE_KEY) ?
+		(uint64_t *)trcache_align_up_ptr(buf_key, a) : NULL;
 	dst->open_array = (field_mask & TRCACHE_OPEN) ?
 		(double *)trcache_align_up_ptr(buf_op, a) : NULL;
 	dst->high_array = (field_mask & TRCACHE_HIGH) ?

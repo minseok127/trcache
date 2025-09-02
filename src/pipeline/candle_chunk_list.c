@@ -17,7 +17,6 @@
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
-#include "utils/time_utils.h"
 
 /**
  * @brief   Allocate an candle chunk list's head version.
@@ -298,13 +297,14 @@ static int init_first_candle(struct candle_chunk_list *list,
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
 	const struct trcache_candle_update_ops *ops = list->update_ops;
+	uint64_t first_key;
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
 		return -1;
 	}
 
-	if (candle_chunk_page_init(new_chunk, 0, ops, trade) == -1) {
+	if (candle_chunk_page_init(new_chunk, 0, ops, trade, &first_key) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		candle_chunk_destroy(new_chunk);
 		return -1;
@@ -338,7 +338,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 
 	/* Add the new chunk into the index */
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
-			new_chunk->seq_first, trade->timestamp) == -1) {
+			new_chunk->seq_first, first_key) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
 		return -1;
 	}
@@ -355,8 +355,9 @@ static void advance_within_same_page(struct candle_chunk *chunk,
 	struct trcache_trade_data *trade)
 {
 	ops->init(&row_page->rows[++chunk->mutable_row_idx], trade);
-	candle_chunk_write_start_timestamp(chunk, chunk->mutable_page_idx,
-		chunk->mutable_row_idx, trade->timestamp);
+	candle_chunk_write_key(chunk,
+		chunk->mutable_page_idx, chunk->mutable_row_idx,
+		row_page->rows[chunk->mutable_row_idx].key.value);
 }
 
 /**
@@ -368,8 +369,9 @@ static int advance_to_next_page(struct candle_chunk *chunk,
 	struct trcache_trade_data *trade)
 {
 	int new_page_idx = chunk->mutable_page_idx + 1;
+	uint64_t dummy;
 
-	if (candle_chunk_page_init(chunk, new_page_idx, ops, trade) == -1) {
+	if (candle_chunk_page_init(chunk, new_page_idx, ops, trade, &dummy) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		return -1;
 	}
@@ -389,13 +391,14 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
 		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
 		&list->trc->mem_acc);
+	uint64_t first_key;
 
 	if (new_chunk == NULL) {
 		errmsg(stderr, "Failure on create_candle_chunk()\n");
 		return -1;
 	}
 
-	if (candle_chunk_page_init(new_chunk, 0, ops, trade) == -1) {
+	if (candle_chunk_page_init(new_chunk, 0, ops, trade, &first_key) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		candle_chunk_destroy(new_chunk);
 		return -1;
@@ -413,7 +416,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 
 	/* Add the new chunk into the index */
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
-			new_chunk->seq_first, trade->timestamp) == -1) {
+			new_chunk->seq_first, first_key) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
 		return -1;
 	}
@@ -925,21 +928,20 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 
 /**
  * @brief   Copy @count candles whose range ends at the candle
- *          that contains @ts_end.
+ *          with the specified @key.
  *
  * @param   list:        Pointer to the candle chunk list.
- * @param   ts_end:      Timestamp belonging to the last candle.
+ * @param   key:         Key belonging to the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
  * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
  *
- * @note    If @ts_end is greater than the start timestamp of the most recent
- *          candle, return -1 without identifying a containing candle.
+ * @note    If @key is outside the range of known candles, returns -1.
  */
-int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
-	uint64_t ts_end, int count, struct trcache_candle_batch *dst,
+int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
+	uint64_t key, int count, struct trcache_candle_batch *dst,
 	trcache_candle_field_flags field_mask)
 {
 	struct candle_chunk_index *idx = list->chunk_index;
@@ -959,12 +961,10 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
-		char ts_buf[32];
-		format_timestamp_ms(ts_end, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
 			"Head of candle chunk list is not yet initialized "
-			"(ts_end=%s)\n",
-			ts_buf);
+			"(key=%" PRIu64 ")\n",
+			key);
 		return -1;
 	}
 
@@ -972,19 +972,17 @@ int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
 	head_chunk = head_ver->head_node;
 
 	/* Search the last chunk after pinning the head */
-	chunk = candle_chunk_index_find_ts(idx, ts_end);
+	chunk = candle_chunk_index_find_key(idx, key);
 
 	if (chunk == NULL) {
-		char ts_buf[32];
-		format_timestamp_ms(ts_end, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
-			"Target timestamp is out of range (ts_end=%s)\n",
-			ts_buf);
+			"Target key is out of range (key=%" PRIu64 ")\n",
+			key);
 		atomsnap_release_version(head_snap);
 		return -1;
 	}
 
-	seq_end = candle_chunk_calc_seq_by_ts(chunk, ts_end);
+	seq_end = candle_chunk_calc_seq_by_key(chunk, key);
 
 	if (seq_end + 1 < (uint64_t)count) {
 		errmsg(stderr,

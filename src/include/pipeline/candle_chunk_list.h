@@ -173,21 +173,20 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 
 /**
  * @brief   Copy @count candles whose range ends at the candle
- *          that contains @ts_end.
+ *          with the specified @key.
  *
  * @param   list:        Pointer to the candle chunk list.
- * @param   ts_end:      Timestamp belonging to the last candle.
+ * @param   key:         Key belonging to the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
  * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
  *
  * @return  0 on success, -1 on failure.
  *
- * @note    If @ts_end is greater than the start timestamp of the most recent
- *          candle, return -1 without identifying a containing candle.
+ * @note    If @key is outside the range of known candles, returns -1.
  */
-int candle_chunk_list_copy_backward_by_ts(struct candle_chunk_list *list,
-	uint64_t ts_end, int count, struct trcache_candle_batch *dst,
+int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
+	uint64_t key, int count, struct trcache_candle_batch *dst,
 	trcache_candle_field_flags field_mask);
 
 #endif /* CANDLE_CHUNK_LIST_H */

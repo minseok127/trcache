@@ -134,53 +134,53 @@ static inline int candle_chunk_clamp_seq(
 }
 
 /**
- * @brief    Return the zero-based index of the candle whose range
- *           contains @ts inside @chunk.
+ * @brief    Return the zero-based index of the candle with the exact key
+ *           @target_key inside @chunk.
  *
  * @param    chunk:      Pointer to the candle_chunk.
- * @param    target_ts:  Timestamp to locate.
+ * @param    target_key: Key to locate.
  *
- * @return   The linear record index in the chunk, or -1 on out-of-range.
+ * @return   The linear record index in the chunk, or -1 if not found.
  */
-static inline int candle_chunk_find_idx_by_ts(
-	struct candle_chunk *chunk, uint64_t target_ts)
+static inline int candle_chunk_find_idx_by_key(
+	struct candle_chunk *chunk, uint64_t target_key)
 {
 	int num_rows = atomic_load_explicit(&chunk->num_completed, 
 		memory_order_acquire) + 1;
-	const uint64_t *start_ts_arr = chunk->column_batch->start_timestamp_array;
+	const uint64_t *key_arr = chunk->column_batch->key_array;
 	int lo = 0, hi = num_rows - 1, mid;
 
-	if (target_ts < start_ts_arr[0] || target_ts > start_ts_arr[num_rows - 1]) {
+	if (target_key < key_arr[0] || target_key > key_arr[num_rows - 1]) {
 		return -1;
 	}
 
-	while (lo < hi) {
-		mid = lo + ((hi - lo + 1) >> 1);
-
-		if (start_ts_arr[mid] <= target_ts) {
-			lo = mid;
+	while (lo <= hi) {
+		mid = lo + ((hi - lo) >> 1);
+		if (key_arr[mid] == target_key) {
+			return mid;
+		} else if (key_arr[mid] < target_key) {
+			lo = mid + 1;
 		} else {
 			hi = mid - 1;
 		}
 	}
 
-	return lo;
+	return -1;
 }
 
 /**
- * @brief   Return the absolute sequence number of the candle whose range
- *          contains @ts inside @chunk.
+ * @brief   Return the absolute sequence number of the candle with the exact
+ *          key @target_key inside @chunk.
  *
  * @param   chunk:      Pointer to the candle_chunk.
- * @param   target_ts:  Timestamp to locate.
+ * @param   target_key: Key to locate.
  *
- * @return  Absolute sequence number on success, UINT64_MAX if @ts is
- *          before the first candle or after the last candle’s start.
+ * @return  Absolute sequence number on success, UINT64_MAX if not found.
  */
-static inline uint64_t candle_chunk_calc_seq_by_ts(
-	struct candle_chunk *chunk, uint64_t target_ts)
+static inline uint64_t candle_chunk_calc_seq_by_key(
+	struct candle_chunk *chunk, uint64_t target_key)
 {
-	int idx = candle_chunk_find_idx_by_ts(chunk, target_ts);
+	int idx = candle_chunk_find_idx_by_key(chunk, target_key);
 
 	if (idx == -1) {
 		return UINT64_MAX;
@@ -190,18 +190,18 @@ static inline uint64_t candle_chunk_calc_seq_by_ts(
 }
 
 /**
- * @brief   Convenience wrapper to write start timestamp array.
+ * @brief   Convenience wrapper to write to the key array.
  *
- * @param   chunk:    Target chunk to write start timestamp.
+ * @param   chunk:    Target chunk to write key.
  * @param   page_idx: Target candle's row page index.
  * @param   row_idx:  Target candle's row index within the row page.
- * @param   ts:       Start timestamp of the candle.
+ * @param   key:      Key of the candle.
  */
-static inline void candle_chunk_write_start_timestamp(
-	struct candle_chunk *chunk, int page_idx, int row_idx, uint64_t ts)
+static inline void candle_chunk_write_key(
+	struct candle_chunk *chunk, int page_idx, int row_idx, uint64_t key)
 {
 	int record_idx = candle_chunk_calc_record_index(page_idx, row_idx);
-	chunk->column_batch->start_timestamp_array[record_idx] = ts;
+	chunk->column_batch->key_array[record_idx] = key;
 }
 
 /**
@@ -229,16 +229,17 @@ void candle_chunk_destroy(struct candle_chunk *chunk);
 /**
  * @brief   Initialize a row page within a candle chunk.
  *
- * @param   chunk:     Pointer to the candle chunk.
- * @param   page_idx:  Index of the page to initialize.
- * @param   ops:       Callback operations for candle initialization.
- * @param   trade:     First trade data used to initialize the first candle.
+ * @param   chunk:           Pointer to the candle chunk.
+ * @param   page_idx:        Index of the page to initialize.
+ * @param   ops:             Callback operations for candle initialization.
+ * @param   trade:           First trade data used to initialize the candle.
+ * @param   first_key (out): Pointer to store the key of the first candle.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	const struct trcache_candle_update_ops *ops,
-	struct trcache_trade_data *trade);
+	struct trcache_trade_data *trade, uint64_t *first_key);
 
 /**
  * @brief   Convert all immutable row candles within the given chunk.

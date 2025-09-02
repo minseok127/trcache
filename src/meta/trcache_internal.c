@@ -710,21 +710,21 @@ int trcache_feed_trade_data(struct trcache *tc,
 }
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end.
+ * @brief   Copy @count candles ending at the candle with key @key.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
  * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_id_and_ts(struct trcache *tc,
+int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	trcache_candle_field_flags field_mask, uint64_t key, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
@@ -736,26 +736,27 @@ int trcache_get_candles_by_symbol_id_and_ts(struct trcache *tc,
 	dst->symbol_id = symbol_id;
 	dst->candle_type = type;
 
-	return candle_chunk_list_copy_backward_by_ts(list, ts_end, count, 
+	return candle_chunk_list_copy_backward_by_key(list, key, count, 
 		dst, field_mask);
 }
 
 /**
- * @brief   Copy @p count candles ending at @p ts_end for a symbol string.
+ * @brief   Copy @count candles ending at the candle with key @key
+ *          for a symbol string.
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
  * @param   field_mask: Bitmask of desired candle fields.
- * @param   ts_end:     Timestamp belonging to the last candle.
+ * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
  *
  * @return  0 on success, -1 on failure.
  */
-int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
+int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t ts_end, int count,
+	trcache_candle_field_flags field_mask, uint64_t key, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
@@ -771,12 +772,12 @@ int trcache_get_candles_by_symbol_str_and_ts(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_and_ts(tc, symbol_id, type, 
-		field_mask, ts_end, count, dst);
+	return trcache_get_candles_by_symbol_id_and_key(tc, symbol_id, type, 
+		field_mask, key, count, dst);
 }
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
+ * @brief   Copy @count candles ending at the candle located @offset from
  *          the most recent candle.
  *
  * @param   tc:         Pointer to trcache instance.
@@ -812,7 +813,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 }
 
 /**
- * @brief   Copy @p count candles ending at the candle located @p offset from
+ * @brief   Copy @count candles ending at the candle located @offset from
  *          the most recent candle for a symbol string.
  *
  * @param   tc:         Pointer to trcache instance.

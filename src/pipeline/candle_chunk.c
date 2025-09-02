@@ -192,16 +192,17 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 /**
  * @brief   Initialize a row page within a candle chunk.
  *
- * @param   chunk:     Pointer to the candle chunk.
- * @param   page_idx:  Index of the page to initialize.
- * @param   ops:       Callback operations for candle initialization.
- * @param   trade:     First trade data used to initialize the first candle.
+ * @param   chunk:           Pointer to the candle chunk.
+ * @param   page_idx:        Index of the page to initialize.
+ * @param   ops:             Callback operations for candle initialization.
+ * @param   trade:           First trade data used to initialize the candle.
+ * @param   first_key (out): Pointer to store the key of the first candle.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	const struct trcache_candle_update_ops *ops,
-	struct trcache_trade_data *trade)
+	struct trcache_trade_data *trade, uint64_t *first_key)
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version
@@ -221,8 +222,9 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	 */
 	ops->init(&(row_page->rows[0]), trade);
 
-	candle_chunk_write_start_timestamp(chunk, page_idx, 0,
-		row_page->rows[0].start_timestamp);
+	*first_key = row_page->rows[0].key.value;
+
+	candle_chunk_write_key(chunk, page_idx, 0, *first_key);
 
 	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
 
@@ -248,7 +250,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	struct trcache_candle *c = NULL;
 
 	/* Vector pointers */
-	uint64_t *ts_ptr = batch->start_timestamp_array + start_idx;
+	uint64_t *key_ptr = batch->key_array + start_idx;
 	double *o_ptr = batch->open_array + start_idx;
 	double *h_ptr = batch->high_array + start_idx;
 	double *l_ptr = batch->low_array + start_idx;
@@ -276,7 +278,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 		c = &(page->rows[candle_chunk_calc_row_idx(idx)]);
 
-		*ts_ptr++ = c->start_timestamp;
+		*key_ptr++ = c->key.value;
 		*o_ptr++ = c->open;
 		*h_ptr++ = c->high;
 		*l_ptr++ = c->low;
@@ -397,7 +399,7 @@ static inline void candle_copy_dispatch_tbl(
 	int i, trcache_candle_field_flags field_mask)
 {
 	static void *dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
-		&&copy_start_ts,
+		&&copy_key,
 		&&copy_open,
 		&&copy_high,
 		&&copy_low,
@@ -418,8 +420,8 @@ static inline void candle_copy_dispatch_tbl(
 	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
 	goto *dispatch[__builtin_ctz(m)];
 
-copy_start_ts:
-	d->start_timestamp_array[i] = c->start_timestamp;
+copy_key:
+	d->key_array[i] = c->key.value;
 	m &= m - 1;
 	goto *dispatch[__builtin_ctz(m)];
 
@@ -695,7 +697,7 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	trcache_candle_field_flags field_mask)
 {
 	static void *const col_dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
-		&&col_copy_start_ts,
+		&&col_copy_key,
 		&&col_copy_open,
 		&&col_copy_high,
 		&&col_copy_low,
@@ -719,9 +721,9 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
 	goto *col_dispatch[__builtin_ctz(m)];
 
-col_copy_start_ts:
-	copy_segment_u64(chunk->column_batch->start_timestamp_array + start_idx,
-		dst->start_timestamp_array + dst_first, bytes_u64);
+col_copy_key:
+	copy_segment_u64(chunk->column_batch->key_array + start_idx,
+		dst->key_array + dst_first, bytes_u64);
 	m &= m - 1;
 	goto *col_dispatch[__builtin_ctz(m)];
 

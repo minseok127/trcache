@@ -21,7 +21,6 @@
 
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
-#include "utils/time_utils.h"
 
 struct idx_ver_alloc_arg {
 	uint64_t newcap;
@@ -264,12 +263,12 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   chunk:      Pointer of the newly appended #candle_chunk.
  * @param   seq_first:  First sequence number of the new chunk.
- * @param   ts_first:   First timestamp of the new chunk.
+ * @param   key_first:  First key of the new chunk.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_index_append(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first)
+	struct candle_chunk *chunk, uint64_t seq_first, uint64_t key_first)
 {
 	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
 	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
@@ -301,7 +300,7 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	entry = idx_ver->array + new_tail_pos;
 	entry->chunk_ptr = chunk;
 	entry->seq_first = seq_first;
-	entry->timestamp_first = ts_first;
+	entry->key_first = key_first;
 
 	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
 	atomsnap_release_version(snap_ver);
@@ -391,48 +390,41 @@ struct candle_chunk *candle_chunk_index_find_seq(
 }
 
 /**
- * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
+ * @brief   Find the chunk that contains a candle with the given key.
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx:       Pointer of the #candle_chunk_index.
- * @param   target_ts: Target timestamp to search.
+ * @param   idx:        Pointer of the #candle_chunk_index.
+ * @param   target_key: Target key to search.
  *
- * @return  Pointer to the chunk, or NULL if @ts is outside the index.
+ * @return  Pointer to the chunk, or NULL if @key is outside the index.
  */
-struct candle_chunk *candle_chunk_index_find_ts(
-	struct candle_chunk_index *idx, uint64_t target_ts)
+struct candle_chunk *candle_chunk_index_find_key(
+	struct candle_chunk_index *idx, uint64_t target_key)
 {
 	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
 	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
 	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
 	struct candle_chunk_index_version *idx_ver;
 	struct candle_chunk *out;
-	uint64_t mask, lo = head, hi = tail, mid, ts_mid;
+	uint64_t mask, lo = head, hi = tail, mid, key_mid;
 
 	if (snap_ver == NULL) {
-		char ts_buf[32];
-		format_timestamp_ms(target_ts, ts_buf, sizeof(ts_buf));
 		errmsg(stderr,
 			"Failure on atomsnap_acquire_version() "
-			"(target_ts=%s)\n",
-			ts_buf);
+			"(target_key=%" PRIu64 ")\n",
+			target_key);
 		return NULL;
 	}
 	
 	idx_ver = (struct candle_chunk_index_version *)snap_ver->object;
 	mask = idx_ver->mask;
 	
-	if (idx_ver->array[head & mask].timestamp_first > target_ts) {
-		char ts_buf1[32];
-		char ts_buf2[32];
-		format_timestamp_ms(target_ts, ts_buf1, sizeof(ts_buf1));
-		format_timestamp_ms(idx_ver->array[head & mask].timestamp_first,
-			ts_buf2, sizeof(ts_buf2));
+	if (idx_ver->array[head & mask].key_first > target_key) {
 		errmsg(stderr,
-			"Target ts is less than head's timestamp "
-			"(target_ts=%s), (head_ts=%s)\n",
-			ts_buf1, ts_buf2);
+			"Target key is less than head's key "
+			"(target_key=%" PRIu64 "), (head_key=%" PRIu64 ")\n",
+			target_key, idx_ver->array[head & mask].key_first);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}
@@ -440,9 +432,9 @@ struct candle_chunk *candle_chunk_index_find_ts(
 	/* Binary search */
 	while (lo < hi) {
 		mid = lo + ((hi - lo + 1) >> 1);
-		ts_mid = idx_ver->array[mid & mask].timestamp_first;
+		key_mid = idx_ver->array[mid & mask].key_first;
 
-		if (ts_mid <= target_ts) {
+		if (key_mid <= target_key) {
 			lo = mid;
 		} else {
 			hi = mid - 1;
@@ -451,20 +443,11 @@ struct candle_chunk *candle_chunk_index_find_ts(
 
 	out = idx_ver->array[lo & mask].chunk_ptr;
 
-	/*
-	 * If the target timestamp is greater than the start timestamp of the most
-	 * recent candle, it is not possible to determine whether the target belongs
-	 * to that candle, and the chunk is considered not found.
-	 */
-	if (lo == tail && candle_chunk_find_idx_by_ts(out, target_ts) == -1) {
-		char ts_buf[32];
-		format_timestamp_ms(
-			out->column_batch->start_timestamp_array[out->num_completed],
-			ts_buf, sizeof(ts_buf));
+	/* Verify the key is actually in the chunk */
+	if (candle_chunk_find_idx_by_key(out, target_key) == -1) {
 		errmsg(stderr,
-			"Target ts is greater than the start ts of the recent candle "
-			"(last_ts=%s)\n",
-			ts_buf);
+			"Target key not found in the located chunk (target_key=%" PRIu64 ")\n",
+			target_key);
 		atomsnap_release_version(snap_ver);
 		return NULL;
 	}

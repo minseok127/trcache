@@ -11,14 +11,14 @@
 /*
  * candle_chunk_index_entry - Metadata that maps a range of candles to a chunk.
  
- * @chunk_ptr:       Pointer to the physical chunk that stores the candles.
- * @seq_first:       Sequence number (inclusive) of the first candle.
- * @timestamp_first: Timestamp (inclusive) of the first candle.
+ * @chunk_ptr:    Pointer to the physical chunk that stores the candles.
+ * @seq_first:    Sequence number (inclusive) of the first candle.
+ * @key_first:    Key (inclusive) of the first candle.
  */
 struct candle_chunk_index_entry {
 	struct candle_chunk *chunk_ptr;
 	uint64_t seq_first;
-	uint64_t timestamp_first;
+	uint64_t key_first;
 };
 
 /**
@@ -114,12 +114,12 @@ void candle_chunk_index_destroy(struct candle_chunk_index *idx);
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   chunk:      Pointer of the newly appended #candle_chunk.
  * @param   seq_first:  First sequence number of the new chunk.
- * @param   ts_first:   First timestamp of the new chunk.
+ * @param   key_first:  First key of the new chunk.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_index_append(struct candle_chunk_index *idx,
-	struct candle_chunk *chunk, uint64_t seq_first, uint64_t ts_first);
+	struct candle_chunk *chunk, uint64_t seq_first, uint64_t key_first);
 
 /**
  * @brief   Remove the oldest chunk if its lifetime has ended.
@@ -150,16 +150,16 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	struct candle_chunk_index *idx, uint64_t target_seq);
 
 /**
- * @brief   Find the chunk whose [ts_min, ts_max] range contains @ts.
+ * @brief   Find the chunk that contains a candle with the given key.
  *
  * The caller must ensure that the head does not move.
  *
- * @param   idx:       Pointer of the #candle_chunk_index.
- * @param   target_ts: Target timestamp to search.
+ * @param   idx:        Pointer of the #candle_chunk_index.
+ * @param   target_key: Target key to search.
  *
- * @return  Pointer to the chunk, or NULL if @ts is outside the index.
+ * @return  Pointer to the chunk, or NULL if @key is outside the index.
  */
-struct candle_chunk *candle_chunk_index_find_ts(
-	struct candle_chunk_index *idx, uint64_t target_ts);
+struct candle_chunk *candle_chunk_index_find_key(
+	struct candle_chunk_index *idx, uint64_t target_key);
 
 #endif /* CANDLE_CHUNK_INDEX_H */
