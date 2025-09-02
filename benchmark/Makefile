@@ -12,14 +12,14 @@ INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 LDLIBS = -lpthread -lm
 
 # Target executable
-TARGET = benchmark
+TARGET = ingestion_benchmark
 
 # Source files
-SRCS = benchmark.c
+SRCS = ingestion_benchmark.c
 
 OBJS = $(SRCS:.c=.o)
 
-.PHONY: all clean run
+.PHONY: all clean
 
 all: $(TARGET)
 
@@ -30,11 +30,6 @@ $(TARGET): $(OBJS) $(TRCACHE_LIB)
 # Compile source files into object files
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
-
-# A convenience target to run a default benchmark scenario
-run: $(TARGET)
-	@echo "Running a default HFT benchmark scenario..."
-	./benchmark 8 1000 30s 10s 0 2 4
 
 clean:
 	rm -f $(TARGET) $(OBJS)

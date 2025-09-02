@@ -1,5 +1,5 @@
 /**
- * @file   benchmark.c
+ * @file   ingestion_benchmark.c
  * @brief  A benchmark measuring the data ingestion latency for the trcache
  * library. It measures the time from when a trade is created until it becomes
  * visible in the latest queryable candle.
