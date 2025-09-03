@@ -49,6 +49,7 @@ typedef enum {
 typedef struct {
 	int num_worker_threads;
 	int num_feeder_threads;
+	int num_querier_threads;
 	int num_symbols;
 	int duration_sec;
 	int warmup_sec;
@@ -96,15 +97,21 @@ typedef struct {
 	int feeder_id;
 } feeder_thread_args;
 
+/**
+ * @brief Arguments for each individual querier thread.
+ */
+typedef struct {
+	shared_context *s_ctx;
+	int querier_id;
+} querier_thread_args;
+
 // --- Function Prototypes ---
 void* dummy_sync_flush(trcache *c, trcache_candle_batch *b, void *flush_ctx);
 void* feeder_thread_main(void *arg);
 void* querier_thread_main(void *arg);
 void* monitor_thread_main(void *arg);
-void print_final_summary(const benchmark_config *config, shared_context *ctx,
-	FILE* out_file);
-void print_time_series_data(const benchmark_config *config, shared_context *ctx,
-	FILE* out_file);
+void print_time_series_data(const benchmark_config *config,
+	shared_context *ctx, FILE* out_file);
 void set_thread_affinity(int core_id);
 int parse_duration(const char* str);
 const char* scenario_to_string(scenario_type s);
@@ -118,10 +125,10 @@ DEFINE_TICK_CANDLE_OPS(100t, TICK_CANDLE_INTERVAL);
  */
 int main(int argc, char *argv[])
 {
-	if (argc < 9) {
+	if (argc < 11) {
 		fprintf(
 			stderr,
-			"Usage: %s <workers> <symbols> <duration> <warmup> "
+			"Usage: %s <workers> <feeders> <queriers> <symbols> <duration> <warmup> "
 			"<scenario> <candle_mode> <start_core> <output_file>\n",
 			argv[0]);
 		fprintf(stderr, "  Duration format: e.g., 1h, 30m, 10s\n");
@@ -133,16 +140,20 @@ int main(int argc, char *argv[])
 
 	benchmark_config config = {
 		.num_worker_threads = atoi(argv[1]),
-		.num_symbols = atoi(argv[2]),
-		.duration_sec = parse_duration(argv[3]),
-		.warmup_sec = parse_duration(argv[4]),
-		.scenario = (scenario_type)atoi(argv[5]),
-		.candle_mode = (candle_mode_type)atoi(argv[6]),
-		.start_cpu_core = atoi(argv[7]),
-		.output_file_path = argv[8],
-		.num_feeder_threads = 4
+		.num_feeder_threads = atoi(argv[2]),
+		.num_querier_threads = atoi(argv[3]),
+		.num_symbols = atoi(argv[4]),
+		.duration_sec = parse_duration(argv[5]),
+		.warmup_sec = parse_duration(argv[6]),
+		.scenario = (scenario_type)atoi(argv[7]),
+		.candle_mode = (candle_mode_type)atoi(argv[8]),
+		.start_cpu_core = atoi(argv[9]),
+		.output_file_path = argv[10],
 	};
-	if (config.duration_sec <= 0 || config.warmup_sec < 0) return 1;
+
+	if (config.duration_sec <= 0 || config.warmup_sec < 0) {
+		return 1;
+	}
 
 	// --- trcache Initialization ---
 	trcache_candle_config time_candles[] = {
@@ -204,13 +215,18 @@ int main(int argc, char *argv[])
 	// --- Thread Creation & Execution ---
 	pthread_t feeders[config.num_feeder_threads];
 	feeder_thread_args f_args[config.num_feeder_threads];
-	pthread_t querier, monitor;
+	pthread_t queriers[config.num_querier_threads];
+	querier_thread_args q_args[config.num_querier_threads];
+	pthread_t monitor;
 	printf("Starting benchmark...\n");
 	for (int i = 0; i < config.num_feeder_threads; ++i) {
 		f_args[i] = (feeder_thread_args){ .s_ctx = &ctx, .feeder_id = i };
 		pthread_create(&feeders[i], NULL, feeder_thread_main, &f_args[i]);
 	}
-	pthread_create(&querier, NULL, querier_thread_main, &ctx);
+	for (int i = 0; i < config.num_querier_threads; ++i) {
+		q_args[i] = (querier_thread_args){ .s_ctx = &ctx, .querier_id = i };
+		pthread_create(&queriers[i], NULL, querier_thread_main, &q_args[i]);
+	}
 	pthread_create(&monitor, NULL, monitor_thread_main, &ctx);
 
 	printf("Warm-up for %d seconds...\n", config.warmup_sec);
@@ -223,7 +239,9 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < config.num_feeder_threads; ++i) {
 		pthread_join(feeders[i], NULL);
 	}
-	pthread_join(querier, NULL);
+	for (int i = 0; i < config.num_querier_threads; ++i) {
+		pthread_join(queriers[i], NULL);
+	}
 	pthread_join(monitor, NULL);
 
 	FILE* out_file = fopen(config.output_file_path, "w");
@@ -232,7 +250,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	print_final_summary(&config, &ctx, out_file);
 	print_time_series_data(&config, &ctx, out_file);
 
 	fclose(out_file);
@@ -333,7 +350,8 @@ void* feeder_thread_main(void *arg)
  */
 void* querier_thread_main(void *arg)
 {
-	shared_context *ctx = (shared_context *)arg;
+	querier_thread_args *q_args = (querier_thread_args *)arg;
+	shared_context *ctx = q_args->s_ctx;
 	const benchmark_config *config = ctx->config;
 	int core_id = config->start_cpu_core;
 
@@ -461,50 +479,6 @@ void* monitor_thread_main(void *arg)
 	}
 	printf("\n");
 	return NULL;
-}
-
-
-/**
- * @brief   Prints a final summary of the benchmark run.
- */
-void print_final_summary(const benchmark_config *config, shared_context *ctx,
-	FILE* out_file)
-{
-	long total_trades = atomic_load(&ctx->total_trades_fed);
-	double throughput = (double)total_trades / config->duration_sec;
-	fprintf(out_file, "\n--- Benchmark Summary ---\n");
-	fprintf(out_file, "  Benchmark Type: Data Propagation Latency\n");
-	fprintf(out_file, "  Scenario: %s, Candle Mode: %s\n",
-		scenario_to_string(config->scenario),
-		candle_mode_to_string(config->candle_mode));
-	fprintf(out_file,
-		"  Config: %d workers, %d feeders, %d symbols, "
-		"%ds duration (%ds warmup)\n",
-		config->num_worker_threads, config->num_feeder_threads,
-		config->num_symbols, config->duration_sec, config->warmup_sec);
-	fprintf(out_file, "-----------------------------------------------------------------\n");
-	fprintf(out_file, "  Average Ingestion Throughput: %.2f trades/sec\n", throughput);
-	fprintf(out_file, "\n--- System Status at Shutdown ---\n");
-    if (config->duration_sec > 0) {
-        periodic_stats* last_stats = &ctx->time_series_stats[config->duration_sec - 1];
-        fprintf(out_file, "Final Memory Usage:\n");
-        fprintf(out_file, "  Trade Data Buffer: %zu Bytes\n",
-			last_stats->mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER]);
-        fprintf(out_file, "  Candle Chunk List: %zu Bytes\n",
-			last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST]);
-        fprintf(out_file, "  Candle Chunk Index: %zu Bytes\n",
-			last_stats->mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX]);
-        fprintf(out_file, "  SCQ Nodes: %zu Bytes\n",
-			last_stats->mem_stats.usage_bytes[MEMSTAT_SCQ_NODE]);
-        fprintf(out_file, "  Scheduler Messages: %zu Bytes\n",
-			last_stats->mem_stats.usage_bytes[MEMSTAT_SCHED_MSG]);
-		fprintf(out_file, "\nFinal Worker Distribution:\n");
-		fprintf(out_file, "  Apply: %d, Convert: %d, Flush: %d\n",
-			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
-			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
-			last_stats->worker_stats.stage_limits[WORKER_STAT_STAGE_FLUSH]);
-	}
-	fprintf(out_file, "-----------------------------------------------------------------\n");
 }
 
 /**
