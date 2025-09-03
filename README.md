@@ -10,7 +10,7 @@
   - **Apply**: Aggregates raw trades into row-oriented candles.
   - **Convert**: Reshapes row-oriented candle pages into SIMD-friendly column batches.
   - **Flush**: Hands off completed batches to user-defined callbacks for persistence.
-- **Lock-Free Queries**: Read candle data without locks, even as it's being processed and transformed by the concurrent pipeline.
+- **Lock-Free Queries**: Read candle data without locks, even as it's being transformed by the concurrent pipeline.
 - **Adaptive Worker Scheduling**: An admin thread monitors pipeline throughput and dynamically schedules worker threads to balance the load.
 - **Pluggable Flushing**: Applications supply synchronous or asynchronous callbacks to persist finished batches.
 - **Multiple Candle Types**: Time-based and tick-based candles can be configured and processed simultaneously.
