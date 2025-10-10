@@ -101,7 +101,7 @@ static inline struct trade_data_buffer_cursor *trade_data_buffer_acquire_cursor(
 	struct trade_data_buffer *buf, trcache_candle_type candle_type)
 {
 	struct trade_data_buffer_cursor *cur
-		= &buf->cursor_arr[candle_type.base][candle_type.type_idx];
+		= &buf->cursor_arr[candle_type.base_type][candle_type.type_idx];
 	int expected = 0;
 
 	if (atomic_load_explicit(&cur->in_use, memory_order_acquire) != 0) {

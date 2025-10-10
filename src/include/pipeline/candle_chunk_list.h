@@ -163,13 +163,13 @@ void candle_chunk_list_flush(struct candle_chunk_list *list);
  * @param   seq_end:     Sequence number of the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   request:     Specifies which user-defined fields to retrieve.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	uint64_t seq_end, int count, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask);
+	const struct trcache_field_request *request);
 
 /**
  * @brief   Copy @count candles whose range ends at the candle
@@ -179,7 +179,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  * @param   key:         Key belonging to the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   request:     Specifies which user-defined fields to retrieve.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -187,7 +187,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  */
 int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	uint64_t key, int count, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask);
+	const trcache_field_request *request);
 
 #endif /* CANDLE_CHUNK_LIST_H */
 

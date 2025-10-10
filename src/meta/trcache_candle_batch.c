@@ -2,10 +2,11 @@
  * @file   trcache_candle_batch.c
  * @brief  Heap-side implementation of contiguous, SIMD-aligned batches.
  */
-
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 
+#include "meta/trcache_internal.h"
 #include "utils/log.h"
 
 #include "trcache.h"
@@ -45,120 +46,100 @@ static size_t align_up(size_t x, size_t a)
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   capacity:   Number of OHLCV rows to allocate (must be > 0).
- * @param   field_mask: OR-ed set of required fields.
+ * @param   tc:       Pointer to the trcache instance.
+ * @param   capacity: Number of candle rows to allocate (must be > 0).
+ * @param   request:  Pointer to a struct specifying which user-defined fields
+ *                    to allocate. If NULL, all user-defined fields are allocated.
+ *                    Base fields (key, is_closed) are always allocated.
  *
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
  *
  * @note    The returned pointer must be released via trcache_batch_free().
  */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
-	trcache_candle_field_flags field_mask)
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
+	int capacity, const struct trcache_field_request *request)
 {
 	const size_t a = TRCACHE_SIMD_ALIGN;
-	size_t off_key = 0;
-	size_t off_open = 0, off_high = 0, off_low = 0, off_close = 0, off_vol = 0;
-	size_t off_tv = 0, off_tc = 0, off_ic = 0;
-	size_t off_struct, total_sz, u64b, dblb, u32b, boolb;
 	struct trcache_candle_batch *b;
+	size_t total_sz, col_array_ptr_sz;
+	bool *requested_fields;
+	uint8_t *p;
 	void *base;
+	int field_idx;
 
 	if (capacity <= 0) {
 		errmsg(stderr, "Invalid argument (capacity <= 0)\n");
 		return NULL;
 	}
 
-	off_struct = align_up(sizeof(struct trcache_candle_batch), a);
-
-	u64b = (size_t)capacity * sizeof(uint64_t);
-	dblb = (size_t)capacity * sizeof(double);
-	u32b = (size_t)capacity * sizeof(uint32_t);
-	boolb = (size_t)capacity * sizeof(bool);
-
-	/* Compute offsets for each array, respecting alignment padding. */
-	size_t cur = off_struct;
-
-	if (field_mask & TRCACHE_KEY) {
-		off_key = cur;
-		cur = align_up(cur + u64b, a);
+	if (request == NULL || request->field_indices == NULL) {
+		errmsg(stderr, "Invalid argument (request == NULL)\n");
+		return NULL;
 	}
 
-	if (field_mask & TRCACHE_OPEN) {
-		off_open = cur;
-		cur = align_up(cur + dblb, a);
-	}
-	
-	if (field_mask & TRCACHE_HIGH) {
-		off_high = cur;
-		cur = align_up(cur + dblb, a);
-	}
-	
-	if (field_mask & TRCACHE_LOW) {
-		off_low = cur;
-		cur = align_up(cur + dblb, a);
-	}
-	
-	if (field_mask & TRCACHE_CLOSE) {
-		off_close = cur;
-		cur = align_up(cur + dblb, a);
-	}
-	
-	if (field_mask & TRCACHE_VOLUME) {
-		off_vol = cur;
-		cur = align_up(cur + dblb, a);
+	/* Determine which fields to allocate */
+	requested_fields = alloca(sizeof(bool) * tc->num_fields);
+	memset(requested_fields, 0, sizeof(bool) * tc->num_fields);
+	for (int i = 0; i < request->num_fields; i++) {
+		field_idx = request->field_indices[i];
+		
+		if (field_idx >= 0 && field_idx < tc->num_fields) {
+			requested_fields[field_idx] = true;
+		}
 	}
 
-	if (field_mask & TRCACHE_TRADING_VALUE) {
-		off_tv = cur;
-		cur = align_up(cur + dblb, a);
-	}
+	/* Calculate total size for the single memory block */
+	total_sz = align_up(sizeof(struct trcache_candle_batch), a);
+	col_array_ptr_sz = sizeof(void *) * tc->num_fields;
+	total_sz = align_up(total_sz + col_array_ptr_sz, a);
 
-	if (field_mask & TRCACHE_TRADE_COUNT) {
-		off_tc = cur;
-		cur = align_up(cur + u32b, a);
-	}
+	/* Base fields are always allocated */
+	total_sz = align_up(total_sz + (size_t)capacity * sizeof(uint64_t), a);
+	total_sz = align_up(total_sz + (size_t)capacity * sizeof(bool), a);
 
-	if (field_mask & TRCACHE_IS_CLOSED) {
-		off_ic = cur;
-		cur = align_up(cur + boolb, a);
+	/* User-defined fields */
+	for (int i = 0; i < tc->num_fields; i++) {
+		if (requested_fields[i]) {
+			total_sz = align_up(total_sz +
+				(size_t)capacity * tc->field_definitions[i].size, a);
+		}
 	}
-
-	total_sz = align_up(cur, a);
 
 	/* Single aligned block for struct + all arrays. */
 	base = simd_aligned_alloc(a, total_sz);
-
 	if (base == NULL) {
 		errmsg(stderr, "Failure on simd_aligned_alloc()\n");
 		return NULL;
 	}
+	p = (uint8_t *)base;
 
 	/* Wire up internal pointers. */
-	b = (struct trcache_candle_batch *)base;
+	b = (struct trcache_candle_batch *)p;
+	p += align_up(sizeof(struct trcache_candle_batch), a);
+
+	b->column_arrays = (void **)p;
+	p += align_up(col_array_ptr_sz, a);
+
+	b->key_array = (uint64_t *)p;
+	p += align_up((size_t)capacity * sizeof(uint64_t), a);
+
+	b->is_closed_array = (bool *)p;
+	p += align_up((size_t)capacity * sizeof(bool), a);
+
+	for (int i = 0; i < tc->num_fields; i++) {
+		if (requested_fields[i]) {
+			b->column_arrays[i] = (void *)p;
+			p += align_up((size_t)capacity *
+					tc->field_definitions[i].size, a);
+		} else {
+			b->column_arrays[i] = NULL;
+		}
+	}
 
 	b->num_candles = 0;
 	b->capacity = capacity;
 	b->symbol_id = -1;
-
-	b->key_array = (field_mask & TRCACHE_KEY) ?
-		(uint64_t *)((uint8_t *)base + off_key) : NULL;
-	b->open_array = (field_mask & TRCACHE_OPEN) ?
-		(double *)((uint8_t *)base + off_open) : NULL;
-	b->high_array = (field_mask & TRCACHE_HIGH) ?
-		(double *)((uint8_t *)base + off_high) : NULL;
-	b->low_array = (field_mask & TRCACHE_LOW) ?
-		(double *)((uint8_t *)base + off_low) : NULL;
-	b->close_array = (field_mask & TRCACHE_CLOSE) ?
-		(double *)((uint8_t *)base + off_close) : NULL;
-	b->volume_array = (field_mask & TRCACHE_VOLUME) ?
-		(double *)((uint8_t *)base + off_vol) : NULL;
-	b->trading_value_array = (field_mask & TRCACHE_TRADING_VALUE) ?
-		(double *)((uint8_t *)base + off_tv) : NULL;
-	b->trade_count_array = (field_mask & TRCACHE_TRADE_COUNT) ?
-		(uint32_t *)((uint8_t *)base + off_tc) : NULL;
-	b->is_closed_array = (field_mask & TRCACHE_IS_CLOSED) ?
-		(bool *)((uint8_t *)base + off_ic) : NULL;
 
 	return b;
 }
@@ -166,9 +147,15 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
 /**
  * @brief   Release a heap-allocated candle batch.
  *
- * Safe to pass 'NULL'; the function becomes a no-op.
+ * This function is intended for batches allocated by the user via
+ * trcache_batch_alloc_on_heap(). It only frees the memory block.
+ * It does *not* invoke the on_batch_destroy() callback, which is reserved
+ * for the internal pipeline. The user is responsible for cleaning up any
+ * custom resources within the batch before calling this function.
  *
- * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ * @param   batch: Pointer to the batch to be freed.
+ *
+ * Safe to pass 'NULL'; the function becomes a no-op.
  */
 void trcache_batch_free(struct trcache_candle_batch *b)
 {

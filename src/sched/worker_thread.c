@@ -33,7 +33,7 @@ static uint64_t pack_work_key(int symbol_id, worker_stat_stage_type stage,
 {
 	return ((uint64_t)(uint32_t)symbol_id << 32) |
 		((uint64_t)stage << 16) |
-		((uint64_t)type.base << 8) |
+		((uint64_t)type.base_type << 8) |
 		(uint64_t)type.type_idx;
 }
 
@@ -54,7 +54,7 @@ static void worker_insert_work(struct worker_state *state, uint64_t key)
 
 	item->key.symbol_id = (int)(key >> 32);
 	item->key.stage = (uint8_t)((key >> 16) & 0xFF);
-	item->key.candle_type.base = (uint8_t)((key >> 8) & 0xFF);
+	item->key.candle_type.base_type = (uint8_t)((key >> 8) & 0xFF);
 	item->key.candle_type.type_idx = (uint8_t)(key & 0xFF);
 
 	list_add_tail(&item->node, &state->work_list);
@@ -101,7 +101,7 @@ static void worker_handle_add_work(struct trcache *cache,
 		return;
 	}
 
-	base = cmd->candle_type.base;
+	base = cmd->candle_type.base_type;
 	type_idx = cmd->candle_type.type_idx;
 
 	cur_val = atomic_load(&entry->in_progress[cmd->stage][base][type_idx]);
@@ -134,7 +134,7 @@ static void worker_handle_remove_work(struct trcache *cache,
 		return;
 	}
 
-	base = cmd->candle_type.base;
+	base = cmd->candle_type.base_type;
 	type_idx = cmd->candle_type.type_idx;
 
 	cur = atomic_load(&entry->in_progress[cmd->stage][base][type_idx]);
@@ -193,7 +193,7 @@ static void worker_do_apply(struct worker_state *state,
 
 	start = tsc_cycles();
 
-	list = entry->candle_chunk_list_ptrs[type.base][type.type_idx];
+	list = entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
 
 	while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
@@ -221,7 +221,7 @@ static void worker_do_convert(struct worker_state *state,
 	struct symbol_entry *entry, trcache_candle_type type)
 {
 	struct candle_chunk_list *list =
-		entry->candle_chunk_list_ptrs[type.base][type.type_idx];
+		entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
 	uint64_t start = tsc_cycles();
 
 	candle_chunk_list_convert_to_column_batch(list);
@@ -241,7 +241,7 @@ static void worker_do_flush(struct worker_state *state,
 	struct symbol_entry *entry, trcache_candle_type type)
 {
 	struct candle_chunk_list *list =
-		entry->candle_chunk_list_ptrs[type.base][type.type_idx];
+		entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
 	uint64_t start = tsc_cycles();
 
 	candle_chunk_list_flush(list);

@@ -12,7 +12,7 @@
 #include "trcache.h"
 
 #ifndef TRCACHE_ROWS_PER_PAGE
-#define TRCACHE_ROWS_PER_PAGE (64)  /* one 4 KiB page */
+#define TRCACHE_ROWS_PER_PAGE (64)
 #endif
 
 #ifndef TRCACHE_ROWS_PER_PAGE_SHIFT
@@ -24,12 +24,13 @@
 #endif
 
 /*
- * candle_row_page - 4 KiB array of row-oriented candles.
+ * candle_row_page - Array of row-oriented candles.
  *
- * @rows: Fixed AoS storage for TRCACHE_ROWS_PER_PAGE candles.
+ * @data: Fixed AoS storage for TRCACHE_ROWS_PER_PAGE user-defined candles.
  */
 struct candle_row_page {
-	struct trcache_candle rows[TRCACHE_ROWS_PER_PAGE];
+	int _dummy;
+	char data[];
 };
 
 /*
@@ -49,7 +50,8 @@ struct candle_row_page {
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
  * @column_batch:         Structure of Arrays (SoA) buffer
  * @seq_first:            First sequence number of the chunk.
- * @mem_acc:              Memory accounting information.
+ * @trc:                  Back-pointer to the main trcache instance for
+ *                        metadata.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -70,7 +72,7 @@ struct candle_chunk {
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
-	struct memory_accounting *mem_acc;
+	struct trcache *trc;
 };
 
 /**
@@ -207,17 +209,17 @@ static inline void candle_chunk_write_key(
 /**
  * @brief   Allocate and initialize #candle_chunk.
  *
+ * @param   trc:                Pointer to the main trcache instance.
  * @param   candle_type:        Candle type of the column-batch.
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
- * @param   mem_acc:            Memory accounting information.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
-	int symbol_id, int row_page_count, int batch_candle_count,
-	struct memory_accounting *mem_acc);
+struct candle_chunk *create_candle_chunk(struct trcache *trc,
+	trcache_candle_type candle_type, int symbol_id,
+	int row_page_count, int batch_candle_count);
 
 /**
  * @brief   Release all resources of a candle chunk.
@@ -261,14 +263,13 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
  * synchronous flush it returns NULL, in which case the chunk is marked
  * immediately as flushed.
  *
- * @param   trc:       Pointer to the parent trcache instance.
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush completed synchronously  
  *          0  flush started asynchronously (still pending)  
  */
-int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
+int candle_chunk_flush(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops);
 
 /**
@@ -279,14 +280,13 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
  * flush_ops->is_done(). When the backend signals completion, the flush
  * handle is destroyed and the chunk is marked flushed.
  *
- * @param   trc:       Pointer to the parent trcache instance.
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush has completed *in this call*.
  *          0  flush has not completed *in this call*.
  */
-int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
+int candle_chunk_flush_poll(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops);
 
 /**
@@ -301,13 +301,13 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
  * @param   idx:         Index of the candle to copy (0-based).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
- * @param   field_mask:  Bit-mask describing which columns to copy.
+ * @param   request:     Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	int idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask);
+	const struct trcache_field_request *request);
 
 /**
  * @brief   Copy a contiguous range of row-oriented candles.
@@ -322,13 +322,13 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
  * @param   end_idx:    Last candle index in the range (inclusive).
  * @param   dst_idx:    Index of the last element in @dst to fill.
  * @param   dst [out]:  Pre-allocated destination batch.
- * @param   field_mask: Bit-mask describing which columns to copy.
+ * @param   request:    Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask);
+	const struct trcache_field_request *request);
 
 /**
  * @brief   Copy candles that already reside in the column batch.
@@ -342,12 +342,12 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
  * @param   end_idx:     Last candle index in the range (inclusive).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
- * @param   field_mask:  Bit-mask describing which columns to copy.
+ * @param   request:     Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask);
+	const struct trcache_field_request *request);
 
 #endif /* CANDLE_CHUNK_H */

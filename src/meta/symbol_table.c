@@ -289,7 +289,7 @@ static struct symbol_entry *init_symbol_entry(
 
 	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
 		for (int j = 0; j < tc->num_candle_types[i]; j++) {
-			trcache_candle_type type = { .base = i, .type_idx = j };
+			trcache_candle_type type = { .base_type = i, .type_idx = j };
 			
 			ctx.trc = tc;
 			ctx.candle_type = type;

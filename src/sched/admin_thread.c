@@ -227,11 +227,11 @@ static int choose_best_worker(double *load, int limit,
 	const double PENALTY = 10.0;
 	int best = 0;
 	double best_score = load[0] +
-		((mask[0][type.base] & (1u << type.type_idx)) ? 0.0 : PENALTY);
+		((mask[0][type.base_type] & (1u << type.type_idx)) ? 0.0 : PENALTY);
 	
 	for (int w = 1; w < limit; w++) {
 		double score = load[w] +
-			((mask[w][type.base] & (1u << type.type_idx)) ? 0.0 : PENALTY);
+			((mask[w][type.base_type] & (1u << type.type_idx)) ? 0.0 : PENALTY);
 		if (score < best_score) {
 			best_score = score;
 			best = w;
@@ -273,7 +273,7 @@ static void update_stage_assignment(struct trcache *cache,
 	struct symbol_entry *entry, trcache_candle_type type,
 	struct stage_sched_env *env, int worker)
 {
-	int base = type.base, type_idx = type.type_idx;
+	int base = type.base_type, type_idx = type.type_idx;
 	int cur = atomic_load(&entry->in_progress[env->stage][base][type_idx]);
 	if (cur == worker) {
 		return;
@@ -351,7 +351,7 @@ static void schedule_symbol_work(struct trcache *cache,
 
 	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
 		for (int j = 0; j < cache->num_candle_types[i]; j++) {
-			type.base = i;
+			type.base_type = i;
 			type.type_idx = j;
 
 			stage_rate = &entry->pipeline_stats.stage_rates[i][j];

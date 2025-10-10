@@ -49,6 +49,12 @@ struct trcache_tls_data {
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
  * @flush_threshold:         How many candle batches to buffer before flush.
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
+ * @user_candle_size:        The total size of the user-defined candle
+ *                           structure.
+ * @field_definitions:       An array describing each field in the custom
+ *                           candle.
+ * @num_fields:              The number of entries in the field_definitions
+ *                           array.
  * @worker_state_arr:        Per-worker state array of length @num_workers.
  * @stage_ct_mask:           Candle-type ownership mask per stage/worker/base.
  * @admin_state:             State structure for admin thread.
@@ -71,6 +77,9 @@ struct trcache {
 	int batch_candle_count_pow2;
 	int flush_threshold;
 	int flush_threshold_pow2;
+	size_t user_candle_size;
+	const struct trcache_field_def *field_definitions;
+	int num_fields;
 	struct worker_state *worker_state_arr;
 	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS][NUM_CANDLE_BASES];
 	struct admin_state admin_state;

@@ -21,12 +21,12 @@
 /**
  * @brief   Allocate an candle chunk list's head version.
  *
- * @param   chunk_index: #candle_chunk_index pointer.
+ * @param   chunk_list: #candle_chunk_list pointer.
  *
  * @return  Pointer to #atomsnap_version, or NULL on failure.
  */
 static struct atomsnap_version *candle_chunk_list_head_alloc(
-	void *chunk_index)
+	void *chunk_list)
 {
 	struct atomsnap_version *version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
@@ -48,7 +48,7 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
 
 	head->snap_version = version;
 	version->object = (void *)head;
-	version->free_context = chunk_index;
+	version->free_context = chunk_list;
 
 	return version;
 }
@@ -76,8 +76,9 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
  */
 static void candle_chunk_list_head_free(struct atomsnap_version *version)
 {
-	struct candle_chunk_index *chunk_index
-		= (struct candle_chunk_index *)version->free_context;
+	struct candle_chunk_list *chunk_list
+		= (struct candle_chunk_list *)version->free_context;
+	struct candle_chunk_index *chunk_index = chunk_list->chunk_index;
 	struct candle_chunk_list_head_version *head_version
 		= (struct candle_chunk_list_head_version *)version->object;
 	struct candle_chunk_list_head_version *next_head_version = NULL;
@@ -114,6 +115,11 @@ free_head_version:
 		candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
 
+		if (chunk_list->flush_ops->on_batch_destroy != NULL) {
+			chunk_list->flush_ops->on_batch_destroy(prev_chunk->column_batch,
+				chunk_list->flush_ops->on_destroy_ctx);
+		}
+
 		candle_chunk_destroy(prev_chunk);
 		prev_chunk = chunk;
 	}
@@ -123,6 +129,13 @@ free_head_version:
 #else  /* !TRCACHE_DEBUG */
 	candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
+
+	if (chunk_list->flush_ops->on_batch_destroy != NULL) {
+		chunk_list->flush_ops->on_batch_destroy(
+			head_version->tail_node->column_batch,
+			chunk_list->flush_ops->on_destroy_ctx);
+	}
+
 	candle_chunk_destroy(head_version->tail_node);
 
 	next_head_version = atomic_load(&head_version->head_version_next);
@@ -170,7 +183,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 		.atomsnap_free_impl = candle_chunk_list_head_free,
 		.num_extra_control_blocks = 0
 	};
-	int base, type_idx;
+	int base_type, type_idx;
 
 	if (ctx == NULL || ctx->trc == NULL) {
 		errmsg(stderr, "Argument is NULL\n");
@@ -185,9 +198,9 @@ struct candle_chunk_list *create_candle_chunk_list(
 
 	list->trc = ctx->trc;
 
-	base = ctx->candle_type.base;
+	base_type = ctx->candle_type.base_type;
 	type_idx = ctx->candle_type.type_idx;
-	config = &list->trc->candle_configs[base][type_idx];
+	config = &list->trc->candle_configs[base_type][type_idx];
 
 	list->update_ops = &config->update_ops;
 	list->flush_ops = &config->flush_ops;
@@ -265,10 +278,8 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	chunk = head_version->head_node;
 	do {
-		if (candle_chunk_flush(chunk_list->trc, chunk,
-				chunk_list->flush_ops) == 0) {
-			while (candle_chunk_flush_poll(chunk_list->trc, chunk,
-				chunk_list->flush_ops) != 1) {
+		if (candle_chunk_flush(chunk, chunk_list->flush_ops) == 0) {
+			while (candle_chunk_flush_poll(chunk, chunk_list->flush_ops) != 1) {
 				/* polling */ ;
 			}
 		}
@@ -291,9 +302,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 static int init_first_candle(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
-	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
-		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
-		&list->trc->mem_acc);
+	struct candle_chunk *new_chunk = create_candle_chunk(
+		list->trc, list->candle_type, list->symbol_id, list->row_page_count,
+		list->trc->batch_candle_count);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
 	const struct trcache_candle_update_ops *ops = list->update_ops;
@@ -311,7 +322,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 	}
 
 	head_snap_version
-		= atomsnap_make_version(list->head_gate, (void *)list->chunk_index);
+		= atomsnap_make_version(list->head_gate, (void *)list);
 	if (head_snap_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		candle_chunk_destroy(new_chunk);
@@ -354,10 +365,13 @@ static void advance_within_same_page(struct candle_chunk *chunk,
 	const struct trcache_candle_update_ops *ops,
 	struct trcache_trade_data *trade)
 {
-	ops->init(&row_page->rows[++chunk->mutable_row_idx], trade);
+	struct trcache_candle_base *next_candle
+		= (struct trcache_candle_base *)(row_page->data +
+			(++chunk->mutable_row_idx * chunk->trc->user_candle_size));
+	ops->init(next_candle, trade);
 	candle_chunk_write_key(chunk,
 		chunk->mutable_page_idx, chunk->mutable_row_idx,
-		row_page->rows[chunk->mutable_row_idx].key.value);
+		next_candle->key.value);
 }
 
 /**
@@ -388,9 +402,9 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *prev_chunk, struct trcache_trade_data *trade)
 {
 	const struct trcache_candle_update_ops *ops = list->update_ops;
-	struct candle_chunk *new_chunk = create_candle_chunk(list->candle_type,
-		list->symbol_id, list->row_page_count, list->trc->batch_candle_count,
-		&list->trc->mem_acc);
+	struct candle_chunk *new_chunk = create_candle_chunk(list->trc,
+		list->candle_type, list->symbol_id, list->row_page_count,
+		list->trc->batch_candle_count);
 	uint64_t first_key;
 
 	if (new_chunk == NULL) {
@@ -445,7 +459,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	const struct trcache_candle_update_ops *ops = list->update_ops;
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
-	struct trcache_candle *candle = NULL;
+	struct trcache_candle_base *candle = NULL;
 	int expected_num_completed;
 	bool consumed;
 
@@ -468,7 +482,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	row_page_version = atomsnap_acquire_version_slot(chunk->row_gate,
 		chunk->mutable_page_idx);
 	row_page = (struct candle_row_page *)row_page_version->object;
-	candle = &(row_page->rows[chunk->mutable_row_idx]);
+	candle = (struct trcache_candle_base *)(row_page->data +
+		(chunk->mutable_row_idx * chunk->trc->user_candle_size));
 
 	/* 
 	 * Attempt to update the current candle. The update callback returns
@@ -678,7 +693,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 		return;
 	}
 
-	new_snap = atomsnap_make_version(list->head_gate, (void*)list->chunk_index);
+	new_snap = atomsnap_make_version(list->head_gate, (void*)list);
 	if (new_snap == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return;
@@ -699,7 +714,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 
 		flush_start_count += 1;
 
-		if (candle_chunk_flush(list->trc, chunk, list->flush_ops) == 1) {
+		if (candle_chunk_flush(chunk, list->flush_ops) == 1) {
 			flush_done_count += 1;
 		}
 
@@ -717,8 +732,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	while (flush_done_count < flush_batch_count) {
 		chunk = head_version->head_node;
 		do {
-			if (candle_chunk_flush_poll(list->trc, chunk,
-					list->flush_ops) == 1) {
+			if (candle_chunk_flush_poll(chunk, list->flush_ops) == 1) {
 				flush_done_count += 1;
 			}
 			chunk = chunk->next;
@@ -759,7 +773,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
  * @param   seq_end:     Maximum sequence number to copy.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   request:     Specifies which user-defined fields to retrieve.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -768,7 +782,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 static int candle_chunk_list_copy_backward(
 	struct candle_chunk_list *list, struct candle_chunk *chunk,
 	uint64_t seq_start, uint64_t seq_end, int count,
-	struct trcache_candle_batch *dst, trcache_candle_field_flags field_mask)
+	struct trcache_candle_batch *dst,
+	const struct trcache_field_request *request)
 {
 	uint64_t mutable_seq, last_converted_seq;
 	int start_record_idx, end_record_idx, num_copied, remains = count;
@@ -790,7 +805,7 @@ static int candle_chunk_list_copy_backward(
 	if (seq_end == mutable_seq) {
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 		num_copied = candle_chunk_copy_mutable_row(chunk, end_record_idx,
-			remains - 1, dst, field_mask);
+			remains - 1, dst, request);
 
 		if (num_copied == 1) {
 			seq_end -= 1;
@@ -818,7 +833,7 @@ static int candle_chunk_list_copy_backward(
 			end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
 			num_copied = candle_chunk_copy_rows_until_converted(chunk,
-				start_record_idx, end_record_idx, remains - 1, dst, field_mask);
+				start_record_idx, end_record_idx, remains - 1, dst, request);
 			seq_end -= num_copied;
 			remains -= num_copied;
 
@@ -839,7 +854,7 @@ static int candle_chunk_list_copy_backward(
 		end_record_idx = candle_chunk_clamp_seq(chunk, seq_end);
 
 		num_copied = candle_chunk_copy_from_column_batch(chunk,
-			start_record_idx, end_record_idx, remains - 1, dst, field_mask);
+			start_record_idx, end_record_idx, remains - 1, dst, request);
 		seq_end -= num_copied;
 		remains -= num_copied;
 		chunk = chunk->prev;
@@ -856,13 +871,13 @@ static int candle_chunk_list_copy_backward(
  * @param   seq_end:     Sequence number of the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   request:     Specifies which user-defined fields to retrieve.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	uint64_t seq_end, int count, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask)
+	const struct trcache_field_request *request)
 {
 	struct candle_chunk_index *idx = list->chunk_index;
 	struct candle_chunk *head_chunk, *chunk;
@@ -920,7 +935,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	}
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
-		count, dst, field_mask);
+		count, dst, request);
 
 	atomsnap_release_version(head_snap);
 	return ret;
@@ -934,7 +949,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  * @param   key:         Key belonging to the last candle.
  * @param   count:       Number of candles to copy.
  * @param   dst:         Pre-allocated destination batch (SoA).
- * @param   field_mask:  Bitmask representing trcache_candle_field_type flags.
+ * @param   request:     Specifies which user-defined fields to retrieve.
  *
  * @return  0 on success, -1 on failure.
  *
@@ -942,7 +957,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
  */
 int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	uint64_t key, int count, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask)
+	const struct trcache_field_request *request)
 {
 	struct candle_chunk_index *idx = list->chunk_index;
 	struct candle_chunk *head_chunk, *chunk;
@@ -1006,7 +1021,7 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	}
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
-		count, dst, field_mask);
+		count, dst, request);
 
 	atomsnap_release_version(head_snap);
 	return ret;

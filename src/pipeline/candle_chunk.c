@@ -17,28 +17,37 @@
 #include "pipeline/candle_chunk.h"
 #include "utils/log.h"
 
+static size_t align_up(size_t x, size_t a)
+{
+	return (x + a - 1) & ~(a - 1);
+}
+
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
  *
- * @param   mem_acc_arg: Memory accounting information.
+ * @param   arg: A pointer to the main trcache instance.
  *
  * The returned version already contains a zero‑initialized, 64‑byte‑aligned
  * row page in its @object field.
  *
  * @return  Pointer to version, or NULL on failure.
  */
-static struct atomsnap_version *row_page_version_alloc(void *mem_acc_arg)
+static struct atomsnap_version *row_page_version_alloc(void *arg)
 {
+	struct trcache *trc = (struct trcache *)arg;
+	struct memory_accounting *mem_acc = &trc->mem_acc;
 	struct atomsnap_version *version  = NULL;
 	struct candle_row_page *row_page = NULL;
-	struct memory_accounting *mem_acc = (struct memory_accounting *)mem_acc_arg;
+	size_t page_size = sizeof(struct candle_row_page) +
+		(TRCACHE_ROWS_PER_PAGE * trc->user_candle_size);
 
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
-	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN,
-		sizeof(struct candle_row_page));
+	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, page_size);
 #else
-	posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN,
-		sizeof(struct candle_row_page));
+	if (posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN, page_size)
+			!= 0) {
+		row_page = NULL;
+	}
 #endif
 
 	if (!row_page) {
@@ -56,10 +65,10 @@ static struct atomsnap_version *row_page_version_alloc(void *mem_acc_arg)
 	}
 
 	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		 sizeof(struct atomsnap_version) + sizeof(struct candle_row_page));
+		 sizeof(struct atomsnap_version) + page_size);
 
 	version->object = row_page;
-	version->free_context = mem_acc_arg;
+	version->free_context = arg;
 
 	return version;
 }
@@ -73,41 +82,84 @@ static struct atomsnap_version *row_page_version_alloc(void *mem_acc_arg)
  */
 static void row_page_version_free(struct atomsnap_version *version)
 {
+	struct trcache *trc;
 	struct memory_accounting *mem_acc;
+	size_t page_size;
 
 	if (version == NULL) {
 		return;
 	}
 
-	mem_acc = (struct memory_accounting *)version->free_context;
+	trc = (struct trcache *)version->free_context;
+	mem_acc = &trc->mem_acc;
+	page_size = sizeof(struct candle_row_page) +
+		(TRCACHE_ROWS_PER_PAGE * trc->user_candle_size);
+
 	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct candle_row_page) + sizeof(struct atomsnap_version));
+		sizeof(struct atomsnap_version) + page_size);
 
 	free(version->object); /* #candle_row_page */
 	free(version);
 }
 
+/*
+ * Helper function for memory accounting.
+ */
+static size_t calculate_batch_total_size(struct trcache *trc,
+	const struct trcache_candle_batch *batch)
+{
+	size_t total_size = 0;
+
+	if (batch == NULL) {
+		return 0;
+	}
+
+	total_size = align_up(sizeof(struct trcache_candle_batch),
+		TRCACHE_SIMD_ALIGN);
+	total_size = align_up(
+		total_size + sizeof(void *) * trc->num_fields,
+		TRCACHE_SIMD_ALIGN);
+	total_size = align_up(
+		total_size + (size_t)batch->capacity * sizeof(uint64_t),
+		TRCACHE_SIMD_ALIGN); // key_array
+	total_size = align_up(
+		total_size + (size_t)batch->capacity * sizeof(bool),
+		TRCACHE_SIMD_ALIGN); // is_closed_array
+
+	for (int i = 0; i < trc->num_fields; i++) {
+		if (batch->column_arrays[i]) {
+			total_size = align_up(total_size + 
+				(size_t)batch->capacity * trc->field_definitions[i].size,
+				TRCACHE_SIMD_ALIGN);
+		}
+	}
+
+	return total_size;
+}
+
 /**
  * @brief   Allocate and initialize #candle_chunk.
  *
+ * @param   trc:                Pointer to the main trcache instance.
  * @param   candle_type:        Candle type of the column-batch.
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
- * @param   mem_acc:            Memory accounting information.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
-struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
-	int symbol_id, int row_page_count, int batch_candle_count,
-	struct memory_accounting *mem_acc)
+struct candle_chunk *create_candle_chunk(struct trcache *trc,
+	trcache_candle_type candle_type, int symbol_id,
+	int row_page_count, int batch_candle_count)
 {
+	struct memory_accounting *mem_acc = &trc->mem_acc;
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context ctx = {
 		.atomsnap_alloc_impl = row_page_version_alloc,
 		.atomsnap_free_impl = row_page_version_free,
 		.num_extra_control_blocks = row_page_count - 1
 	};
+	size_t batch_total_size = 0;
 
 	chunk = malloc(sizeof(struct candle_chunk));
 	if (chunk == NULL) {
@@ -129,8 +181,8 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 		return NULL;
 	}
 
-	chunk->column_batch = trcache_batch_alloc_on_heap(batch_candle_count,
-		TRCACHE_FIELD_MASK_ALL);
+	chunk->column_batch = trcache_batch_alloc_on_heap(trc,
+		batch_candle_count, NULL);
 	if (chunk->column_batch == NULL) {
 		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
 		pthread_spin_destroy(&chunk->spinlock);
@@ -139,11 +191,12 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
 		return NULL;
 	}
 
-	memstat_add(&mem_acc->ms,
-		MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct candle_chunk) +
-			((sizeof(double) * TRCACHE_NUM_CANDLE_FIELD * batch_candle_count)));
-	chunk->mem_acc = mem_acc;
+	/* Calculate batch size for memstat */
+	batch_total_size = calculate_batch_total_size(trc, chunk->column_batch);
+
+	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
+		sizeof(struct candle_chunk) + batch_total_size);
+	chunk->trc = trc;
 
 	chunk->column_batch->symbol_id = symbol_id;
 	chunk->column_batch->candle_type = candle_type;
@@ -172,15 +225,19 @@ struct candle_chunk *create_candle_chunk(trcache_candle_type candle_type,
  */
 void candle_chunk_destroy(struct candle_chunk *chunk)
 {
+	struct trcache *trc = chunk->trc;
+	struct memory_accounting *mem_acc = &trc->mem_acc;
+	size_t batch_total_size = 0;
+
 	if (chunk == NULL) {
 		return;
 	}
 
-	memstat_sub(&chunk->mem_acc->ms,
-		MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct candle_chunk) +
-			((sizeof(double) * TRCACHE_NUM_CANDLE_FIELD *
-				chunk->column_batch->capacity)));
+	batch_total_size = calculate_batch_total_size(chunk->trc,
+		chunk->column_batch);
+
+	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
+		sizeof(struct candle_chunk) + batch_total_size);
 
 	pthread_spin_destroy(&chunk->spinlock);
 	atomsnap_destroy_gate(chunk->row_gate);
@@ -206,7 +263,8 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version
-		= atomsnap_make_version(chunk->row_gate, (void *)chunk->mem_acc);
+		= atomsnap_make_version(chunk->row_gate, (void *)chunk->trc);
+	struct trcache_candle_base *first_candle;
 
 	if (row_page_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
@@ -214,21 +272,83 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	}
 
 	row_page = (struct candle_row_page *)row_page_version->object;
+	first_candle = (struct trcache_candle_base *)row_page->data;
 
 	/*
 	 * Since the completion count has not been incremented yet, the candle
 	 * initialization process is not visible to readers. Therefore, no locking
 	 * is required.
 	 */
-	ops->init(&(row_page->rows[0]), trade);
+	ops->init(first_candle, trade);
 
-	*first_key = row_page->rows[0].key.value;
+	*first_key = first_candle->key.value;
 
 	candle_chunk_write_key(chunk, page_idx, 0, *first_key);
 
 	atomsnap_exchange_version_slot(chunk->row_gate, page_idx, row_page_version);
 
 	return 0;
+}
+
+/**
+ * @brief   Helper to copy a single row-oriented candle to a columnar batch,
+ *          copying all user-defined fields.
+ */
+static inline void copy_row_to_batch_all(const trcache_candle_base *candle,
+	struct trcache_candle_batch *dst, int dst_idx, struct trcache *trc)
+{
+	void *dst_col, *src_field, *dst_field;
+	const struct trcache_field_def *field;
+
+	/* Always copy base fields */
+	dst->key_array[dst_idx] = candle->key.value;
+	dst->is_closed_array[dst_idx] = candle->is_closed;
+
+	/* Copy all user fields */
+	for (int i = 0; i < trc->num_fields; i++) {
+		dst_col = dst->column_arrays[i];
+		if (dst_col != NULL) {
+			field = &trc->field_definitions[i];
+			src_field = (char *)candle + field->offset;
+			dst_field = (char *)dst_col + (dst_idx * field->size);
+			memcpy(dst_field, src_field, field->size);
+		}
+	}
+}
+
+/**
+ * @brief   Helper to copy a single row-oriented candle to a columnar batch,
+ *          copying only the requested user-defined fields.
+ */
+static inline void copy_row_to_batch_selective(
+	const trcache_candle_base *candle, struct trcache_candle_batch *dst,
+	int dst_idx, const trcache_field_request *request, struct trcache *trc)
+{
+	void *dst_col, *src_field, *dst_field;
+	const struct trcache_field_def *field;
+	int field_idx;
+
+	assert(request != NULL && request->field_indices != NULL);
+
+	/* Always copy base fields */
+	dst->key_array[dst_idx] = candle->key.value;
+	dst->is_closed_array[dst_idx] = candle->is_closed;
+
+	/* Copy requested user fields */
+	for (int i = 0; i < request->num_fields; i++) {
+		field_idx = request->field_indices[i];
+		if (field_idx < 0 || field_idx >= trc->num_fields) {
+			continue;
+		}
+
+		dst_col = dst->column_arrays[field_idx];
+		if (dst_col) {
+			field = &trc->field_definitions[field_idx];
+			src_field = (char *)candle + field->offset;
+			dst_field = (char *)dst_col + (dst_idx * field->size);
+			memcpy(dst_field, src_field, field->size);
+		}
+	}
 }
 
 /**
@@ -242,26 +362,16 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx)
 {
 	struct trcache_candle_batch *batch = chunk->column_batch;
-	int cur_page_idx = chunk->converting_page_idx, next_page_idx;
+	struct trcache *trc = chunk->trc;
+	int cur_page_idx = chunk->converting_page_idx;
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *page
 		= (struct candle_row_page *)page_version->object;
-	struct trcache_candle *c = NULL;
-
-	/* Vector pointers */
-	uint64_t *key_ptr = batch->key_array + start_idx;
-	double *o_ptr = batch->open_array + start_idx;
-	double *h_ptr = batch->high_array + start_idx;
-	double *l_ptr = batch->low_array + start_idx;
-	double *c_ptr = batch->close_array + start_idx;
-	double *v_ptr = batch->volume_array + start_idx;
-	double *tv_ptr = batch->trading_value_array + start_idx;
-	uint32_t *tc_ptr = batch->trade_count_array + start_idx;
-	bool *ic_ptr = batch->is_closed_array + start_idx;
 
 	for (int idx = start_idx; idx <= end_idx; idx++) {
-		next_page_idx = candle_chunk_calc_page_idx(idx);
+		int next_page_idx = candle_chunk_calc_page_idx(idx);
+
 		if (next_page_idx != cur_page_idx) {
 			/*
 			 * Page is fully converted. Trigger the grace period.
@@ -270,24 +380,22 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 				chunk->row_gate, cur_page_idx, NULL);
 			atomsnap_release_version(page_version);
 
+			/* Move to the next page */
 			cur_page_idx = next_page_idx;
+
 			page_version = atomsnap_acquire_version_slot(
 				chunk->row_gate, cur_page_idx);
 			page = (struct candle_row_page *)page_version->object;
 		}
 
-		c = &(page->rows[candle_chunk_calc_row_idx(idx)]);
+		char *src_candle_base = page->data +
+			(candle_chunk_calc_row_idx(idx) * trc->user_candle_size);
+		struct trcache_candle_base *c
+			= (struct trcache_candle_base *)src_candle_base;
 
-		*key_ptr++ = c->key.value;
-		*o_ptr++ = c->open;
-		*h_ptr++ = c->high;
-		*l_ptr++ = c->low;
-		*c_ptr++ = c->close;
-		*v_ptr++ = c->volume;
-		*tv_ptr++ = c->trading_value;
-		*tc_ptr++ = c->trade_count;
-		*ic_ptr++ = c->is_closed;
+		copy_row_to_batch_all(c, batch, idx, trc);
 	}
+
 	atomsnap_release_version(page_version);
 
 	/* This value is equal to chunk->num_completed */
@@ -313,16 +421,16 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
  * synchronous flush it returns NULL, in which case the chunk is marked
  * immediately as flushed.
  *
- * @param   trc:       Pointer to the parent trcache instance.
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush completed synchronously  
  *          0  flush started asynchronously (still pending)  
  */
-int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
+int candle_chunk_flush(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops)
 {
+	struct trcache *trc = chunk->trc;
 	chunk->flush_handle = flush_ops->flush(
 		trc, chunk->column_batch, flush_ops->flush_ctx);
 
@@ -345,16 +453,17 @@ int candle_chunk_flush(struct trcache *trc, struct candle_chunk *chunk,
  * flush_ops->is_done(). When the backend signals completion, the flush
  * handle is destroyed and the chunk is marked flushed.
  *
- * @param   trc:       Pointer to the parent trcache instance.
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
  * @return  1  flush has completed *in this call*.
  *          0  flush has not completed *in this call*.
  */
-int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
+int candle_chunk_flush_poll(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops)
 {
+	struct trcache *trc = chunk->trc;
+
 	/* Synchronous flush already finished earlier. */
 	if (chunk->is_flushed) {
 		return 0;
@@ -363,8 +472,8 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
 	/* Ask the backend whether the I/O has finished. */
 	if (flush_ops->is_done(trc, chunk->column_batch, chunk->flush_handle)) {
 		/* Tear down backend resources and mark completion. */
-		flush_ops->destroy_handle(chunk->flush_handle,
-			flush_ops->destroy_handle_ctx);
+		flush_ops->destroy_async_handle(chunk->flush_handle,
+			flush_ops->destroy_async_handle_ctx);
 		chunk->flush_handle = NULL;
 		chunk->is_flushed = 1;
 		return 1;
@@ -372,100 +481,6 @@ int candle_chunk_flush_poll(struct trcache *trc, struct candle_chunk *chunk,
 
 	/* Still pending. */
 	return 0;
-}
-
-_Static_assert(TRCACHE_NUM_CANDLE_FIELD == 9, "Field count/dispatch mismatch");
-
-/**
- * @brief   Dispatch-table based copier (GNU computed-goto).
- *
- * The function jumps directly to the code block that handles the first set-bit
- * in @mask, copies one field, clears that bit, and jumps again until all
- * requested fields are processed.
- *
- * @param   c:     Pointer to the source candle (AoS).
- * @param   d:     Pointer to the destination batch (SoA).
- * @param   i:     Destination index to fill.
- * @param   mask:  Bit-mask describing which fields to copy (>= 1).
- *
- * @note  Uses GNU C's "computed goto". Portable only with GCC/Clang.
- *        The lowest bit (0) corresponds to START_TIMESTAMP.
- *        Undefined behaviour is avoided by checking @mask==0
- *        before every computed-goto re-entry.
- */
-static inline void candle_copy_dispatch_tbl(
-	struct trcache_candle * __restrict c,
-	struct trcache_candle_batch * __restrict d,
-	int i, trcache_candle_field_flags field_mask)
-{
-	static void *dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
-		&&copy_key,
-		&&copy_open,
-		&&copy_high,
-		&&copy_low,
-		&&copy_close,
-		&&copy_volume,
-		&&copy_trading_value,
-		&&copy_trade_count,
-		&&copy_is_closed,
-		&&copy_done
-	};
-	uint32_t m;
-
-	if (field_mask == 0) {
-		return; /* nothing to copy */
-	}
-
-	/* Set the out bit */
-	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_key:
-	d->key_array[i] = c->key.value;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_open:
-	d->open_array[i] = c->open;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_high:
-	d->high_array[i] = c->high;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_low:
-	d->low_array[i] = c->low;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_close:
-	d->close_array[i] = c->close;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_volume:
-	d->volume_array[i] = c->volume;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_trading_value:
-	d->trading_value_array[i] = c->trading_value;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_trade_count:
-	d->trade_count_array[i] = c->trade_count;
-	m &= m - 1;
-	goto *dispatch[__builtin_ctz(m)];
-
-copy_is_closed:
-	d->is_closed_array[i] = c->is_closed;
-	/* Fall through */
-
-copy_done:
-	return;
 }
 
 /**
@@ -480,19 +495,21 @@ copy_done:
  * @param   idx:         Index of the candle to copy (0-based).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
- * @param   field_mask:  Bit-mask describing which columns to copy.
+ * @param   request:     Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	int idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask)
+	const struct trcache_field_request *request)
 {
+	struct trcache *trc = chunk->trc;
 	int page_idx = candle_chunk_calc_page_idx(idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
 	struct candle_row_page *row_page;
-	struct trcache_candle *candle;
+	char *src_candle_base;
+	struct trcache_candle_base *candle;
 	int row_idx;
 
 	if (page_version == NULL) {
@@ -501,10 +518,12 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 
 	row_page = (struct candle_row_page *)page_version->object;
 	row_idx = candle_chunk_calc_row_idx(idx);
-	candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
+
+	src_candle_base = row_page->data + (row_idx * trc->user_candle_size);
+	candle = (struct trcache_candle_base *)src_candle_base;
 
 	pthread_spin_lock(&chunk->spinlock);
-	candle_copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
+	copy_row_to_batch_selective(candle, dst, dst_idx, request, chunk->trc);
 	pthread_spin_unlock(&chunk->spinlock);
 
 	atomsnap_release_version(page_version);
@@ -524,19 +543,21 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
  * @param   end_idx:    Last candle index in the range (inclusive).
  * @param   dst_idx:    Index of the last element in @dst to fill.
  * @param   dst [out]:  Pre-allocated destination batch.
- * @param   field_mask: Bit-mask describing which columns to copy.
+ * @param   request:     Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask)
+	const struct trcache_field_request *request)
 {
+	struct trcache *trc = chunk->trc;
 	int cur_page_idx = candle_chunk_calc_page_idx(end_idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *row_page;
-	struct trcache_candle *candle;
+	char *src_candle_base;
+	struct trcache_candle_base *candle;
 	int next_page_idx, row_idx, num_copied = 0;
 
 	if (page_version == NULL) {
@@ -562,8 +583,11 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		}
 
 		row_idx = candle_chunk_calc_row_idx(idx);
-		candle = __builtin_assume_aligned(&row_page->rows[row_idx], 64);
-		candle_copy_dispatch_tbl(candle, dst, dst_idx, field_mask);
+
+		src_candle_base = row_page->data + (row_idx * trc->user_candle_size);
+		candle = (struct trcache_candle_base *)src_candle_base;
+
+		copy_row_to_batch_selective(candle, dst, dst_idx, request, chunk->trc);
 
 		num_copied += 1;
 		dst_idx -= 1;
@@ -571,109 +595,6 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 	atomsnap_release_version(page_version);
 	return num_copied;
-}
-
-/*
- * @brief   Copy a segment of memory containing 64‑bit values.
- *
- * This helper is tuned for copying arrays of 64‑bit types (e.g. uint64_t,
- * double). It requires that the byte count be a multiple of 8 and
- * performs a small unrolled loop when the segment is small. 
- * Larger segments fall back to memcpy().
- *
- * @param   src:   Source pointer.
- * @param   dst:   Destination pointer.
- * @param   bytes: Number of bytes to copy (must be a multiple of 8).
- */
-static inline void copy_segment_u64(const void *__restrict src,
-	void *__restrict dst, int bytes)
-{
-	assert((bytes & 7u) == 0);
-
-	if (bytes <= 256) {
-		const uint64_t *__restrict s = (const uint64_t *)src;
-		uint64_t *__restrict d = (uint64_t *)dst;
-		size_t n_qwords = (size_t)bytes >> 3;
-		size_t i = 0;
-
-		/* 64‑byte unroll */
-		for (; i + 7 < n_qwords; i += 8) {
-			d[i] = s[i];
-			d[i + 1] = s[i + 1];
-			d[i + 2] = s[i + 2];
-			d[i + 3] = s[i + 3];
-			d[i + 4] = s[i + 4];
-			d[i + 5] = s[i + 5];
-			d[i + 6] = s[i + 6];
-			d[i + 7] = s[i + 7];
-		}
-
-		/* Remainder */
-		for (; i < n_qwords; i++) {
-			d[i] = s[i];
-		}
-	} else {
-		memcpy(dst, src, (size_t)bytes);
-	}
-}
-
-/*
- * @brief   Copy a segment of memory containing 32‑bit values.
- *
- * This helper mirrors copy_segment_u64() but operates on 4‑byte
- * elements such as uint32_t. The byte count must be a multiple of 4.
- *
- * @param   src:   Source pointer.
- * @param   dst:   Destination pointer.
- * @param   bytes: Number of bytes to copy (must be a multiple of 4).
- */
-static inline void copy_segment_u32(const void *__restrict src,
-	void *__restrict dst, int bytes)
-{
-	assert((bytes & 3u) == 0);
-
-	if (bytes <= 256) {
-		const uint32_t *__restrict s = (const uint32_t *)src;
-		uint32_t *__restrict d = (uint32_t *)dst;
-		size_t n_words = (size_t)bytes >> 2;
-		size_t i = 0;
-
-		/* 32‑byte unroll (8 words) */
-		for (; i + 7 < n_words; i += 8) {
-			d[i] = s[i];
-			d[i + 1] = s[i + 1];
-			d[i + 2] = s[i + 2];
-			d[i + 3] = s[i + 3];
-			d[i + 4] = s[i + 4];
-			d[i + 5] = s[i + 5];
-			d[i + 6] = s[i + 6];
-			d[i + 7] = s[i + 7];
-		}
-		/* Remainder */
-		for (; i < n_words; i++) {
-			d[i] = s[i];
-		}
-	} else {
-		memcpy(dst, src, (size_t)bytes);
-	}
-}
-
-/*
- * @brief   Copy a segment of memory containing boolean values.
- *
- * This helper copies arrays of bool. Since bool values are 1 byte each,
- * there is no need for unrolling; memcpy() is sufficient and typically
- * optimized by the compiler. The byte count must be a multiple of 1.
- *
- * @param   src:   Source pointer.
- * @param   dst:   Destination pointer.
- * @param   bytes: Number of bytes to copy.
- */
-static inline void copy_segment_bool(const void *__restrict src,
-	void *__restrict dst, int bytes)
-{
-	/* For booleans there is no alignment requirement */
-	memcpy(dst, src, (size_t)bytes);
 }
 
 /**
@@ -688,92 +609,47 @@ static inline void copy_segment_bool(const void *__restrict src,
  * @param   end_idx:     Last candle index in the range (inclusive).
  * @param   dst_idx:     Index of the last element in @dst to fill.
  * @param   dst [out]:   Pre-allocated destination batch.
- * @param   field_mask:  Bit-mask describing which columns to copy.
+ * @param   request:     Specifies which columns to copy.
  *
  * @return  The number of candles copied.
  */
 int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
-	trcache_candle_field_flags field_mask)
+	const struct trcache_field_request *request)
 {
-	static void *const col_dispatch[TRCACHE_NUM_CANDLE_FIELD + 1] = {
-		&&col_copy_key,
-		&&col_copy_open,
-		&&col_copy_high,
-		&&col_copy_low,
-		&&col_copy_close,
-		&&col_copy_volume,
-		&&col_copy_trading_value,
-		&&col_copy_trade_count,
-		&&col_copy_is_closed,
-		&&col_copy_done
-	};
-	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n;
-	int bytes_db = n * sizeof(double), bytes_u64 = n * sizeof(uint64_t);
-	int bytes_u32 = n * sizeof(uint32_t), bytes_bool = n * sizeof(bool);
-	uint32_t m;
+	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n, field_idx;
+	void *dst_col, *src_col;
+	size_t field_size;
 
-	if (n == 0 || field_mask == 0) {
+	if (n <= 0) {
 		return 0;
 	}
 
-	/* Set the out bit */
-	m = field_mask | (1 << TRCACHE_NUM_CANDLE_FIELD);
-	goto *col_dispatch[__builtin_ctz(m)];
+	/* Always copy base fields */
+	memcpy(dst->key_array + dst_first,
+	       chunk->column_batch->key_array + start_idx,
+	       n * sizeof(uint64_t));
+	memcpy(dst->is_closed_array + dst_first,
+	       chunk->column_batch->is_closed_array + start_idx,
+	       n * sizeof(bool));
 
-col_copy_key:
-	copy_segment_u64(chunk->column_batch->key_array + start_idx,
-		dst->key_array + dst_first, bytes_u64);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
+	for (int i = 0; i < request->num_fields; i++) {
+		field_idx = request->field_indices[i];
 
-col_copy_open:
-	copy_segment_u64(chunk->column_batch->open_array + start_idx,
-		dst->open_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
+		if (field_idx < 0 || field_idx >= chunk->trc->num_fields) {
+			continue;
+		}
 
-col_copy_high:
-	copy_segment_u64(chunk->column_batch->high_array + start_idx,
-		dst->high_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
+		dst_col = dst->column_arrays[field_idx];
+		src_col = chunk->column_batch->column_arrays[field_idx];
 
-col_copy_low:
-	copy_segment_u64(chunk->column_batch->low_array + start_idx,
-		dst->low_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
+		if (dst_col != NULL && src_col != NULL) {
+			field_size = chunk->trc->field_definitions[field_idx].size;
+			memcpy((char *)dst_col + (dst_first * field_size),
+				(char *)src_col + (start_idx * field_size),
+				n * field_size);
+		}
+	}
 
-col_copy_close:
-	copy_segment_u64(chunk->column_batch->close_array + start_idx,
-		dst->close_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
-
-col_copy_volume:
-	copy_segment_u64(chunk->column_batch->volume_array + start_idx,
-		dst->volume_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
-
-col_copy_trading_value:
-	copy_segment_u64(chunk->column_batch->trading_value_array + start_idx,
-		dst->trading_value_array + dst_first, bytes_db);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
-
-col_copy_trade_count:
-	copy_segment_u32(chunk->column_batch->trade_count_array + start_idx,
-		dst->trade_count_array + dst_first, bytes_u32);
-	m &= m - 1;
-	goto *col_dispatch[__builtin_ctz(m)];
-
-col_copy_is_closed:
-	copy_segment_bool(chunk->column_batch->is_closed_array + start_idx,
-		dst->is_closed_array + dst_first, bytes_bool);
-	/* Fall through */
-
-col_copy_done:
 	return n;
 }

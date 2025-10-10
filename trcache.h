@@ -36,6 +36,19 @@ extern "C" {
 typedef struct trcache trcache;
 
 /*
+ * trcache_value - A flexible value type for trade data.
+ *
+ * This union allows trade price and volume to be represented as a double,
+ * a 64-bit integer, or a generic pointer for custom types (e.g., decimal
+ * libraries).
+ */
+typedef union {
+	double as_double;
+	int64_t as_int64;
+	void *as_ptr;
+} trcache_value;
+
+/*
  * trcache_trade_data - The basic unit provided by the user to trcache.
  *
  * @timestamp: Unix timestamp in milliseconds.
@@ -55,32 +68,29 @@ typedef struct trcache trcache;
 typedef struct trcache_trade_data {
 	uint64_t timestamp;
 	uint64_t trade_id;
-	double price;
-	double volume;
+	trcache_value price;
+	trcache_value volume;
 } trcache_trade_data;
 
 /*
- * Identifiers for candle's fields. This is used in a bitmap to distinguish
- * fields, so the values should be a power of two.
+ * trcache_candle_base - Base structure for all user-defined candles.
+ *
+ * Every custom candle structure defined by the user must include this
+ * structure as its very first member. This allows the trcache library to
+ * safely access essential fields like the key and closed status while
+ * remaining agnostic to the user-specific fields that follow.
+ *
+ * @key:       Union holding the unique identifier for the candle.
+ * @is_closed: Non-zero when the candle has closed.
  */
-typedef enum {
-	TRCACHE_KEY                 = 1 << 0,
-	TRCACHE_OPEN                = 1 << 1,
-	TRCACHE_HIGH                = 1 << 2,
-	TRCACHE_LOW                 = 1 << 3,
-	TRCACHE_CLOSE               = 1 << 4,
-	TRCACHE_VOLUME              = 1 << 5,
-	TRCACHE_TRADING_VALUE       = 1 << 6,
-	TRCACHE_TRADE_COUNT         = 1 << 7,
-	TRCACHE_IS_CLOSED           = 1 << 8
-} trcache_candle_field_type;
-
-#define TRCACHE_NUM_CANDLE_FIELD (9)
-
-typedef uint32_t trcache_candle_field_flags;
-
-#define TRCACHE_FIELD_MASK_ALL \
-	(((trcache_candle_field_flags)1 << TRCACHE_NUM_CANDLE_FIELD) - 1)
+typedef struct trcache_candle_base {
+	union {
+		uint64_t timestamp;
+		uint64_t trade_id;
+		uint64_t value;
+	} key;
+	bool is_closed;
+} trcache_candle_base;
 
 /*
  * This enum serves as a high-level classifier for different candle aggregation
@@ -93,7 +103,7 @@ typedef enum {
 	CANDLE_TIME_BASE,
 	CANDLE_TICK_BASE,
 	NUM_CANDLE_BASES
-} trcache_candle_base;
+} trcache_candle_base_type;
 
 /**
  * trcache_candle_type - Uniquely identifies a specific candle type.
@@ -103,52 +113,25 @@ typedef enum {
  * (e.g., time-based) and the specific instance within that base (e.g., the
  * second time-based candle type, which might be a 5-minute candle).
  *
- * @base:      The fundamental category of the candle (e.g., CANDLE_TIME_BASE).
+ * @base_type: The fundamental category of the candle (e.g., CANDLE_TIME_BASE).
  * @type_idx:  A zero-based index identifying the specific candle type within
  *             the given base.
  */
 typedef struct {
-	trcache_candle_base base;
+	trcache_candle_base_type base_type;
 	int type_idx;
 } trcache_candle_type;
 
 /*
- * trcache_candle - Single candle data structured in row-oriented format.
- *
- * @key:            Union holding the unique identifier for the candle.
- *  - timestamp:    For time-based candles (e.g., Unix ms).
- *  - trade_id:     For tick-based candles.
- *  - value:        Generic access to the 64-bit key.
- * @open:           Price of the very first trade.
- * @high:           Highest traded price inside the candle.
- * @low:            Lowest traded price inside the candle.
- * @close:          Price of the very last trade.
- * @volume:         Sum of traded volume.
- * @trading_value:  Sum of each trade's price multiplied by its volume.
- * @trade_count:    Number of trades aggregated into this candle.
- * @is_closed:      Non-zero when the candle has closed.
- */
-typedef struct trcache_candle {
-	union {
-		uint64_t timestamp;
-		uint64_t trade_id;
-		uint64_t value;
-	} key;
-	double open;
-	double high;
-	double low;
-	double close;
-	double volume;
-	double trading_value;
-	uint32_t trade_count;
-	bool is_closed;
-	uint8_t pad[3];
-} trcache_candle;
-
-/*
  * trcache_candle_batch - Vectorised batch of candles in column-oriented layout.
+ * 
+ * This is a hybrid structure. Essential base fields (key, is_closed) are
+ * exposed as named members for performance and convenience. Additional
+ * user-defined fields are stored in the generic column_arrays.
  *
- * @{field}_array: Vector arrays (all #TRCACHE_SIMD_ALIGN-aligned).
+ * @key_array:     Array for the candle's unique key (always present).
+ * @is_closed_array: Array for the candle's closed status (always present).
+ * @column_arrays: Array of pointers to the actual columnar data arrays.
  * @capacity:      Capacity of vector arrays.
  * @num_candles:   Number of candles stored in every array.
  * @candle_type:   The candle type identifier.
@@ -165,14 +148,8 @@ typedef struct trcache_candle {
  */
 typedef struct trcache_candle_batch {
 	uint64_t *key_array;
-	double *open_array;
-	double *high_array;
-	double *low_array;
-	double *close_array;
-	double *volume_array;
-	double *trading_value_array;
-	uint32_t *trade_count_array;
 	bool *is_closed_array;
+	void **column_arrays;
 	int capacity;
 	int num_candles;
 	trcache_candle_type candle_type;
@@ -182,11 +159,18 @@ typedef struct trcache_candle_batch {
 /*
  * trcache_batch_flush_ops - User-defined batch flush operation callbacks.
  *
- * @flush:              User-defined batch flush function.
- * @is_done:            Checks whether the asynchronous flush has completed.
- * @destroy_handle:     Cleans up resources associated with the async handle.
- * @flush_ctx:          User‑supplied pointer, passed into @flush().
- * @destroy_handle_ctx: User-supplied pointer, passed into @destroy_handle().
+ * @flush:                    User-defined batch flush function.
+ * @is_done:                  Checks whether the asynchronous flush has completed.
+ * @destroy_async_handle:     Cleans up resources associated with the async handle.
+ * @on_batch_destroy:         Callback invoked just before a batch's memory is
+ *                            freed, allowing the user to release custom
+ *                            resources (e.g., pointers stored in candle
+ *                            fields).
+ * @flush_ctx:                User‑supplied pointer, passed into @flush().
+ * @destroy_async_handle_ctx: User-supplied pointer, passed into
+ *                            @destroy_async_handle().
+ * @on_destroy_ctx:           User-supplied pointer, passed into
+ *                            @on_batch_destroy().
  *
  * This structure lets applications plug in either synchronous or asynchronous
  * flush logic without changing the core engine.
@@ -201,15 +185,20 @@ typedef struct trcache_candle_batch {
  *   2. **Asynchronous flush** – Initiate the operation inside @flush and return
  *      **a non‑NULL handle** (any unique pointer or token). The worker will
  *      keep that handle and periodically call @is_done until it returns true.
- *      After completion the worker will call @destroy_handle (if it is not
- *      NULL) to free any resources associated with the handle.
+ *      After completion the worker will call @destroy_handle (if
  */
 typedef struct trcache_batch_flush_ops {
-	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
-	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *handle);
-	void (*destroy_handle)(void *handle, void *destroy_handle_ctx);
+	void *(*flush)(trcache *cache, trcache_candle_batch *batch,
+		void *flush_ctx);
+	bool (*is_done)(trcache *cache, trcache_candle_batch *batch,
+		void *async_handle);
+	void (*destroy_async_handle)(void *async_handle,
+		void *destroy_async_handle_ctx);
+	void (*on_batch_destroy)(trcache_candle_batch *batch,
+		void *on_destroy_ctx);
 	void *flush_ctx;
-	void *destroy_handle_ctx;
+	void *destroy_async_handle_ctx;
+	void *on_destroy_ctx;
 } trcache_batch_flush_ops;
 
 /*
@@ -223,76 +212,9 @@ typedef struct trcache_batch_flush_ops {
  *           the subsequent candle.
  */
 typedef struct trcache_candle_update_ops {
-	void (*init)(struct trcache_candle *c, struct trcache_trade_data *d);
-	bool (*update)(struct trcache_candle *c, struct trcache_trade_data *d);
+	void (*init)(struct trcache_candle_base *c, struct trcache_trade_data *d);
+	bool (*update)(struct trcache_candle_base *c, struct trcache_trade_data *d);
 } trcache_candle_update_ops;
-
-/* Helper macros for time-interval candles */
-#define DEFINE_TIME_CANDLE_OPS(SUFFIX, INTERVAL_MS)                      \
-static void init_##SUFFIX(struct trcache_candle *c,                      \
-	struct trcache_trade_data *d)                                        \
-{                                                                        \
-	uint64_t key = d->timestamp - (d->timestamp % (INTERVAL_MS));        \
-	c->key.timestamp = key;                                              \
-	c->open = c->high = c->low = c->close = d->price;                    \
-	c->volume = d->volume;                                               \
-	c->trading_value = d->price * d->volume;                             \
-	c->trade_count = 1;                                                  \
-	c->is_closed = false;                                                \
-}                                                                        \
-static bool update_##SUFFIX(struct trcache_candle *c,                    \
-	struct trcache_trade_data *d)                                        \
-{                                                                        \
-	if ((d->timestamp / (INTERVAL_MS))                                   \
-			!= (c->key.timestamp / (INTERVAL_MS))) {                     \
-		c->is_closed = true;                                             \
-		return false;                                                    \
-	}                                                                    \
-	c->high = c->high > d->price ? c->high : d->price;                   \
-	c->low = c->low < d->price ? c->low : d->price;                      \
-	c->close = d->price;                                                 \
-	c->volume += d->volume;                                              \
-	c->trading_value += d->price * d->volume;                            \
-	c->trade_count += 1;                                                 \
-	return true;                                                         \
-}                                                                        \
-static const struct trcache_candle_update_ops ops_##SUFFIX = {           \
-	.init = init_##SUFFIX,                                               \
-	.update = update_##SUFFIX,                                           \
-}
-
-/* Helper macro for tick-count candles */
-#define DEFINE_TICK_CANDLE_OPS(SUFFIX, INTERVAL_TICK)                    \
-static void init_##SUFFIX(struct trcache_candle *c,                      \
-	struct trcache_trade_data *d)                                        \
-{                                                                        \
-	uint64_t rem = d->trade_id % (INTERVAL_TICK);                        \
-	c->key.trade_id = d->trade_id - rem;                                 \
-	c->open = c->high = c->low = c->close = d->price;                    \
-	c->volume = d->volume;                                               \
-	c->trading_value = d->price * d->volume;                             \
-	c->trade_count = (uint32_t)rem + 1;                                  \
-	c->is_closed = false;                                                \
-}                                                                        \
-static bool update_##SUFFIX(struct trcache_candle *c,                    \
-	struct trcache_trade_data *d)                                        \
-{                                                                        \
-	if (c->trade_count >= (INTERVAL_TICK)) {                             \
-		c->is_closed = true;                                             \
-		return false;                                                    \
-	}                                                                    \
-	c->high = c->high > d->price ? c->high : d->price;                   \
-	c->low = c->low < d->price ? c->low : d->price;                      \
-	c->close = d->price;                                                 \
-	c->volume += d->volume;                                              \
-	c->trading_value += d->price * d->volume;                            \
-	c->trade_count += 1;                                                 \
-	return true;                                                         \
-}                                                                        \
-static const struct trcache_candle_update_ops ops_##SUFFIX = {           \
-	.init = init_##SUFFIX,                                               \
-	.update = update_##SUFFIX,                                           \
-}
 
 /**
  * trcache_candle_config - Defines the properties and callbacks
@@ -316,6 +238,50 @@ typedef struct {
 } trcache_candle_config;
 
 /*
+ * trcache_field_type - Enumerates the possible data types for a user-defined
+ * candle field. This provides metadata for future library
+ * features like internal analytics or serialization.
+ */
+typedef enum {
+	FIELD_TYPE_UINT64,
+	FIELD_TYPE_INT64,
+	FIELD_TYPE_DOUBLE,
+	FIELD_TYPE_UINT32,
+	FIELD_TYPE_BOOL,
+	FIELD_TYPE_POINTER
+} trcache_field_type;
+
+/*
+ * trcache_field_def - Describes a single field within a user-defined candle
+ * structure.
+ *
+ * An array of these structures acts as the schema for the custom candle,
+ * allowing trcache to dynamically perform operations like the Convert stage.
+ *
+ * @offset:     The byte offset of the field within the custom structure
+ *              (calculated using offsetof()).
+ * @size:       The size of the field in bytes (calculated using sizeof()).
+ * @type:       The data type of the field, from the trcache_field_type enum.
+ */
+typedef struct trcache_field_def {
+	size_t offset;
+	size_t size;
+	trcache_field_type type;
+} trcache_field_def;
+
+/*
+ * trcache_field_request - Specifies which fields to retrieve in a query.
+ *
+ * @field_indices: An array of indices corresponding to the #trcache_field_def
+ *                 array provided during initialization.
+ * @num_fields:    The number of indices in the field_indices array.
+ */
+typedef struct trcache_field_request {
+	const int *field_indices;
+	int num_fields;
+} trcache_field_request;
+
+/*
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
  * @candle_types:              Array of pointers to candle configuration arrays.
@@ -326,6 +292,12 @@ typedef struct {
  *                             for auxiliary data structures (i.e. everything
  *                             other than candle chunk list/index).
  * @num_worker_threads:        Number of worker threads.
+ * @user_candle_size:          The total size of the user-defined candle
+ *                             structure.
+ * @field_definitions:         An array describing each field in the custom
+ *                             candle.
+ * @num_fields:                The number of entries in the field_definitions
+ *                             array.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -338,6 +310,9 @@ typedef struct trcache_init_ctx {
 	int cached_batch_count_pow2;
 	size_t aux_memory_limit;
 	int num_worker_threads;
+	size_t user_candle_size;
+	const struct trcache_field_def *field_definitions;
+	int num_fields;
 } trcache_init_ctx;
 
 /**
@@ -415,7 +390,8 @@ int trcache_feed_trade_data(struct trcache *cache,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+*                       Base fields are always included.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -424,7 +400,7 @@ int trcache_feed_trade_data(struct trcache *cache,
  */
 int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t key, int count,
+	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst);
 
 /**
@@ -434,7 +410,8 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ *                      Base fields are always included.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -443,7 +420,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t key, int count,
+	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst);
 
 /**
@@ -453,7 +430,8 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ *                      Base fields are always included.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -462,7 +440,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, int offset, int count,
+	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst);
 
 /**
@@ -472,7 +450,8 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ *                      Base fields are always included.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -481,142 +460,39 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, int offset, int count,
+	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst);
 
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   capacity:   Number of OHLCV rows to allocate (must be > 0).
- * @param   field_mask: OR-ed set of required fields.
- *
+ * @param   tc:       Pointer to the trcache instance.
+ * @param   capacity: Number of candle rows to allocate (must be > 0).
+ * @param   request:  Pointer to a struct specifying which fields to allocate.
+ *                    If NULL, all fields defined at init are allocated.
+ *                    Base fields are always included.
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
  *
- * @note The returned pointer must be released via trcache_batch_free().
+ * @note    The returned pointer must be released via trcache_batch_free().
  */
-struct trcache_candle_batch *trcache_batch_alloc_on_heap(int capacity,
-	trcache_candle_field_flags field_mask);
+struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
+	int capacity, const struct trcache_field_request *request);
 
 /**
  * @brief   Release a heap-allocated candle batch.
  *
- * @param   batch: Pointer obtained from trcache_batch_alloc_on_heap().
+ * This function is intended for batches allocated by the user via
+ * trcache_batch_alloc_on_heap(). It only frees the memory block.
+ * It does *not* invoke the on_batch_destroy() callback, which is reserved
+ * for the internal pipeline. The user is responsible for cleaning up any
+ * custom resources within the batch before calling this function.
+ *
+ * @param   batch: Pointer to the batch to be freed.
  *
  * Safe to pass 'NULL'; the function becomes a no-op.
  */
 void trcache_batch_free(struct trcache_candle_batch *batch);
-
-/**
- * @brief   Align a pointer upward to the next @p a-byte boundary.
- *
- * @param   p: Raw pointer to be aligned.
- * @param   a: Alignment in bytes (power-of-two, e.g. 64).
- *
- * @return  Pointer guaranteed to satisfy ((uintptr_t)ret % a) == 0.
- *
- * @warning Macro clients must ensure @p p lies in a buffer of
- *          at least (a-1) extra bytes to avoid overflow.
- */
-static inline void *trcache_align_up_ptr(void *p, size_t a)
-{
-	return (void *)(((uintptr_t)p + a - 1) & ~(uintptr_t)(a - 1));
-}
-
-/**
- * @brief   Build a fully-aligned candle batch on the *caller's stack*.
- *
- * Uses alloca() to reserve raw space for each array, then fixes
- * alignment via #trc_align_up_ptr.  The stack memory lives as long as the
- * caller's frame is active—no explicit free is required.
- *
- * @param   dst [out]:  Pre-declared #trcache_candle_batch object to populate.
- * @param   capacity:   Number of candle rows to allocate (must be > 0).
- * @param   field_mask: OR-ed set of required fields.
- *
- * @note All pointers inside @p dst point into the caller's stack frame.
- */
-static inline void trcache_batch_alloc_on_stack(
-	struct trcache_candle_batch *dst, int capacity,
-	trcache_candle_field_flags field_mask)
-{
-	const size_t a = TRCACHE_SIMD_ALIGN;
-	size_t u64b = (size_t)capacity * sizeof(uint64_t);
-	size_t dblb = (size_t)capacity * sizeof(double);
-	size_t u32b = (size_t)capacity * sizeof(uint32_t);
-	size_t boolb = (size_t)capacity * sizeof(bool);
-
-	uint8_t *buf_key = NULL;
-	uint8_t *buf_op = NULL;
-	uint8_t *buf_hi = NULL;
-	uint8_t *buf_lo = NULL;
-	uint8_t *buf_cl = NULL;
-	uint8_t *buf_vol = NULL;
-	uint8_t *buf_tv = NULL;
-	uint8_t *buf_tc = NULL;
-	uint8_t *buf_ic = NULL;
-
-	if (field_mask & TRCACHE_KEY)
-		buf_key = alloca(u64b + a - 1);
-	if (field_mask & TRCACHE_OPEN)
-		buf_op = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_HIGH)
-		buf_hi = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_LOW)
-		buf_lo = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_CLOSE)
-		buf_cl = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_VOLUME)
-		buf_vol = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_TRADING_VALUE)
-		buf_tv = alloca(dblb + a - 1);
-	if (field_mask & TRCACHE_TRADE_COUNT)
-		buf_tc = alloca(u32b + a - 1);
-	if (field_mask & TRCACHE_IS_CLOSED)
-		buf_ic = alloca(boolb + a - 1);
-
-	dst->capacity = capacity;
-	dst->num_candles = 0;
-	dst->symbol_id = -1;
-
-	dst->key_array = (field_mask & TRCACHE_KEY) ?
-		(uint64_t *)trcache_align_up_ptr(buf_key, a) : NULL;
-	dst->open_array = (field_mask & TRCACHE_OPEN) ?
-		(double *)trcache_align_up_ptr(buf_op, a) : NULL;
-	dst->high_array = (field_mask & TRCACHE_HIGH) ?
-		(double *)trcache_align_up_ptr(buf_hi, a) : NULL;
-	dst->low_array = (field_mask & TRCACHE_LOW) ?
-		(double *)trcache_align_up_ptr(buf_lo, a) : NULL;
-	dst->close_array = (field_mask & TRCACHE_CLOSE) ?
-		(double *)trcache_align_up_ptr(buf_cl, a) : NULL;
-	dst->volume_array = (field_mask & TRCACHE_VOLUME) ?
-		(double *)trcache_align_up_ptr(buf_vol, a) : NULL;
-	dst->trading_value_array = (field_mask & TRCACHE_TRADING_VALUE) ?
-		(double *)trcache_align_up_ptr(buf_tv, a) : NULL;
-	dst->trade_count_array = (field_mask & TRCACHE_TRADE_COUNT) ?
-		(uint32_t *)trcache_align_up_ptr(buf_tc, a) : NULL;
-	dst->is_closed_array = (field_mask & TRCACHE_IS_CLOSED) ?
-		(bool *)trcache_align_up_ptr(buf_ic, a) : NULL;
-}
-
-/**
- * @brief   Declare and initialise a stack-resident candle batch in one line.
- *
- * Example:
- * 
- * func() {
- *     TRCACHE_DEFINE_BATCH_ON_STACK(batch, 1024, TRCACHE_FIELD_MASK_ALL);
- *     // batch.open_array … 1024 aligned doubles
- *     ...
- * }
- *
- * @param   var:  User-chosen variable name of type #trcache_candle_batch.
- * @param   cap:  Number of candles to allocate (runtime value allowed).
- * @param   mask: OR-ed set of required fields.
- */
-#define TRCACHE_DEFINE_BATCH_ON_STACK(var, cap, mask) \
-	trcache_candle_batch var; \
-	trcache_batch_alloc_on_stack(&(var), (cap), (mask))
 
 /**
  * Identifiers for pipeline stages executed by workers.

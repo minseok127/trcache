@@ -41,7 +41,7 @@ static void snapshot_stage(struct symbol_entry *entry, trcache_candle_type type,
 	struct sched_stage_snapshot *stage)
 {
 	struct candle_chunk_list *list
-		= entry->candle_chunk_list_ptrs[type.base][type.type_idx];
+		= entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
 	uint64_t mutable_seq, last_seq_conv;
 
 	assert(entry->trd_buf != NULL);
@@ -128,7 +128,7 @@ void sched_pipeline_calc_rates(struct trcache *cache,
 
 	for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
 		for (int j = 0; j < cache->num_candle_types[i]; ++j) {
-			type.base = i;
+			type.base_type = i;
 			type.type_idx = j;
 
 			snapshot_stage(entry, type, &snapshot.stage_snaps[i][j]);

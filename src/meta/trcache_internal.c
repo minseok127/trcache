@@ -141,6 +141,8 @@ static void trcache_per_thread_destructor(void *value)
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
 	struct trcache *tc = calloc(1, sizeof(struct trcache));
+	struct trcache_field_def *defs_copy;
+	size_t defs_size;
 	int ret;
 
 	if (tc == NULL) {
@@ -190,12 +192,39 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
 
+	/* Copy user-defined structure metadata */
+	if (ctx->user_candle_size == 0 || ctx->field_definitions == NULL ||
+		ctx->num_fields <= 0) {
+		errmsg(stderr,
+			"User-defined candle metadata is missing or invalid\n");
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
+	tc->user_candle_size = ctx->user_candle_size;
+
+	/* Create a deep copy of the field definitions */
+	defs_size = sizeof(struct trcache_field_def) * tc->num_fields;
+	defs_copy = malloc(defs_size);
+	if (defs_copy == NULL) {
+		errmsg(stderr,
+			"Failed to allocate memory for field definitions copy\n");
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
+	memcpy(defs_copy, ctx->field_definitions, defs_size);
+	tc->field_definitions = defs_copy;
+
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
 	tc->sched_msg_free_list = scq_init(&tc->mem_acc);
 	if (tc->sched_msg_free_list == NULL) {
 		errmsg(stderr, "sched_msg_free_list allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
+		free((void *)tc->field_definitions);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -206,6 +235,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		errmsg(stderr, "admin_state_init failed\n");
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
+		free((void *)tc->field_definitions);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -216,6 +246,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
+		free((void *)tc->field_definitions);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -231,6 +262,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			free(tc->worker_state_arr);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
+			free((void *)tc->field_definitions);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -252,6 +284,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
+		free((void *)tc->field_definitions);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -281,6 +314,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			admin_state_destroy(&tc->admin_state);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
+			free((void *)tc->field_definitions);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -300,6 +334,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
+		free((void *)tc->field_definitions);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -354,6 +389,7 @@ void trcache_destroy(struct trcache *tc)
 	free(tc->worker_state_arr);
 	free(tc->worker_threads);
 	free(tc->worker_args);
+	free((void *)tc->field_definitions);
 
 	free(tc);
 }
@@ -491,14 +527,15 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 		return NULL;
 	}
 
-	if (type.base < 0 || type.base >= NUM_CANDLE_BASES ||
-	    type.type_idx < 0 || type.type_idx >= tc->num_candle_types[type.base]) {
+	if (type.base_type < 0 || type.base_type >= NUM_CANDLE_BASES ||
+	    type.type_idx < 0 ||
+		type.type_idx >= tc->num_candle_types[type.base_type]) {
 		errmsg(stderr, "Invalid candle type (base=%d, idx=%d)\n",
-			type.base, type.type_idx);
+			type.base_type, type.type_idx);
 		return NULL;
 	}
 
-	return entry->candle_chunk_list_ptrs[type.base][type.type_idx];
+	return entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
 }
 
 /*
@@ -583,7 +620,7 @@ static void maybe_apply_trades(struct trcache *tc,
 	/* Iterate over time-based candles */
 	for (int i = 0; i < tc->num_candle_types[CANDLE_TIME_BASE]; i++) {
 		if (time_candle_should_apply(tc, i, admin_ts)) {
-			type.base = CANDLE_TIME_BASE;
+			type.base_type = CANDLE_TIME_BASE;
 			type.type_idx = i;
 			cur = trade_data_buffer_acquire_cursor(buf, type);
 			if (cur == NULL) {
@@ -605,7 +642,7 @@ static void maybe_apply_trades(struct trcache *tc,
 	/* Iterate over tick-based candles */
 	for (int i = 0; i < tc->num_candle_types[CANDLE_TICK_BASE]; ++i) {
 		if (tick_candle_should_apply(tc, i, data->trade_id)) {
-			type.base = CANDLE_TICK_BASE;
+			type.base_type = CANDLE_TICK_BASE;
 			type.type_idx = i;
 			cur = trade_data_buffer_acquire_cursor(buf, type);
 			if (cur == NULL) {
@@ -715,7 +752,7 @@ int trcache_feed_trade_data(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -724,7 +761,7 @@ int trcache_feed_trade_data(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t key, int count,
+	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
@@ -737,7 +774,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
 	dst->candle_type = type;
 
 	return candle_chunk_list_copy_backward_by_key(list, key, count, 
-		dst, field_mask);
+		dst, request);
 }
 
 /**
@@ -747,7 +784,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -756,7 +793,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, uint64_t key, int count,
+	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
@@ -773,7 +810,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 	}
 
 	return trcache_get_candles_by_symbol_id_and_key(tc, symbol_id, type, 
-		field_mask, key, count, dst);
+		request, key, count, dst);
 }
 
 /**
@@ -783,7 +820,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -792,7 +829,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 	int symbol_id, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, int offset, int count,
+	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
@@ -809,7 +846,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 	dst->candle_type = type;
 
 	return candle_chunk_list_copy_backward_by_seq(list, seq_end, count, 
-		dst, field_mask);
+		dst, request);
 }
 
 /**
@@ -819,7 +856,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
  * @param   type:       Candle type to query.
- * @param   field_mask: Bitmask of desired candle fields.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.
@@ -828,7 +865,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  */
 int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 	const char *symbol_str, trcache_candle_type type,
-	trcache_candle_field_flags field_mask, int offset, int count,
+	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst)
 {
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
@@ -845,7 +882,7 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 	}
 
 	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id, type,
-		field_mask, offset, count, dst);
+		request, offset, count, dst);
 }
 
 /**
