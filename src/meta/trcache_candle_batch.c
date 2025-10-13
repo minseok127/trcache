@@ -80,9 +80,13 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 	requested_fields = alloca(sizeof(bool) * config->num_fields);
 
 	if (request == NULL) {
-		memset(requested_fields, 1, sizeof(bool) * config->num_fields);
+		for (int i = 0; i < config->num_fields; i++) {
+			requested_fields[i] = true;
+		}
 	} else {
-		memset(requested_fields, 0, sizeof(bool) * config->num_fields);
+		for (int i = 0; i < config->num_fields; i++) {
+			requested_fields[i] = false;
+		}
 
 		for (int i = 0; i < request->num_fields; i++) {
 			field_idx = request->field_indices[i];

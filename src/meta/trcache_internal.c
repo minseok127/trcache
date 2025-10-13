@@ -353,6 +353,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		free(tc->worker_threads);
 		free(tc->worker_args);
 		for (int i = 0; i < tc->num_workers; i++) {
+			tc->worker_state_arr[i].done = true;
+			pthread_join(tc->worker_threads[i], NULL);
+		}
+		for (int i = 0; i < tc->num_workers; i++) {
 			worker_state_destroy(&tc->worker_state_arr[i]);
 		}
 		free(tc->worker_state_arr);
