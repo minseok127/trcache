@@ -21,7 +21,7 @@ extern "C" {
 #include <stdlib.h>
 
 #define MAX_NUM_THREADS (1024)
-#define MAX_CANDLE_TYPES_PER_BASE (32)
+#define MAX_CANDLE_TYPES (32)
 
 /*
  * @brief   Alignment (in bytes) of every vector array.
@@ -93,36 +93,6 @@ typedef struct trcache_candle_base {
 } trcache_candle_base;
 
 /*
- * This enum serves as a high-level classifier for different candle aggregation
- * strategies. For example, CANDLE_TIME_BASE groups all candles formed based on
- * time intervals, while CANDLE_TICK_BASE groups those formed by a fixed
- * number of trades. This design allows for the flexible addition of entirely
- * new candle formation concepts in the future.
- */
-typedef enum {
-	CANDLE_TIME_BASE,
-	CANDLE_TICK_BASE,
-	NUM_CANDLE_BASES
-} trcache_candle_base_type;
-
-/**
- * trcache_candle_type - Uniquely identifies a specific candle type.
- *
- * This structure is used for all communication between the user and the trcache
- * system regarding candle types. It specifies both the fundamental base
- * (e.g., time-based) and the specific instance within that base (e.g., the
- * second time-based candle type, which might be a 5-minute candle).
- *
- * @base_type: The fundamental category of the candle (e.g., CANDLE_TIME_BASE).
- * @type_idx:  A zero-based index identifying the specific candle type within
- *             the given base.
- */
-typedef struct {
-	trcache_candle_base_type base_type;
-	int type_idx;
-} trcache_candle_type;
-
-/*
  * trcache_candle_batch - Vectorised batch of candles in column-oriented layout.
  * 
  * This is a hybrid structure. Essential base fields (key, is_closed) are
@@ -134,7 +104,7 @@ typedef struct {
  * @column_arrays: Array of pointers to the actual columnar data arrays.
  * @capacity:      Capacity of vector arrays.
  * @num_candles:   Number of candles stored in every array.
- * @candle_type:   The candle type identifier.
+ * @candle_idx:    The candle type identifier (index into config array).
  * @symbol_id:     Integer symbol ID resolved via symbol table.
  *
  * All array members point into **one contiguous, SIMD-aligned block** so the
@@ -152,7 +122,7 @@ typedef struct trcache_candle_batch {
 	void **column_arrays;
 	int capacity;
 	int num_candles;
-	trcache_candle_type candle_type;
+	int candle_idx;
 	int symbol_id;
 } trcache_candle_batch;
 
@@ -216,27 +186,6 @@ typedef struct trcache_candle_update_ops {
 	bool (*update)(struct trcache_candle_base *c, struct trcache_trade_data *d);
 } trcache_candle_update_ops;
 
-/**
- * trcache_candle_config - Defines the properties and callbacks
- *                         for a single candle type.
- *
- * This structure encapsulates all user-provided information needed to manage
- * a specific candle type, including its closing condition, update logic,
- * and flush behavior.
- *
- * @threshold:  A union holding the threshold value for closing a candle.
- * @update_ops: Callbacks for initializing and updating a candle.
- * @flush_ops:  Callbacks for flushing a completed candle batch.
- */
-typedef struct {
-	union {
-		uint64_t interval_ms; /* For CANDLE_TIME_BASE */
-		uint32_t num_ticks;   /* For CANDLE_TICK_BASE */
-	} threshold;
-	const struct trcache_candle_update_ops update_ops;
-	const struct trcache_batch_flush_ops flush_ops;
-} trcache_candle_config;
-
 /*
  * trcache_field_type - Enumerates the possible data types for a user-defined
  * candle field. This provides metadata for future library
@@ -253,7 +202,7 @@ typedef enum {
 
 /*
  * trcache_field_def - Describes a single field within a user-defined candle
- * structure.
+ *                     structure.
  *
  * An array of these structures acts as the schema for the custom candle,
  * allowing trcache to dynamically perform operations like the Convert stage.
@@ -270,6 +219,28 @@ typedef struct trcache_field_def {
 } trcache_field_def;
 
 /*
+ * trcache_candle_config - Defines the properties and callbacks
+ *                         for a single candle type.
+ *
+ * This structure encapsulates all user-provided information needed to manage
+ * a specific candle type, including its closing condition, update logic,
+ * and flush behavior.
+ *
+ * @user_candle_size:   The total size of the user-defined candle structure.
+ * @field_definitions:  An array describing each field in the custom candle.
+ * @num_fields:         The number of entries in the field_definitions array.
+ * @update_ops:         Callbacks for initializing and updating a candle.
+ * @flush_ops:          Callbacks for flushing a completed candle batch.
+ */
+typedef struct trcache_candle_config {
+	size_t user_candle_size;
+	const struct trcache_field_def *field_definitions;
+	int num_fields;
+	const struct trcache_candle_update_ops update_ops;
+	const struct trcache_batch_flush_ops flush_ops;
+} trcache_candle_config;
+
+/*
  * trcache_field_request - Specifies which fields to retrieve in a query.
  *
  * @field_indices: An array of indices corresponding to the #trcache_field_def
@@ -284,35 +255,26 @@ typedef struct trcache_field_request {
 /*
  * trcache_init_ctx - All parameters required to create a *trcache*.
  *
- * @candle_types:              Array of pointers to candle configuration arrays.
- * @num_candle_types:          Number of candle types for each candle base.
+ * @candle_configs:            Array of candle configurations.
+ * @num_candle_configs:        Number of candle configurations provided.
  * @batch_candle_count_pow2:   Number of candles per column batch(log2(cap)).
  * @cached_batch_count_pow2:   Number of batches to cache (log2(cap)).
  * @aux_memory_limit:          Maximum number of bytes this trcache may use
  *                             for auxiliary data structures (i.e. everything
  *                             other than candle chunk list/index).
  * @num_worker_threads:        Number of worker threads.
- * @user_candle_size:          The total size of the user-defined candle
- *                             structure.
- * @field_definitions:         An array describing each field in the custom
- *                             candle.
- * @num_fields:                The number of entries in the field_definitions
- *                             array.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
  * 'trcache_init()' signature).
  */
 typedef struct trcache_init_ctx {
-	const trcache_candle_config *candle_types[NUM_CANDLE_BASES];
-	int num_candle_types[NUM_CANDLE_BASES];
+	const struct trcache_candle_config *candle_configs;
+	int num_candle_configs;
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
 	size_t aux_memory_limit;
 	int num_worker_threads;
-	size_t user_candle_size;
-	const struct trcache_field_def *field_definitions;
-	int num_fields;
 } trcache_init_ctx;
 
 /**
@@ -389,7 +351,7 @@ int trcache_feed_trade_data(struct trcache *cache,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query (index into config array).
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
 *                       Base fields are always included.
  * @param   key:        Key of the last candle to retrieve.
@@ -399,9 +361,8 @@ int trcache_feed_trade_data(struct trcache *cache,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
-	int symbol_id, trcache_candle_type type,
-	const struct trcache_field_request *request, uint64_t key, int count,
-	struct trcache_candle_batch *dst);
+	int symbol_id, int candle_idx, const struct trcache_field_request *request,
+	uint64_t key, int count, struct trcache_candle_batch *dst);
 
 /**
  * @brief   Copy @count candles ending at the candle with key @key
@@ -409,7 +370,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query (index into config array).
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  *                      Base fields are always included.
  * @param   key:        Key of the last candle to retrieve.
@@ -419,7 +380,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
-	const char *symbol_str, trcache_candle_type type,
+	const char *symbol_str, int candle_idx,
 	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst);
 
@@ -429,7 +390,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query (index into config array).
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  *                      Base fields are always included.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
@@ -439,9 +400,8 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
-	int symbol_id, trcache_candle_type type,
-	const struct trcache_field_request *request, int offset, int count,
-	struct trcache_candle_batch *dst);
+	int symbol_id, int candle_idx, const struct trcache_field_request *request,
+	int offset, int count, struct trcache_candle_batch *dst);
 
 /**
  * @brief   Copy @count candles ending at the candle located @offset from
@@ -449,7 +409,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query (index into config array).
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  *                      Base fields are always included.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
@@ -459,25 +419,27 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
-	const char *symbol_str, trcache_candle_type type,
+	const char *symbol_str, int candle_idx, 
 	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst);
 
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   tc:       Pointer to the trcache instance.
- * @param   capacity: Number of candle rows to allocate (must be > 0).
- * @param   request:  Pointer to a struct specifying which fields to allocate.
- *                    If NULL, all fields defined at init are allocated.
- *                    Base fields are always included.
+ * @param   tc:         Pointer to the trcache instance.
+ * @param   candle_idx: Index of the candle configuration to use for layout.
+ * @param   capacity:   Number of candle rows to allocate (must be > 0).
+ * @param   request:    Pointer to a struct specifying which fields to allocate.
+ *                      If NULL, all fields defined at init are allocated.
+ *                      Base fields are always included.
+ *
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
  *
  * @note    The returned pointer must be released via trcache_batch_free().
  */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
-	int capacity, const struct trcache_field_request *request);
+	int candle_idx, int capacity, const struct trcache_field_request *request);
 
 /**
  * @brief   Release a heap-allocated candle batch.

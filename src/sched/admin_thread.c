@@ -102,18 +102,17 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 
 		for (int w = 0; w < cache->num_workers; w++) {
 			struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-			for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-				for (int j = 0; j < cache->num_candle_types[i]; j++) {
-					if (s == WORKER_STAT_STAGE_APPLY) {
-						cycles += b->apply_stat[i][j].cycles;
-						count += b->apply_stat[i][j].work_count;
-					} else if (s == WORKER_STAT_STAGE_CONVERT) {
-						cycles += b->convert_stat[i][j].cycles;
-						count += b->convert_stat[i][j].work_count;
-					} else { // FLUSH
-						cycles += b->flush_stat[i][j].cycles;
-						count += b->flush_stat[i][j].work_count;
-					}
+
+			for (int i = 0; i < cache->num_candle_configs; i++) {
+				if (s == WORKER_STAT_STAGE_APPLY) {
+					cycles += b->apply_stat[i].cycles;
+					count += b->apply_stat[i].work_count;
+				} else if (s == WORKER_STAT_STAGE_CONVERT) {
+					cycles += b->convert_stat[i].cycles;
+					count += b->convert_stat[i].work_count;
+				} else { // FLUSH
+					cycles += b->flush_stat[i].cycles;
+					count += b->flush_stat[i].work_count;
 				}
 			}
 		}
@@ -150,15 +149,12 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 	for (int i = 0; i < num; i++) {
 		struct symbol_entry *e = arr[i];
 
-		for (int j = 0; j < NUM_CANDLE_BASES; j++) {
-			for (int k = 0; k < cache->num_candle_types[j]; k++) {
-				struct sched_stage_rate *r
-					= &e->pipeline_stats.stage_rates[j][k];
+		for (int j = 0; j < cache->num_candle_configs; j++) {
+			struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[j];
 
-				out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
-				out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-				out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
-			}
+			out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
+			out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
+			out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
 		}
 	}
 
@@ -172,8 +168,7 @@ static void reset_stage_ct_masks(struct trcache *cache)
 {
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 		for (int w = 0; w < cache->num_workers; w++) {
-			memset(cache->stage_ct_mask[s][w], 0,
-				sizeof(uint32_t) * NUM_CANDLE_BASES);
+			cache->stage_ct_mask[s][w] = 0;
 		}
 	}
 }
@@ -183,13 +178,13 @@ static void reset_stage_ct_masks(struct trcache *cache)
  *
  * @param   cache:      Global cache instance.
  * @param   worker_id:  Destination worker index.
- * @param   type:       Candle type mask.
+ * @param   candle_idx: Candle type index.
  * @param   stage:      Pipeline stage.
  * @param   symbol_id:  Target symbol ID.
  * @param   kind:       Message type to send.
  */
 static void post_work_msg(struct trcache *cache, int worker_id,
-       trcache_candle_type type, worker_stat_stage_type stage,
+       int candle_idx, worker_stat_stage_type stage,
        int symbol_id, enum sched_msg_type kind)
 {
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
@@ -202,7 +197,7 @@ static void post_work_msg(struct trcache *cache, int worker_id,
 
 	msg->cmd.symbol_id = symbol_id;
 	msg->cmd.stage = stage;
-	msg->cmd.candle_type = type;
+	msg->cmd.candle_idx = candle_idx;
 	msg->type = kind;
 
 	sched_post_work_msg(state->sched_msg_queue, msg);
@@ -216,22 +211,22 @@ static void post_work_msg(struct trcache *cache, int worker_id,
  *
  * @param   load:       Array of per-worker load counters.
  * @param   limit:      Number of valid entries in @load.
- * @param   mask:       Per-worker/per-base candle-type bitmask for the stage.
- * @param   type:       Candle type being scheduled.
+ * @param   mask:       Per-worker bitmask for the stage.
+ * @param   candle_idx: Candle type index being scheduled.
  *
  * @return  Index of the least-loaded worker.
  */
 static int choose_best_worker(double *load, int limit,
-	uint32_t mask[][NUM_CANDLE_BASES], trcache_candle_type type)
+	uint32_t *mask, int candle_idx)
 {
 	const double PENALTY = 10.0;
 	int best = 0;
 	double best_score = load[0] +
-		((mask[0][type.base_type] & (1u << type.type_idx)) ? 0.0 : PENALTY);
+		((mask[0] & (1u << candle_idx)) ? 0.0 : PENALTY);
 	
 	for (int w = 1; w < limit; w++) {
 		double score = load[w] +
-			((mask[w][type.base_type] & (1u << type.type_idx)) ? 0.0 : PENALTY);
+			((mask[w] & (1u << candle_idx)) ? 0.0 : PENALTY);
 		if (score < best_score) {
 			best_score = score;
 			best = w;
@@ -263,34 +258,33 @@ struct stage_sched_env {
  * remove message is sent to the current worker (if any) and an add message is
  * posted to the new worker.
  *
- * @param   cache:   Global cache instance.
- * @param   entry:   Target symbol entry.
- * @param   type:    Candle type identifier.
- * @param   env:     Scheduling environment for the stage.
- * @param   worker:  Destination worker index.
+ * @param   cache:      Global cache instance.
+ * @param   entry:      Target symbol entry.
+ * @param   candle_idx: Candle type identifier.
+ * @param   env:        Scheduling environment for the stage.
+ * @param   worker:     Destination worker index.
  */
 static void update_stage_assignment(struct trcache *cache,
-	struct symbol_entry *entry, trcache_candle_type type,
+	struct symbol_entry *entry, int candle_idx,
 	struct stage_sched_env *env, int worker)
 {
-	int base = type.base_type, type_idx = type.type_idx;
-	int cur = atomic_load(&entry->in_progress[env->stage][base][type_idx]);
+	int cur = atomic_load(&entry->in_progress[env->stage][candle_idx]);
 	if (cur == worker) {
 		return;
 	}
 				
 	if (cur >= 0) {
 		/* remove candle index from previous worker bitmask */
-		cache->stage_ct_mask[env->stage][cur][base] &= ~(1u << type_idx);
-		post_work_msg(cache, cur, type, env->stage,
+		cache->stage_ct_mask[env->stage][cur] &= ~(1u << candle_idx);
+		post_work_msg(cache, cur, candle_idx, env->stage,
 			entry->id, SCHED_MSG_REMOVE_WORK);
 	}
 	
-	post_work_msg(cache, worker, type, env->stage,
+	post_work_msg(cache, worker, candle_idx, env->stage,
 		entry->id, SCHED_MSG_ADD_WORK);
 	
 	/* assign candle index to new worker bitmask */
-	cache->stage_ct_mask[env->stage][worker][base] |= (1u << type_idx);
+	cache->stage_ct_mask[env->stage][worker] |= (1u << candle_idx);
 }
 
 /**
@@ -299,15 +293,15 @@ static void update_stage_assignment(struct trcache *cache,
  * Chooses the least loaded worker, updates its load counter and adjusts the
  * worker assignment accordingly.
  *
- * @param   cache:   Global cache instance.
- * @param   entry:   Target symbol entry.
- * @param   type:    Candle type identifier.
- * @param   demand:  Estimated demand for this stage.
- * @param   env:     Scheduling environment describing stage limits.
+ * @param   cache:       Global cache instance.
+ * @param   entry:       Target symbol entry.
+ * @param   candle_idx:  Candle type identifier.
+ * @param   demand:      Estimated demand for this stage.
+ * @param   env:         Scheduling environment describing stage limits.
  */
 static void schedule_symbol_stage(struct trcache *cache,
 	struct symbol_entry *entry,
-	trcache_candle_type type, double demand,
+	int candle_idx, double demand,
 	struct stage_sched_env *env)
 {
 	if (env->limit <= 0) {
@@ -315,10 +309,10 @@ static void schedule_symbol_stage(struct trcache *cache,
 	}
 	
 	int best = choose_best_worker(env->load, env->limit,
-		cache->stage_ct_mask[env->stage], type) + env->start;
+		cache->stage_ct_mask[env->stage], candle_idx) + env->start;
 	env->load[best - env->start] += demand;
 	
-	update_stage_assignment(cache, entry, type, env, best);
+	update_stage_assignment(cache, entry, candle_idx, env, best);
 }
 	
 /**
@@ -340,7 +334,6 @@ static void schedule_symbol_work(struct trcache *cache,
 	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
 	double demand[WORKER_STAT_STAGE_NUM];
 	struct sched_stage_rate *stage_rate;
-	trcache_candle_type type;
 	
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 		env[s].stage = s;
@@ -349,24 +342,18 @@ static void schedule_symbol_work(struct trcache *cache,
 		env[s].start = stage_start[s];
 	}
 
-	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-		for (int j = 0; j < cache->num_candle_types[i]; j++) {
-			type.base_type = i;
-			type.type_idx = j;
+	for (int i = 0; i < cache->num_candle_configs; i++) {
+		stage_rate = &entry->pipeline_stats.stage_rates[i];
 
-			stage_rate = &entry->pipeline_stats.stage_rates[i][j];
+		demand[WORKER_STAT_STAGE_APPLY]
+			= (double)stage_rate->produced_rate + 1.0;
+		demand[WORKER_STAT_STAGE_CONVERT]
+			= (double)stage_rate->completed_rate + 1.0;
+		demand[WORKER_STAT_STAGE_FLUSH]
+			= (double)stage_rate->converted_rate + 1.0;
 
-			demand[WORKER_STAT_STAGE_APPLY]
-				= (double)stage_rate->produced_rate + 1.0;
-			demand[WORKER_STAT_STAGE_CONVERT]
-				= (double)stage_rate->completed_rate + 1.0;
-			demand[WORKER_STAT_STAGE_FLUSH]
-				= (double)stage_rate->converted_rate + 1.0;
-
-			for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-				schedule_symbol_stage(cache, entry, type,
-					demand[s], &env[s]);
-			}
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			schedule_symbol_stage(cache, entry, i, demand[s], &env[s]);
 		}
 	}
 }

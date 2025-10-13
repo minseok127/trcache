@@ -42,13 +42,13 @@ struct candle_chunk_list_head_version {
 /*
  * candle_chunk_list_init_ctx - All parameters required to create a chunk list.
  *
- * @trc:          #trcache back-pointer.
- * @candle_type:  Candle type (base + type idx).
- * @symbol_id:    Integer symbol ID resolved via symbol table.
+ * @trc:         #trcache back-pointer.
+ * @candle_idx:  Candle type index.
+ * @symbol_id:   Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list_init_ctx {
 	struct trcache *trc;
-	trcache_candle_type candle_type;
+	int candle_idx;
 	int symbol_id;
 };
 
@@ -62,13 +62,11 @@ struct candle_chunk_list_init_ctx {
  * @candle_mutable_chunk:    Chunk containing mutable candle.
  * @converting_chunk:        Chunk being converted to a column batch.
  * @head_gate:               Gate managing head versions.
- * @update_ops:              Candle update callbacks.
- * @flush_ops:               Candle flush callbacks.
- * @threshold:               Threshold for closing a candle.
+ * @config:                  Pointer to the configuration for this candle type.
  * @trc:                     #trcache back-pointer.
  * @chunk_index:             Chunk index based on sequence number and timestamp.
  * @row_page_count:          Number of row pages per chunk.
- * @candle_type:             Candle type (base + type idx).
+ * @candle_idx:              Candle type index.
  * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list {
@@ -79,13 +77,11 @@ struct candle_chunk_list {
 	struct candle_chunk *candle_mutable_chunk;
 	struct candle_chunk *converting_chunk;
 	struct atomsnap_gate *head_gate;
-	const struct trcache_candle_update_ops *update_ops;
-	const struct trcache_batch_flush_ops *flush_ops;
-	const void* threshold;
+	const struct trcache_candle_config *config;
 	struct trcache *trc;
 	struct candle_chunk_index *chunk_index;
 	int row_page_count;
-	trcache_candle_type candle_type;
+	int candle_idx;
 	int symbol_id;
 };
 

@@ -37,13 +37,13 @@ struct sched_stage_rate {
  * sched_pipeline_stats - Statistics for all pipeline stages of one symbol.
  *
  * @timestamp_ns: Monotonic timestamp when the stats were captured.
- * @stage_snaps: Array indexed by candle type holding per-stage sequences.
- * @stage_rates: Array indexed by candle type holding per-stage throughput.
+ * @stage_snaps:  Array indexed by candle type holding per-stage sequences.
+ * @stage_rates:  Array indexed by candle type holding per-stage throughput.
  */
 struct sched_pipeline_stats {
 	uint64_t timestamp_ns;
-	struct sched_stage_snapshot stage_snaps[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
-	struct sched_stage_rate stage_rates[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct sched_stage_snapshot stage_snaps[MAX_CANDLE_TYPES];
+	struct sched_stage_rate stage_rates[MAX_CANDLE_TYPES];
 };
 
 /**

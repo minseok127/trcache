@@ -161,12 +161,10 @@ void symbol_table_destroy(struct symbol_table *table)
 	for (int i = 0; i < table->num_symbols; i++) {
 		entry = symbol_ptr_array[i];
 
-		for (int j = 0; j < NUM_CANDLE_BASES; j++) {
-			for (int k = 0; k < MAX_CANDLE_TYPES_PER_BASE; k++) {
-				if (entry->candle_chunk_list_ptrs[j][k] != NULL) {
-					candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j][k]);
-					destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j][k]);
-				}
+		for (int j = 0; j < MAX_CANDLE_TYPES; j++) {
+			if (entry->candle_chunk_list_ptrs[j] != NULL) {
+				candle_chunk_list_finalize(entry->candle_chunk_list_ptrs[j]);
+				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
 			}
 		}
 
@@ -280,38 +278,31 @@ static struct symbol_entry *init_symbol_entry(
 	}
 
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-			for (int j = 0; j < MAX_CANDLE_TYPES_PER_BASE; j++) {
-				atomic_init(&entry->in_progress[s][i][j], -1);
-			}
+		for (int i = 0; i < tc->num_candle_configs; i++) {
+			atomic_init(&entry->in_progress[s][i], -1);
 		}
 	}
 
-	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-		for (int j = 0; j < tc->num_candle_types[i]; j++) {
-			trcache_candle_type type = { .base_type = i, .type_idx = j };
-			
-			ctx.trc = tc;
-			ctx.candle_type = type;
-			ctx.symbol_id = id;
+	for (int i = 0; i < tc->num_candle_configs; i++) {
+		ctx.trc = tc;
+		ctx.candle_idx = i;
+		ctx.symbol_id = id;
 
-			candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
-			if (candle_chunk_list_ptr == NULL) {
-				errmsg(stderr, "Candle chunk list allocation is failed\n");
-				for (int b = 0; b < NUM_CANDLE_BASES; b++) {
-					for (int t = 0; t < MAX_CANDLE_TYPES_PER_BASE; t++) {
-						if (entry->candle_chunk_list_ptrs[b][t] != NULL) {
-							destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[b][t]);
-						}
-					}
-				}
-				trade_data_buffer_destroy(entry->trd_buf);
-				free(entry->symbol_str);
-				free(entry);
-				return NULL;
+		candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
+		if (candle_chunk_list_ptr == NULL) {
+			errmsg(stderr, "Candle chunk list allocation is failed\n");
+
+			for (int j = 0; j < i; j++) {
+				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
 			}
-			entry->candle_chunk_list_ptrs[i][j] = candle_chunk_list_ptr;
+
+			trade_data_buffer_destroy(entry->trd_buf);
+			free(entry->symbol_str);
+			free(entry);
+			return NULL;
 		}
+
+		entry->candle_chunk_list_ptrs[i] = candle_chunk_list_ptr;
 	}
 
 	entry->id = id;

@@ -115,9 +115,10 @@ free_head_version:
 		candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
 
-		if (chunk_list->flush_ops->on_batch_destroy != NULL) {
-			chunk_list->flush_ops->on_batch_destroy(prev_chunk->column_batch,
-				chunk_list->flush_ops->on_destroy_ctx);
+		if (chunk_list->config->flush_ops.on_batch_destroy != NULL) {
+			chunk_list->config->flush_ops.on_batch_destroy(
+				prev_chunk->column_batch,
+				chunk_list->config->flush_ops.on_destroy_ctx);
 		}
 
 		candle_chunk_destroy(prev_chunk);
@@ -130,10 +131,10 @@ free_head_version:
 	candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
 
-	if (chunk_list->flush_ops->on_batch_destroy != NULL) {
-		chunk_list->flush_ops->on_batch_destroy(
+	if (chunk_list->config->flush_ops.on_batch_destroy != NULL) {
+		chunk_list->config->flush_ops.on_batch_destroy(
 			head_version->tail_node->column_batch,
-			chunk_list->flush_ops->on_destroy_ctx);
+			chunk_list->config->flush_ops.on_destroy_ctx);
 	}
 
 	candle_chunk_destroy(head_version->tail_node);
@@ -176,14 +177,12 @@ free_head_version:
 struct candle_chunk_list *create_candle_chunk_list(
 	struct candle_chunk_list_init_ctx *ctx)
 {
-	trcache_candle_config* config;
 	struct candle_chunk_list *list = NULL;
 	struct atomsnap_init_context atomsnap_ctx = {
 		.atomsnap_alloc_impl = candle_chunk_list_head_alloc,
 		.atomsnap_free_impl = candle_chunk_list_head_free,
 		.num_extra_control_blocks = 0
 	};
-	int base_type, type_idx;
 
 	if (ctx == NULL || ctx->trc == NULL) {
 		errmsg(stderr, "Argument is NULL\n");
@@ -197,14 +196,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	}
 
 	list->trc = ctx->trc;
-
-	base_type = ctx->candle_type.base_type;
-	type_idx = ctx->candle_type.type_idx;
-	config = &list->trc->candle_configs[base_type][type_idx];
-
-	list->update_ops = &config->update_ops;
-	list->flush_ops = &config->flush_ops;
-	list->threshold = &config->threshold;
+	list->config = &ctx->trc->candle_configs[ctx->candle_idx];
 
 	list->chunk_index = candle_chunk_index_create(
 		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2,
@@ -230,7 +222,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	atomic_store(&list->last_seq_converted, UINT64_MAX);
 	atomic_store(&list->unflushed_batch_count, 0);
 
-	list->candle_type = ctx->candle_type;
+	list->candle_idx = ctx->candle_idx;
 	list->symbol_id = ctx->symbol_id;
 
 	list->tail = NULL;
@@ -278,8 +270,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	chunk = head_version->head_node;
 	do {
-		if (candle_chunk_flush(chunk, chunk_list->flush_ops) == 0) {
-			while (candle_chunk_flush_poll(chunk, chunk_list->flush_ops) != 1) {
+		if (candle_chunk_flush(chunk, &chunk_list->config->flush_ops) == 0) {
+			while (candle_chunk_flush_poll(chunk,
+					&chunk_list->config->flush_ops) != 1) {
 				/* polling */ ;
 			}
 		}
@@ -303,11 +296,12 @@ static int init_first_candle(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(
-		list->trc, list->candle_type, list->symbol_id, list->row_page_count,
+		list->trc, list->candle_idx, list->symbol_id, list->row_page_count,
 		list->trc->batch_candle_count);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
-	const struct trcache_candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_update_ops *ops
+		= &list->config->update_ops;
 	uint64_t first_key;
 
 	if (new_chunk == NULL) {
@@ -365,9 +359,11 @@ static void advance_within_same_page(struct candle_chunk *chunk,
 	const struct trcache_candle_update_ops *ops,
 	struct trcache_trade_data *trade)
 {
+	const struct trcache_candle_config *config
+		= &chunk->trc->candle_configs[chunk->column_batch->candle_idx];
 	struct trcache_candle_base *next_candle
 		= (struct trcache_candle_base *)(row_page->data +
-			(++chunk->mutable_row_idx * chunk->trc->user_candle_size));
+			(++chunk->mutable_row_idx * config->user_candle_size));
 	ops->init(next_candle, trade);
 	candle_chunk_write_key(chunk,
 		chunk->mutable_page_idx, chunk->mutable_row_idx,
@@ -401,9 +397,10 @@ static int advance_to_next_page(struct candle_chunk *chunk,
 static int advance_to_new_chunk(struct candle_chunk_list *list,
 	struct candle_chunk *prev_chunk, struct trcache_trade_data *trade)
 {
-	const struct trcache_candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_update_ops *ops
+		= &list->config->update_ops;
 	struct candle_chunk *new_chunk = create_candle_chunk(list->trc,
-		list->candle_type, list->symbol_id, list->row_page_count,
+		list->candle_idx, list->symbol_id, list->row_page_count,
 		list->trc->batch_candle_count);
 	uint64_t first_key;
 
@@ -456,7 +453,8 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	struct trcache_trade_data *trade)
 {
 	struct candle_chunk *chunk = list->candle_mutable_chunk;
-	const struct trcache_candle_update_ops *ops = list->update_ops;
+	const struct trcache_candle_config *config = list->config;
+	const struct trcache_candle_update_ops *ops = &config->update_ops;
 	struct atomsnap_version *row_page_version = NULL;
 	struct candle_row_page *row_page = NULL;
 	struct trcache_candle_base *candle = NULL;
@@ -483,7 +481,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		chunk->mutable_page_idx);
 	row_page = (struct candle_row_page *)row_page_version->object;
 	candle = (struct trcache_candle_base *)(row_page->data +
-		(chunk->mutable_row_idx * chunk->trc->user_candle_size));
+		(chunk->mutable_row_idx * config->user_candle_size));
 
 	/* 
 	 * Attempt to update the current candle. The update callback returns
@@ -688,6 +686,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	struct atomsnap_version *head_snap, *new_snap;
 	struct candle_chunk_list_head_version *head_version, *new_ver;
 	struct candle_chunk *chunk, *last_chunk = NULL;
+	const struct trcache_batch_flush_ops *flush_ops
+		= &list->config->flush_ops;
 
 	if (flush_batch_count <= 0) {
 		return;
@@ -714,7 +714,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 
 		flush_start_count += 1;
 
-		if (candle_chunk_flush(chunk, list->flush_ops) == 1) {
+		if (candle_chunk_flush(chunk, flush_ops) == 1) {
 			flush_done_count += 1;
 		}
 
@@ -732,7 +732,7 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	while (flush_done_count < flush_batch_count) {
 		chunk = head_version->head_node;
 		do {
-			if (candle_chunk_flush_poll(chunk, list->flush_ops) == 1) {
+			if (candle_chunk_flush_poll(chunk, flush_ops) == 1) {
 				flush_done_count += 1;
 			}
 			chunk = chunk->next;

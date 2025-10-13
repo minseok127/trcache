@@ -141,8 +141,6 @@ static void trcache_per_thread_destructor(void *value)
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
 	struct trcache *tc = calloc(1, sizeof(struct trcache));
-	struct trcache_field_def *defs_copy;
-	size_t defs_size;
 	int ret;
 
 	if (tc == NULL) {
@@ -168,20 +166,55 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-		if (ctx->num_candle_types[i] > MAX_CANDLE_TYPES_PER_BASE) {
-			errmsg(stderr, "Too many candle types for base %d. MAX is %d\n",
-				i, MAX_CANDLE_TYPES_PER_BASE);
+	if (ctx->num_candle_configs > MAX_CANDLE_TYPES) {
+		errmsg(stderr, "Too many candle configs. MAX is %d\n",
+			MAX_CANDLE_TYPES);
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
+
+	tc->num_candle_configs = ctx->num_candle_configs;
+	if (ctx->candle_configs && tc->num_candle_configs > 0) {
+		size_t configs_size
+			= sizeof(trcache_candle_config) * tc->num_candle_configs;
+		tc->candle_configs = malloc(configs_size);
+		if (tc->candle_configs == NULL) {
+			errmsg(stderr, "Failed to allocate memory for candle configs\n");
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
 			return NULL;
 		}
+		memcpy(tc->candle_configs, ctx->candle_configs, configs_size);
 
-		tc->num_candle_types[i] = ctx->num_candle_types[i];
-		if (ctx->candle_types[i] && tc->num_candle_types[i] > 0) {
-			memcpy(tc->candle_configs[i], ctx->candle_types[i],
-				sizeof(trcache_candle_config) * tc->num_candle_types[i]);
+		for (int i = 0; i < tc->num_candle_configs; i++) {
+			struct trcache_candle_config *config = &tc->candle_configs[i];
+
+			if (config->num_fields > 0 && config->field_definitions != NULL) {
+				size_t defs_size
+					= sizeof(struct trcache_field_def) * config->num_fields;
+				struct trcache_field_def *defs_copy = malloc(defs_size);
+
+				if (defs_copy == NULL) {
+					errmsg(stderr, "Failed to allocate memory for field def\n");
+
+					for (int j = 0; j < i; j++) {
+						free((void *)tc->candle_configs[j].field_definitions);
+					}
+
+					free(tc->candle_configs);
+					symbol_table_destroy(tc->symbol_table);
+					pthread_key_delete(tc->pthread_trcache_key);
+					free(tc);
+					return NULL;
+				}
+
+				memcpy(defs_copy, config->field_definitions, defs_size);
+
+				config->field_definitions = defs_copy;
+			}
 		}
 	}
 
@@ -192,39 +225,16 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
 
-	/* Copy user-defined structure metadata */
-	if (ctx->user_candle_size == 0 || ctx->field_definitions == NULL ||
-		ctx->num_fields <= 0) {
-		errmsg(stderr,
-			"User-defined candle metadata is missing or invalid\n");
-		symbol_table_destroy(tc->symbol_table);
-		pthread_key_delete(tc->pthread_trcache_key);
-		free(tc);
-		return NULL;
-	}
-	tc->user_candle_size = ctx->user_candle_size;
-
-	/* Create a deep copy of the field definitions */
-	defs_size = sizeof(struct trcache_field_def) * tc->num_fields;
-	defs_copy = malloc(defs_size);
-	if (defs_copy == NULL) {
-		errmsg(stderr,
-			"Failed to allocate memory for field definitions copy\n");
-		symbol_table_destroy(tc->symbol_table);
-		pthread_key_delete(tc->pthread_trcache_key);
-		free(tc);
-		return NULL;
-	}
-	memcpy(defs_copy, ctx->field_definitions, defs_size);
-	tc->field_definitions = defs_copy;
-
 	pthread_mutex_init(&tc->tls_id_mutex, NULL);
 
 	tc->sched_msg_free_list = scq_init(&tc->mem_acc);
 	if (tc->sched_msg_free_list == NULL) {
 		errmsg(stderr, "sched_msg_free_list allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		free((void *)tc->field_definitions);
+		for(int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -235,7 +245,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		errmsg(stderr, "admin_state_init failed\n");
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		free((void *)tc->field_definitions);
+		for(int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -246,7 +259,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		free((void *)tc->field_definitions);
+		for(int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -262,7 +278,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			free(tc->worker_state_arr);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
-			free((void *)tc->field_definitions);
+			for(int j = 0; j < tc->num_candle_configs; j++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -284,7 +303,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		free((void *)tc->field_definitions);
+		for(int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -314,7 +336,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			admin_state_destroy(&tc->admin_state);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
-			free((void *)tc->field_definitions);
+			for(int j = 0; j < tc->num_candle_configs; j++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -334,7 +359,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		free((void *)tc->field_definitions);
+		for(int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -389,7 +417,7 @@ void trcache_destroy(struct trcache *tc)
 	free(tc->worker_state_arr);
 	free(tc->worker_threads);
 	free(tc->worker_args);
-	free((void *)tc->field_definitions);
+	free(tc->candle_configs);
 
 	free(tc);
 }
@@ -517,7 +545,7 @@ int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
  * @brief   Obtain candle chunk list for given symbol and type.
  */
 static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
-	int symbol_id, trcache_candle_type type)
+	int symbol_id, int candle_idx)
 {
 	struct symbol_entry *entry;
 
@@ -527,139 +555,12 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 		return NULL;
 	}
 
-	if (type.base_type < 0 || type.base_type >= NUM_CANDLE_BASES ||
-	    type.type_idx < 0 ||
-		type.type_idx >= tc->num_candle_types[type.base_type]) {
-		errmsg(stderr, "Invalid candle type (base=%d, idx=%d)\n",
-			type.base_type, type.type_idx);
+	if (candle_idx < 0 || candle_idx >= tc->num_candle_configs) {
+		errmsg(stderr, "Invalid candle_idx: %d\n", candle_idx);
 		return NULL;
 	}
 
-	return entry->candle_chunk_list_ptrs[type.base_type][type.type_idx];
-}
-
-/*
- * @brief   Determine whether a time‑based candle of a given index is near
- *          completion.
- *
- * A time‑based candle is considered "near completion" when the remaining
- * time in its interval is less than or equal to the admin thread period.
- * In such a state, applying buffered trades early helps ensure that
- * readers observe a fully updated candle immediately after the interval
- * rolls over.
- *
- * @param   idx:      Zero‑based index into the time‑based candle array.
- * @param   type_idx: Candle type index in the CANDLE_TIME_BASE.
- * @param   admin_ts: Current admin timestamp in milliseconds.
- *
- * @return  true if the candle is in its final admin period, otherwise false.
- */
-static inline bool time_candle_should_apply(struct trcache* tc, int type_idx,
-	uint64_t admin_ts)
-{
-	uint64_t interval
-		= tc->candle_configs[CANDLE_TIME_BASE][type_idx].threshold.interval_ms;
-	uint64_t remainder = admin_ts % interval;
-	uint64_t time_left = interval - remainder;
-	return time_left <= ADMIN_THREAD_PERIOD_MS;
-}
-
-/*
- * @brief   Determine whether a tick‑based candle of a given index is closed by
- *          this trade.
- *
- * For tick‑based candles, each candle contains a fixed number of trades
- * (the interval). When a trade arrives whose trade_id modulo the
- * interval equals interval − 1, that trade is the last trade of the
- * candle. Applying buffered trades at this point ensures the candle
- * reflects all trades before it is read.
- *
- * @param   idx:      Zero‑based index into the tick‑based candle array.
- * @param   type_idx: Candle type index in the CANDLE_TICK_BASE.
- * @param   trade_id: Identifier of the incoming trade.
- *
- * @return  true if this trade is the last trade in the candle, otherwise false.
- */
-static inline bool tick_candle_should_apply(struct trcache* tc, int type_idx,
-	uint64_t trade_id)
-{
-	uint32_t interval_tick
-		= tc->candle_configs[CANDLE_TICK_BASE][type_idx].threshold.num_ticks;
-	return (trade_id % (uint64_t)interval_tick)
-		== (uint64_t)(interval_tick - 1);
-}
-
-/*
- * @brief   Opportunistically apply buffered trades for a given symbol.
- *
- * This helper encapsulates the logic for determining when to apply
- * buffered trades based on candle completion proximity. It examines
- * each candle type enabled in the cache, decides whether the incoming
- * trade implies closure of that candle (tick‑based) or whether the
- * current time is within the final admin period before a time‑based
- * candle rolls over, and applies the trades when appropriate.
- *
- * @param   tc:        Cache instance containing candle configuration.
- * @param   buf:       Trade data buffer associated with @symbol_id.
- * @param   symbol_id: Symbol identifier to look up candle lists.
- * @param   data:      Incoming trade.  Its trade_id is used to detect
- *                     tick‑based candle completion.
- */
-static void maybe_apply_trades(struct trcache *tc,
-	struct trade_data_buffer *buf, int symbol_id,
-	struct trcache_trade_data *data)
-{
-	uint64_t admin_ts = atomic_load_explicit(&g_admin_current_ts_ms,
-		memory_order_acquire);
-	struct trade_data_buffer_cursor *cur;
-	struct candle_chunk_list *list;
-	struct trcache_trade_data *array;
-	trcache_candle_type type;
-	int count;
-
-	/* Iterate over time-based candles */
-	for (int i = 0; i < tc->num_candle_types[CANDLE_TIME_BASE]; i++) {
-		if (time_candle_should_apply(tc, i, admin_ts)) {
-			type.base_type = CANDLE_TIME_BASE;
-			type.type_idx = i;
-			cur = trade_data_buffer_acquire_cursor(buf, type);
-			if (cur == NULL) {
-				continue;
-			}
-
-			list = get_chunk_list(tc, symbol_id, type);
-			while (trade_data_buffer_peek(buf, cur, &array, &count)
-					&& count > 0) {
-				for (int j = 0; j < count; j++) {
-					candle_chunk_list_apply_trade(list, &array[j]);
-				}
-				trade_data_buffer_consume(buf, cur, count);
-			}
-			trade_data_buffer_release_cursor(cur);
-		}
-	}
-
-	/* Iterate over tick-based candles */
-	for (int i = 0; i < tc->num_candle_types[CANDLE_TICK_BASE]; ++i) {
-		if (tick_candle_should_apply(tc, i, data->trade_id)) {
-			type.base_type = CANDLE_TICK_BASE;
-			type.type_idx = i;
-			cur = trade_data_buffer_acquire_cursor(buf, type);
-			if (cur == NULL) {
-				continue;
-			}
-
-			list = get_chunk_list(tc, symbol_id, type);
-			while (trade_data_buffer_peek(buf, cur, &array, &count)
-					&& count > 0) {
-				for (int j = 0; j < count; j++) {
-					candle_chunk_list_apply_trade(list, &array[j]);
-				}
-				trade_data_buffer_consume(buf, cur, count);
-			}
-			trade_data_buffer_release_cursor(cur);
-		}
-	}
+	return entry->candle_chunk_list_ptrs[candle_idx];
 }
 
 /**
@@ -738,11 +639,6 @@ int trcache_feed_trade_data(struct trcache *tc,
 		return -1;
 	}
 
-	/* 
-	 * Opportunistically apply buffered trades for this symbol.
-	 */
-	maybe_apply_trades(tc, trd_databuf, symbol_id, data);
-
 	return 0;
 }
 
@@ -751,7 +647,7 @@ int trcache_feed_trade_data(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query.
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
@@ -760,18 +656,17 @@ int trcache_feed_trade_data(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
-	int symbol_id, trcache_candle_type type,
-	const struct trcache_field_request *request, uint64_t key, int count,
-	struct trcache_candle_batch *dst)
+	int symbol_id, int candle_idx, const struct trcache_field_request *request,
+	uint64_t key, int count, struct trcache_candle_batch *dst)
 {
-	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, candle_idx);
 
 	if (list == NULL) {
 		return -1;
 	}
 
 	dst->symbol_id = symbol_id;
-	dst->candle_type = type;
+	dst->candle_idx = candle_idx;
 
 	return candle_chunk_list_copy_backward_by_key(list, key, count, 
 		dst, request);
@@ -783,7 +678,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query.
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
@@ -792,7 +687,7 @@ int trcache_get_candles_by_symbol_id_and_key(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
-	const char *symbol_str, trcache_candle_type type,
+	const char *symbol_str, int candle_idx,
 	const struct trcache_field_request *request, uint64_t key, int count,
 	struct trcache_candle_batch *dst)
 {
@@ -809,7 +704,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_and_key(tc, symbol_id, type, 
+	return trcache_get_candles_by_symbol_id_and_key(tc, symbol_id, candle_idx, 
 		request, key, count, dst);
 }
 
@@ -819,7 +714,7 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query.
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
@@ -828,11 +723,10 @@ int trcache_get_candles_by_symbol_str_and_key(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
-	int symbol_id, trcache_candle_type type,
-	const struct trcache_field_request *request, int offset, int count,
-	struct trcache_candle_batch *dst)
+	int symbol_id, int candle_idx, const struct trcache_field_request *request,
+	int offset, int count, struct trcache_candle_batch *dst)
 {
-	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, type);
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, candle_idx);
 	uint64_t seq_end;
 
 	if (list == NULL) {
@@ -843,7 +737,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
 	seq_end -= offset;
 
 	dst->symbol_id = symbol_id;
-	dst->candle_type = type;
+	dst->candle_idx = candle_idx;
 
 	return candle_chunk_list_copy_backward_by_seq(list, seq_end, count, 
 		dst, request);
@@ -855,7 +749,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  *
  * @param   tc:         Pointer to trcache instance.
  * @param   symbol_str: NULL-terminated symbol string.
- * @param   type:       Candle type to query.
+ * @param   candle_idx: Candle type to query.
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
  * @param   offset:     Offset from the most recent candle (0 == most recent).
  * @param   count:      Number of candles to copy.
@@ -864,7 +758,7 @@ int trcache_get_candles_by_symbol_id_and_offset(struct trcache *tc,
  * @return  0 on success, -1 on failure.
  */
 int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
-	const char *symbol_str, trcache_candle_type type,
+	const char *symbol_str, int candle_idx,
 	const struct trcache_field_request *request, int offset, int count,
 	struct trcache_candle_batch *dst)
 {
@@ -881,8 +775,8 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id, type,
-		request, offset, count, dst);
+	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id,
+		candle_idx, request, offset, count, dst);
 }
 
 /**
@@ -909,25 +803,27 @@ void trcache_print_worker_distribution(struct trcache *tc)
 
 	{
 		double hz = tsc_cycles_per_sec();
+
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 			uint64_t cycles = 0, count = 0;
+
 			for (int w = 0; w < tc->num_workers; w++) {
 				struct worker_stat_board *b = &tc->worker_state_arr[w].stat;
-				for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
-					for (int j = 0; j < tc->num_candle_types[i]; ++j) {
-						if (s == WORKER_STAT_STAGE_APPLY) {
-							cycles += b->apply_stat[i][j].cycles;
-							count  += b->apply_stat[i][j].work_count;
-						} else if (s == WORKER_STAT_STAGE_CONVERT) {
-							cycles += b->convert_stat[i][j].cycles;
-							count  += b->convert_stat[i][j].work_count;
-						} else {
-							cycles += b->flush_stat[i][j].cycles;
-							count  += b->flush_stat[i][j].work_count;
-						}
+
+				for (int i = 0; i < tc->num_candle_configs; i++) {
+					if (s == WORKER_STAT_STAGE_APPLY) {
+						cycles += b->apply_stat[i].cycles;
+						count  += b->apply_stat[i].work_count;
+					} else if (s == WORKER_STAT_STAGE_CONVERT) {
+						cycles += b->convert_stat[i].cycles;
+						count  += b->convert_stat[i].work_count;
+					} else {
+						cycles += b->flush_stat[i].cycles;
+						count  += b->flush_stat[i].work_count;
 					}
 				}
 			}
+
 			speed[s] = (cycles != 0) ? ((double)count * hz / (double)cycles) : 0.0;
 		}
 	}
@@ -945,15 +841,17 @@ void trcache_print_worker_distribution(struct trcache *tc)
 
 		for (int i = 0; i < num; i++) {
 			struct symbol_entry *e = arr[i];
-			for (int j = 0; j < NUM_CANDLE_BASES; ++j) {
-				for (int k = 0; k < tc->num_candle_types[j]; ++k) {
-					struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[j][k];
-					demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
-					demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-					demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
-				}
+
+			for (int j = 0; j < tc->num_candle_configs; j++) {
+				struct sched_stage_rate *r
+					= &e->pipeline_stats.stage_rates[j];
+
+				demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
+				demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
+				demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
 			}
 		}
+
 		atomsnap_release_version(ver);
 	}
 
@@ -1055,25 +953,27 @@ int trcache_get_worker_distribution(struct trcache *cache,
 
 	{
 		double hz = tsc_cycles_per_sec();
+
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 			uint64_t cycles = 0, count = 0;
+
 			for (int w = 0; w < cache->num_workers; w++) {
 				struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-				for (int i = 0; i < NUM_CANDLE_BASES; ++i) {
-					for (int j = 0; j < cache->num_candle_types[i]; ++j) {
-						if (s == WORKER_STAT_STAGE_APPLY) {
-							cycles += b->apply_stat[i][j].cycles;
-							count += b->apply_stat[i][j].work_count;
-						} else if (s == WORKER_STAT_STAGE_CONVERT) {
-							cycles += b->convert_stat[i][j].cycles;
-							count += b->convert_stat[i][j].work_count;
-						} else {
-							cycles += b->flush_stat[i][j].cycles;
-							count += b->flush_stat[i][j].work_count;
-						}
+
+				for (int i = 0; i < cache->num_candle_configs; i++) {
+					if (s == WORKER_STAT_STAGE_APPLY) {
+						cycles += b->apply_stat[i].cycles;
+						count += b->apply_stat[i].work_count;
+					} else if (s == WORKER_STAT_STAGE_CONVERT) {
+						cycles += b->convert_stat[i].cycles;
+						count += b->convert_stat[i].work_count;
+					} else {
+						cycles += b->flush_stat[i].cycles;
+						count += b->flush_stat[i].work_count;
 					}
 				}
 			}
+
 			stats->stage_speeds[s] = (cycles != 0) ?
 				((double)count * hz / (double)cycles) : 0.0;
 		}
@@ -1092,19 +992,20 @@ int trcache_get_worker_distribution(struct trcache *cache,
 
 		for (int i = 0; i < num; i++) {
 			struct symbol_entry *e = arr[i];
-			for (int j = 0; j < NUM_CANDLE_BASES; ++j) {
-				for (int k = 0; k < cache->num_candle_types[j]; ++k) {
-					struct sched_stage_rate *r
-						= &e->pipeline_stats.stage_rates[j][k];
-					stats->pipeline_demand[WORKER_STAT_STAGE_APPLY]
-						+= (double)r->produced_rate;
-					stats->pipeline_demand[WORKER_STAT_STAGE_CONVERT]
-						+= (double)r->completed_rate;
-					stats->pipeline_demand[WORKER_STAT_STAGE_FLUSH]
-						+= (double)r->converted_rate;
-				}
+
+			for (int j = 0; j < cache->num_candle_configs; j++) {
+				struct sched_stage_rate *r
+					= &e->pipeline_stats.stage_rates[j];
+
+				stats->pipeline_demand[WORKER_STAT_STAGE_APPLY]
+					+= (double)r->produced_rate;
+				stats->pipeline_demand[WORKER_STAT_STAGE_CONVERT]
+					+= (double)r->completed_rate;
+				stats->pipeline_demand[WORKER_STAT_STAGE_FLUSH]
+					+= (double)r->converted_rate;
 			}
 		}
+
 		atomsnap_release_version(ver);
 	}
 

@@ -42,21 +42,15 @@ struct trcache_tls_data {
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
  * @tls_data_ptr_arr:        Pointers to each thread’s tls_data.
  * @symbol_table:            Abstracted symbol table.
- * @candle_configs:          Candle configurations.
- * @num_candle_types:        Number of candle types for each base.
+ * @candle_configs:          Array of all candle configurations.
+ * @num_candle_configs:      Total number of candle configurations.
  * @num_workers:             Number of worker threads.
  * @batch_candle_count:      Number of candles per column batch.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
  * @flush_threshold:         How many candle batches to buffer before flush.
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
- * @user_candle_size:        The total size of the user-defined candle
- *                           structure.
- * @field_definitions:       An array describing each field in the custom
- *                           candle.
- * @num_fields:              The number of entries in the field_definitions
- *                           array.
  * @worker_state_arr:        Per-worker state array of length @num_workers.
- * @stage_ct_mask:           Candle-type ownership mask per stage/worker/base.
+ * @stage_ct_mask:           Candle-type ownership mask per stage/worker.
  * @admin_state:             State structure for admin thread.
  * @sched_msg_free_list:     Free list for scheduler message objects.
  * @admin_thread:            Handle for admin thread.
@@ -70,18 +64,15 @@ struct trcache {
 	_Atomic int tls_id_assigned_flag[MAX_NUM_THREADS];
 	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 	struct symbol_table *symbol_table;
-	trcache_candle_config candle_configs[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
-	int num_candle_types[NUM_CANDLE_BASES];
+	struct trcache_candle_config *candle_configs;
+	int num_candle_configs;
 	int num_workers;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
 	int flush_threshold;
 	int flush_threshold_pow2;
-	size_t user_candle_size;
-	const struct trcache_field_def *field_definitions;
-	int num_fields;
 	struct worker_state *worker_state_arr;
-	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS][NUM_CANDLE_BASES];
+	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS];
 	struct admin_state admin_state;
 	sched_work_msg_free_list *sched_msg_free_list;
 	pthread_t admin_thread;

@@ -18,13 +18,13 @@ typedef enum sched_msg_type {
  * sched_work_cmd - Work descriptor for scheduler messages.
  *
  * @symbol_id:   Identifier of the target symbol.
+ * @candle_idx:  Candle type index for apply/convert/flush.
  * @stage:       Pipeline stage to execute.
- * @candle_type: Candle type parameter for apply/convert/flush.
  */
 struct sched_work_cmd {
 	int symbol_id;
+	int candle_idx;
 	worker_stat_stage_type stage;
-	trcache_candle_type candle_type;
 };
 
 /*

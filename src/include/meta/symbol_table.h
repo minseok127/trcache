@@ -24,10 +24,10 @@
  * @id:                       Symbol ID.
  */
 struct symbol_entry {
-	struct candle_chunk_list *candle_chunk_list_ptrs[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct candle_chunk_list *candle_chunk_list_ptrs[MAX_CANDLE_TYPES];
 	struct trade_data_buffer *trd_buf;
 	struct sched_pipeline_stats pipeline_stats;
-	_Atomic int in_progress[WORKER_STAT_STAGE_NUM][NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	_Atomic int in_progress[WORKER_STAT_STAGE_NUM][MAX_CANDLE_TYPES];
 	char *symbol_str;
 	int id;
 };

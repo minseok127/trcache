@@ -83,7 +83,7 @@ struct trade_data_buffer_cursor {
 struct trade_data_buffer {
 	struct list_head chunk_list;
 	uint64_t produced_count;
-	struct trade_data_buffer_cursor cursor_arr[NUM_CANDLE_BASES][MAX_CANDLE_TYPES_PER_BASE];
+	struct trade_data_buffer_cursor cursor_arr[MAX_CANDLE_TYPES];
 	int num_cursor;
 	int next_tail_write_idx;
 	struct memory_accounting *mem_acc;
@@ -92,16 +92,15 @@ struct trade_data_buffer {
 /**
  * @brief   Obtain a cursor positioned at the given type.
  *
- * @param   buf:          Pointer to the #trade_data_buffer holding cursor.
- * @param   candle_type:  Desired candle type.
+ * @param   buf:         Pointer to the #trade_data_buffer holding cursor.
+ * @param   candle_idx:  Desired candle type index.
  *
  * @return  Pointer of the #trade_data_buffer_cursor when it is free.
  */
 static inline struct trade_data_buffer_cursor *trade_data_buffer_acquire_cursor(
-	struct trade_data_buffer *buf, trcache_candle_type candle_type)
+	struct trade_data_buffer *buf, int candle_idx)
 {
-	struct trade_data_buffer_cursor *cur
-		= &buf->cursor_arr[candle_type.base_type][candle_type.type_idx];
+	struct trade_data_buffer_cursor *cur = &buf->cursor_arr[candle_idx];
 	int expected = 0;
 
 	if (atomic_load_explicit(&cur->in_use, memory_order_acquire) != 0) {

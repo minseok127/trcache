@@ -30,7 +30,6 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
 	struct trade_data_buffer_cursor *c = NULL;
-	int num_cursor = 0;
 
 	if (tc == NULL) {
 		errmsg(stderr, "Invalid argument\n");
@@ -69,21 +68,18 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 	list_add_tail(&chunk->list_node, &buf->chunk_list);
 
 	/* Init cursors */
-	for (int i = 0; i < NUM_CANDLE_BASES; i++) {
-		for (int j = 0; j < tc->num_candle_types[i]; j++) {
-			c = &buf->cursor_arr[i][j];
-			c->consume_chunk = chunk;
-			c->consume_count = 0;
-			c->peek_chunk = chunk;
-			c->peek_idx = 0;
-			atomic_store_explicit(&c->in_use, 0, memory_order_release);
-			num_cursor++;
-		}
+	for (int i = 0; i < tc->num_candle_configs; i++) {
+		c = &buf->cursor_arr[i];
+		c->consume_chunk = chunk;
+		c->consume_count = 0;
+		c->peek_chunk = chunk;
+		c->peek_idx = 0;
+		atomic_store_explicit(&c->in_use, 0, memory_order_release);
 	}
 
 	buf->produced_count = 0;
 	buf->next_tail_write_idx = 0;
-	buf->num_cursor = num_cursor;
+	buf->num_cursor = tc->num_candle_configs;
 
 	return buf;
 }

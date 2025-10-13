@@ -210,7 +210,7 @@ static inline void candle_chunk_write_key(
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   trc:                Pointer to the main trcache instance.
- * @param   candle_type:        Candle type of the column-batch.
+ * @param   candle_idx:         Candle type index of the column-batch.
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
@@ -218,7 +218,7 @@ static inline void candle_chunk_write_key(
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(struct trcache *trc,
-	trcache_candle_type candle_type, int symbol_id,
+	int candle_idx, int symbol_id,
 	int row_page_count, int batch_candle_count);
 
 /**

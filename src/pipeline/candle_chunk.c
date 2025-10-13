@@ -25,7 +25,7 @@ static size_t align_up(size_t x, size_t a)
 /**
  * @brief   Allocate an atomsnap_version and its owned candle row page.
  *
- * @param   arg: A pointer to the main trcache instance.
+ * @param   arg: A pointer to the parent #candle_chunk struct.
  *
  * The returned version already contains a zero‑initialized, 64‑byte‑aligned
  * row page in its @object field.
@@ -34,12 +34,15 @@ static size_t align_up(size_t x, size_t a)
  */
 static struct atomsnap_version *row_page_version_alloc(void *arg)
 {
-	struct trcache *trc = (struct trcache *)arg;
+	struct candle_chunk *chunk = (struct candle_chunk *)arg;
+	struct trcache *trc = chunk->trc;
+	int candle_idx = chunk->column_batch->candle_idx;
 	struct memory_accounting *mem_acc = &trc->mem_acc;
 	struct atomsnap_version *version  = NULL;
 	struct candle_row_page *row_page = NULL;
 	size_t page_size = sizeof(struct candle_row_page) +
-		(TRCACHE_ROWS_PER_PAGE * trc->user_candle_size);
+		(TRCACHE_ROWS_PER_PAGE *
+			trc->candle_configs[candle_idx].user_candle_size);
 
 #if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
 	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, page_size);
@@ -82,18 +85,23 @@ static struct atomsnap_version *row_page_version_alloc(void *arg)
  */
 static void row_page_version_free(struct atomsnap_version *version)
 {
+	struct candle_chunk *chunk;
 	struct trcache *trc;
 	struct memory_accounting *mem_acc;
 	size_t page_size;
+	int candle_idx;
 
 	if (version == NULL) {
 		return;
 	}
 
-	trc = (struct trcache *)version->free_context;
+	chunk = (struct candle_chunk *)version->free_context;
+	trc = chunk->trc;
+	candle_idx = chunk->column_batch->candle_idx;
 	mem_acc = &trc->mem_acc;
 	page_size = sizeof(struct candle_row_page) +
-		(TRCACHE_ROWS_PER_PAGE * trc->user_candle_size);
+		(TRCACHE_ROWS_PER_PAGE *
+			trc->candle_configs[candle_idx].user_candle_size);
 
 	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
 		sizeof(struct atomsnap_version) + page_size);
@@ -106,9 +114,11 @@ static void row_page_version_free(struct atomsnap_version *version)
  * Helper function for memory accounting.
  */
 static size_t calculate_batch_total_size(struct trcache *trc,
-	const struct trcache_candle_batch *batch)
+	int candle_idx, const struct trcache_candle_batch *batch)
 {
 	size_t total_size = 0;
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_idx];
 
 	if (batch == NULL) {
 		return 0;
@@ -117,7 +127,7 @@ static size_t calculate_batch_total_size(struct trcache *trc,
 	total_size = align_up(sizeof(struct trcache_candle_batch),
 		TRCACHE_SIMD_ALIGN);
 	total_size = align_up(
-		total_size + sizeof(void *) * trc->num_fields,
+		total_size + sizeof(void *) * config->num_fields,
 		TRCACHE_SIMD_ALIGN);
 	total_size = align_up(
 		total_size + (size_t)batch->capacity * sizeof(uint64_t),
@@ -126,10 +136,10 @@ static size_t calculate_batch_total_size(struct trcache *trc,
 		total_size + (size_t)batch->capacity * sizeof(bool),
 		TRCACHE_SIMD_ALIGN); // is_closed_array
 
-	for (int i = 0; i < trc->num_fields; i++) {
+	for (int i = 0; i < config->num_fields; i++) {
 		if (batch->column_arrays[i]) {
 			total_size = align_up(total_size + 
-				(size_t)batch->capacity * trc->field_definitions[i].size,
+				(size_t)batch->capacity * config->field_definitions[i].size,
 				TRCACHE_SIMD_ALIGN);
 		}
 	}
@@ -141,7 +151,7 @@ static size_t calculate_batch_total_size(struct trcache *trc,
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   trc:                Pointer to the main trcache instance.
- * @param   candle_type:        Candle type of the column-batch.
+ * @param   candle_idx:         Candle type index of the column-batch.
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
@@ -149,7 +159,7 @@ static size_t calculate_batch_total_size(struct trcache *trc,
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(struct trcache *trc,
-	trcache_candle_type candle_type, int symbol_id,
+	int candle_idx, int symbol_id,
 	int row_page_count, int batch_candle_count)
 {
 	struct memory_accounting *mem_acc = &trc->mem_acc;
@@ -181,7 +191,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 		return NULL;
 	}
 
-	chunk->column_batch = trcache_batch_alloc_on_heap(trc,
+	chunk->column_batch = trcache_batch_alloc_on_heap(trc, candle_idx,
 		batch_candle_count, NULL);
 	if (chunk->column_batch == NULL) {
 		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
@@ -191,15 +201,16 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 		return NULL;
 	}
 
+	chunk->trc = trc;
+	chunk->column_batch->symbol_id = symbol_id;
+	chunk->column_batch->candle_idx = candle_idx;
+
 	/* Calculate batch size for memstat */
-	batch_total_size = calculate_batch_total_size(trc, chunk->column_batch);
+	batch_total_size = calculate_batch_total_size(trc,
+		candle_idx, chunk->column_batch);
 
 	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
 		sizeof(struct candle_chunk) + batch_total_size);
-	chunk->trc = trc;
-
-	chunk->column_batch->symbol_id = symbol_id;
-	chunk->column_batch->candle_type = candle_type;
 
 	chunk->mutable_page_idx = -1;
 	chunk->mutable_row_idx = -1;
@@ -234,7 +245,7 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 	}
 
 	batch_total_size = calculate_batch_total_size(chunk->trc,
-		chunk->column_batch);
+		chunk->column_batch->candle_idx, chunk->column_batch);
 
 	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
 		sizeof(struct candle_chunk) + batch_total_size);
@@ -263,7 +274,7 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version
-		= atomsnap_make_version(chunk->row_gate, (void *)chunk->trc);
+		= atomsnap_make_version(chunk->row_gate, (void *)chunk);
 	struct trcache_candle_base *first_candle;
 
 	if (row_page_version == NULL) {
@@ -295,8 +306,11 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
  *          copying all user-defined fields.
  */
 static inline void copy_row_to_batch_all(const trcache_candle_base *candle,
-	struct trcache_candle_batch *dst, int dst_idx, struct trcache *trc)
+	struct trcache_candle_batch *dst, int dst_idx, struct trcache *trc,
+	int candle_type_idx)
 {
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_type_idx];
 	void *dst_col, *src_field, *dst_field;
 	const struct trcache_field_def *field;
 
@@ -305,10 +319,10 @@ static inline void copy_row_to_batch_all(const trcache_candle_base *candle,
 	dst->is_closed_array[dst_idx] = candle->is_closed;
 
 	/* Copy all user fields */
-	for (int i = 0; i < trc->num_fields; i++) {
+	for (int i = 0; i < config->num_fields; i++) {
 		dst_col = dst->column_arrays[i];
 		if (dst_col != NULL) {
-			field = &trc->field_definitions[i];
+			field = &config->field_definitions[i];
 			src_field = (char *)candle + field->offset;
 			dst_field = (char *)dst_col + (dst_idx * field->size);
 			memcpy(dst_field, src_field, field->size);
@@ -322,8 +336,11 @@ static inline void copy_row_to_batch_all(const trcache_candle_base *candle,
  */
 static inline void copy_row_to_batch_selective(
 	const trcache_candle_base *candle, struct trcache_candle_batch *dst,
-	int dst_idx, const trcache_field_request *request, struct trcache *trc)
+	int dst_idx, const trcache_field_request *request, struct trcache *trc,
+	int candle_type_idx)
 {
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_type_idx];
 	void *dst_col, *src_field, *dst_field;
 	const struct trcache_field_def *field;
 	int field_idx;
@@ -337,13 +354,13 @@ static inline void copy_row_to_batch_selective(
 	/* Copy requested user fields */
 	for (int i = 0; i < request->num_fields; i++) {
 		field_idx = request->field_indices[i];
-		if (field_idx < 0 || field_idx >= trc->num_fields) {
+		if (field_idx < 0 || field_idx >= config->num_fields) {
 			continue;
 		}
 
 		dst_col = dst->column_arrays[field_idx];
 		if (dst_col) {
-			field = &trc->field_definitions[field_idx];
+			field = &config->field_definitions[field_idx];
 			src_field = (char *)candle + field->offset;
 			dst_field = (char *)dst_col + (dst_idx * field->size);
 			memcpy(dst_field, src_field, field->size);
@@ -363,6 +380,9 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 {
 	struct trcache_candle_batch *batch = chunk->column_batch;
 	struct trcache *trc = chunk->trc;
+	int candle_type_idx = batch->candle_idx;
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_type_idx];
 	int cur_page_idx = chunk->converting_page_idx;
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
@@ -389,11 +409,11 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 		}
 
 		char *src_candle_base = page->data +
-			(candle_chunk_calc_row_idx(idx) * trc->user_candle_size);
+			(candle_chunk_calc_row_idx(idx) * config->user_candle_size);
 		struct trcache_candle_base *c
 			= (struct trcache_candle_base *)src_candle_base;
 
-		copy_row_to_batch_all(c, batch, idx, trc);
+		copy_row_to_batch_all(c, batch, idx, trc, candle_type_idx);
 	}
 
 	atomsnap_release_version(page_version);
@@ -504,6 +524,9 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	const struct trcache_field_request *request)
 {
 	struct trcache *trc = chunk->trc;
+	int candle_type_idx = chunk->column_batch->candle_idx;
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_type_idx];	
 	int page_idx = candle_chunk_calc_page_idx(idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, page_idx);
@@ -519,11 +542,12 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 	row_page = (struct candle_row_page *)page_version->object;
 	row_idx = candle_chunk_calc_row_idx(idx);
 
-	src_candle_base = row_page->data + (row_idx * trc->user_candle_size);
+	src_candle_base = row_page->data + (row_idx * config->user_candle_size);
 	candle = (struct trcache_candle_base *)src_candle_base;
 
 	pthread_spin_lock(&chunk->spinlock);
-	copy_row_to_batch_selective(candle, dst, dst_idx, request, chunk->trc);
+	copy_row_to_batch_selective(candle, dst, dst_idx, request,
+		chunk->trc, candle_type_idx);
 	pthread_spin_unlock(&chunk->spinlock);
 
 	atomsnap_release_version(page_version);
@@ -552,6 +576,9 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 	const struct trcache_field_request *request)
 {
 	struct trcache *trc = chunk->trc;
+	int candle_type_idx = chunk->column_batch->candle_idx;
+	const struct trcache_candle_config *config
+		= &trc->candle_configs[candle_type_idx];
 	int cur_page_idx = candle_chunk_calc_page_idx(end_idx);
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
@@ -584,10 +611,11 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 
 		row_idx = candle_chunk_calc_row_idx(idx);
 
-		src_candle_base = row_page->data + (row_idx * trc->user_candle_size);
+		src_candle_base = row_page->data + (row_idx * config->user_candle_size);
 		candle = (struct trcache_candle_base *)src_candle_base;
 
-		copy_row_to_batch_selective(candle, dst, dst_idx, request, chunk->trc);
+		copy_row_to_batch_selective(candle, dst, dst_idx, request,
+			chunk->trc, candle_type_idx);
 
 		num_copied += 1;
 		dst_idx -= 1;
@@ -618,6 +646,9 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	const struct trcache_field_request *request)
 {
 	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n, field_idx;
+	int candle_type_idx = chunk->column_batch->candle_idx;
+	const struct trcache_candle_config *config
+		= &chunk->trc->candle_configs[candle_type_idx];
 	void *dst_col, *src_col;
 	size_t field_size;
 
@@ -636,7 +667,7 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	for (int i = 0; i < request->num_fields; i++) {
 		field_idx = request->field_indices[i];
 
-		if (field_idx < 0 || field_idx >= chunk->trc->num_fields) {
+		if (field_idx < 0 || field_idx >= config->num_fields) {
 			continue;
 		}
 
@@ -644,7 +675,7 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 		src_col = chunk->column_batch->column_arrays[field_idx];
 
 		if (dst_col != NULL && src_col != NULL) {
-			field_size = chunk->trc->field_definitions[field_idx].size;
+			field_size = config->field_definitions[field_idx].size;
 			memcpy((char *)dst_col + (dst_first * field_size),
 				(char *)src_col + (start_idx * field_size),
 				n * field_size);

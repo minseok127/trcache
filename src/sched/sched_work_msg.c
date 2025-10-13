@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "sched/sched_work_msg.h"
 #include "utils/log.h"

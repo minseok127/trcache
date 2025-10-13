@@ -46,11 +46,12 @@ static size_t align_up(size_t x, size_t a)
 /**
  * @brief   Allocate a contiguous, SIMD-aligned candle batch on the heap.
  *
- * @param   tc:       Pointer to the trcache instance.
- * @param   capacity: Number of candle rows to allocate (must be > 0).
- * @param   request:  Pointer to a struct specifying which user-defined fields
- *                    to allocate. If NULL, all user-defined fields are allocated.
- *                    Base fields (key, is_closed) are always allocated.
+ * @param   tc:         Pointer to the trcache instance.
+ * @param   candle_idx: Index of the candle configuration to use for layout.
+ * @param   capacity:   Number of candle rows to allocate (must be > 0).
+ * @param   request:    Pointer to a struct specifying which fields to allocate.
+ *                      If NULL, all fields defined at init are allocated.
+ *                      Base fields are always included.
  *
  * @return  Pointer to a fully-initialised #trcache_candle_batch on success,
  *          'NULL' on allocation failure or invalid *capacity*.
@@ -58,8 +59,10 @@ static size_t align_up(size_t x, size_t a)
  * @note    The returned pointer must be released via trcache_batch_free().
  */
 struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
-	int capacity, const struct trcache_field_request *request)
+	int candle_idx, int capacity, const struct trcache_field_request *request)
 {
+	const struct trcache_candle_config *config
+		= &tc->candle_configs[candle_idx];
 	const size_t a = TRCACHE_SIMD_ALIGN;
 	struct trcache_candle_batch *b;
 	size_t total_sz, col_array_ptr_sz;
@@ -73,25 +76,26 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 		return NULL;
 	}
 
-	if (request == NULL || request->field_indices == NULL) {
-		errmsg(stderr, "Invalid argument (request == NULL)\n");
-		return NULL;
-	}
-
 	/* Determine which fields to allocate */
-	requested_fields = alloca(sizeof(bool) * tc->num_fields);
-	memset(requested_fields, 0, sizeof(bool) * tc->num_fields);
-	for (int i = 0; i < request->num_fields; i++) {
-		field_idx = request->field_indices[i];
+	requested_fields = alloca(sizeof(bool) * config->num_fields);
+
+	if (request == NULL) {
+		memset(requested_fields, 1, sizeof(bool) * config->num_fields);
+	} else {
+		memset(requested_fields, 0, sizeof(bool) * config->num_fields);
+
+		for (int i = 0; i < request->num_fields; i++) {
+			field_idx = request->field_indices[i];
 		
-		if (field_idx >= 0 && field_idx < tc->num_fields) {
-			requested_fields[field_idx] = true;
+			if (field_idx >= 0 && field_idx < config->num_fields) {
+				requested_fields[field_idx] = true;
+			}
 		}
 	}
 
 	/* Calculate total size for the single memory block */
 	total_sz = align_up(sizeof(struct trcache_candle_batch), a);
-	col_array_ptr_sz = sizeof(void *) * tc->num_fields;
+	col_array_ptr_sz = sizeof(void *) * config->num_fields;
 	total_sz = align_up(total_sz + col_array_ptr_sz, a);
 
 	/* Base fields are always allocated */
@@ -99,10 +103,10 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 	total_sz = align_up(total_sz + (size_t)capacity * sizeof(bool), a);
 
 	/* User-defined fields */
-	for (int i = 0; i < tc->num_fields; i++) {
+	for (int i = 0; i < config->num_fields; i++) {
 		if (requested_fields[i]) {
 			total_sz = align_up(total_sz +
-				(size_t)capacity * tc->field_definitions[i].size, a);
+				(size_t)capacity * config->field_definitions[i].size, a);
 		}
 	}
 
@@ -127,11 +131,11 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 	b->is_closed_array = (bool *)p;
 	p += align_up((size_t)capacity * sizeof(bool), a);
 
-	for (int i = 0; i < tc->num_fields; i++) {
+	for (int i = 0; i < config->num_fields; i++) {
 		if (requested_fields[i]) {
 			b->column_arrays[i] = (void *)p;
 			p += align_up((size_t)capacity *
-					tc->field_definitions[i].size, a);
+					config->field_definitions[i].size, a);
 		} else {
 			b->column_arrays[i] = NULL;
 		}
@@ -140,6 +144,7 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 	b->num_candles = 0;
 	b->capacity = capacity;
 	b->symbol_id = -1;
+	b->candle_idx = candle_idx;
 
 	return b;
 }
