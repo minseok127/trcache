@@ -210,7 +210,7 @@ typedef struct trcache_batch_flush_ops {
 
 - `void* flush(trcache *cache, trcache_candle_batch *batch, void *flush_ctx)`
 	- Called to initiate the persistence of a full batch.
-	- `batch`: A pointer to the column-oriented trcache_candle_batch ready to be saved.
+	- `batch`: A pointer to the column-oriented `trcache_candle_batch` ready to be saved.
 	- `flush_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
 	- Return Value:
 		- `NULL`: For a synchronous flush. The engine assumes the I/O is complete when the function returns.
