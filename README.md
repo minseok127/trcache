@@ -371,6 +371,10 @@ struct trcache_init_ctx ctx = { /* ... */ };
 struct trcache *cache = trcache_init(&ctx);
 ```
 
+Upon a successful return from `trcache_init()`, the library is fully active. One admin thread and a pool of worker threads (the number specified by `num_worker_threads`) are created and running in the background.
+
+The admin thread continuously monitors the system's workload. Based on the rate of incoming data and the processing speed of each pipeline stage, it dynamically assigns tasks to the worker threads to ensure the pipeline (Apply, Convert, Flush) remains balanced and operates at maximum efficiency.
+
 ### Step 9: Register Symbols and Feed Data
 
 Register each symbol and feed trade data. The `trcache_trade_data` struct you pass is copied into an internal buffer, so you can safely allocate it on the stack and let it go out of scope after the call.
