@@ -82,6 +82,8 @@ const struct trcache_field_def my_ohlcv_fields[] = {
 };
 ```
 
+- **Note on `trcache_field_type`**: This enum provides metadata about your fields. While it is not strictly required for the core operation of `trcache`, it is recommended for debugging purposes and for internal analytics.
+
 ### Step 3: Understanding the Input - `trcache_trade_data`
 
 The fundamental unit of data you'll provide to `trcache` is a single trade, represented by the `trcache_trade_data` struct. This is the raw information from which all your custom candles will be built.
@@ -370,7 +372,7 @@ struct trcache *cache = trcache_init(&ctx);
 
 ### Step 9: Register Symbols and Feed Data
 
-Register each symbol and feed trade data.
+Register each symbol and feed trade data. The `trcache_trade_data` struct you pass is copied into an internal buffer, so you can safely allocate it on the stack and let it go out of scope after the call.
 
 ```c
 // Register specific symbol
