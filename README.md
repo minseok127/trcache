@@ -470,7 +470,7 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 
 ### Memory Model: From Rows to Columns
 
-- **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, which are 4KB pages holding row-oriented `trcache_candle` structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
+- **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, holding row-oriented `trcache_candle` structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
 - **`atomsnap` for Row Pages**: The pointers to these row pages within a chunk are managed by `atomsnap`. This allows the `CONVERT` worker to read a stable version of a page for conversion while the `APPLY` worker might be writing to a newer page, all without locks. Once a page is fully converted, `atomsnap` ensures it's safely reclaimed after all reader threads have finished with it.
 - **`trcache_candle_batch`**: The final output is a struct where each candle field (`open`, `high`, `low`, `close`, etc.) is a separate array. All these arrays are allocated in a single contiguous memory block and are aligned to 64 bytes to enable efficient SIMD vector instructions for analytical queries.
 
