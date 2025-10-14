@@ -225,6 +225,7 @@ typedef struct trcache_batch_flush_ops {
 	- `destroy_async_handle_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
 - `void on_batch_destroy(trcache_candle_batch *batch, void *on_destroy_ctx)`
 	- Called just before the memory for a `trcache_candle_batch` is freed by the engine. This is your last chance to clean up any resources held within the candles themselves (e.g., if you used `FIELD_TYPE_POINTER` for a field and need to free the pointed-to memory).
+	- `on_destroy_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
 
 Unlike synchronous flushing, which processes one batch at a time (blocking until the I/O is finished before starting the next), the asynchronous model allows the system to achieve higher throughput. The `FLUSH` worker can call your `flush` callback for multiple batches concurrently, submitting many I/O requests to the operating system without waiting. It then periodically polls the `is_done` callback for all pending batches to check their completion status.
 
