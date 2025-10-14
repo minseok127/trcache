@@ -464,15 +464,15 @@ trcache_destroy(cache);
 The journey of a single trade begins when `trcache_feed_trade_data` is called.
 
 1.  **Ingestion**: The trade is copied into a thread-local `trade_data_buffer` associated with its symbol. This buffer is a linked list of `trade_data_chunk`s, allowing for lock-free writes from the user thread.
-2.  **Apply Stage**: A worker thread assigned to the `APPLY` stage consumes trades from the `trade_data_buffer`. It updates the currently active (mutable) `trcache_candle` within a `candle_chunk`. Only the most recent candle is mutable; all prior candles are considered immutable.
+2.  **Apply Stage**: A worker thread assigned to the `APPLY` stage consumes trades from the `trade_data_buffer`. It updates the currently active (mutable) candle within a `candle_chunk`. Only the most recent candle is mutable; all prior candles are considered immutable.
 3.  **Convert Stage**: Once a candle is complete, a worker thread in the `CONVERT` stage transforms the immutable row-oriented candle data into a column-oriented `trcache_candle_batch` (Array of Structs to Struct of Arrays).
 4.  **Flush Stage**: When a `candle_chunk` is fully converted into a columnar batch and the number of unflushed batches exceeds a threshold, a `FLUSH` worker invokes the user-provided `trcache_batch_flush_ops` callbacks to persist the data.
 
 ### Memory Model: From Rows to Columns
 
-- **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, holding row-oriented `trcache_candle` structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
+- **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, holding row-oriented candle structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
 - **`atomsnap` for Row Pages**: The pointers to these row pages within a chunk are managed by `atomsnap`. This allows the `CONVERT` worker to read a stable version of a page for conversion while the `APPLY` worker might be writing to a newer page, all without locks. Once a page is fully converted, `atomsnap` ensures it's safely reclaimed after all reader threads have finished with it.
-- **`trcache_candle_batch`**: The final output is a struct where each candle field (`open`, `high`, `low`, `close`, etc.) is a separate array. All these arrays are allocated in a single contiguous memory block and are aligned to 64 bytes to enable efficient SIMD vector instructions for analytical queries.
+- **`trcache_candle_batch`**: The final output is a struct where each candle field is a separate array. All these arrays are allocated in a single contiguous memory block and are aligned to 64 bytes to enable efficient SIMD vector instructions for analytical queries.
 
 ### Memory Reclamation of Flushed Chunks
 
