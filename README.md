@@ -1,5 +1,3 @@
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/minseok127/trcache)
-
 # TRCACHE
 
 `trcache` is a C library for ingesting real-time trade data and converting it into **column-oriented user-defined candle arrays** optimized for analysis. The library targets multicore machines and relies on lock-free data structures together with dedicated worker threads to scale with available CPU cores.
