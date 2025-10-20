@@ -803,8 +803,6 @@ void trcache_print_worker_distribution(struct trcache *tc)
 		return;
 	}
 
-	update_all_pipeline_stats(tc);
-
 	{
 		double hz = tsc_cycles_per_sec();
 
@@ -850,9 +848,12 @@ void trcache_print_worker_distribution(struct trcache *tc)
 				struct sched_stage_rate *r
 					= &e->pipeline_stats.stage_rates[j];
 
-				demand[WORKER_STAT_STAGE_APPLY]   += (double)r->produced_rate;
-				demand[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-				demand[WORKER_STAT_STAGE_FLUSH]   += (double)r->converted_rate;
+				demand[WORKER_STAT_STAGE_APPLY]
+					+= (double)r->produced_rate;
+				demand[WORKER_STAT_STAGE_CONVERT]
+					+= (double)r->completed_rate;
+				demand[WORKER_STAT_STAGE_FLUSH]
+					+= (double)r->flushable_batch_rate;
 			}
 		}
 
@@ -953,8 +954,6 @@ int trcache_get_worker_distribution(struct trcache *cache,
 		return -1;
 	}
 
-	update_all_pipeline_stats(cache);
-
 	{
 		double hz = tsc_cycles_per_sec();
 
@@ -1006,7 +1005,7 @@ int trcache_get_worker_distribution(struct trcache *cache,
 				stats->pipeline_demand[WORKER_STAT_STAGE_CONVERT]
 					+= (double)r->completed_rate;
 				stats->pipeline_demand[WORKER_STAT_STAGE_FLUSH]
-					+= (double)r->converted_rate;
+					+= (double)r->flushable_batch_rate;
 			}
 		}
 

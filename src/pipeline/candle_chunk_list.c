@@ -553,10 +553,12 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
  *
  * @param    list: Pointer to the candle chunk list.
  *
+ * @return   Number of candles converted in this call.
+ *
  * The admin thread must ensure that the convert function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
+int candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 {
 	uint64_t mutable_seq = atomic_load_explicit(
 		&list->mutable_seq, memory_order_acquire);
@@ -564,11 +566,12 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		&list->last_seq_converted, memory_order_acquire);
 	struct atomsnap_version *head_snap = NULL;
 	int num_completed, num_converted, start_idx, end_idx, num_flush_batch = 0;
+	int total_converted = 0;
 	struct candle_chunk *chunk;
 
 	/* No more candles to convert */
 	if (mutable_seq == UINT64_MAX || mutable_seq - 1 == last_seq_converted) {
-		return;
+		return 0;
 	}
 
 	/* Pin the head for safe node traversing */
@@ -600,6 +603,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		 */
 		candle_chunk_convert_to_batch(chunk, start_idx, end_idx);
 
+		total_converted += (end_idx - start_idx + 1);
+
 		/*
 		 * Since the initial value of last_seq_converted is UINT64_MAX, adding
 		 * the number of converted candles yields the sequence number of the
@@ -626,6 +631,8 @@ void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 
 	atomic_fetch_add_explicit(&list->unflushed_batch_count, num_flush_batch,
 		memory_order_release);
+
+	return total_converted;
 }
 
 /**
@@ -673,12 +680,14 @@ void candle_chunk_list_finalize(struct candle_chunk_list *list)
  *
  * @param    list:  Pointer to the candle chunk list.
  *
+ * @return   The number of batches flushed in this call.
+ *
  * May invoke user-supplied flush callbacks.
  *
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct candle_chunk_list *list)
+int candle_chunk_list_flush(struct candle_chunk_list *list)
 {
 	int flush_batch_count = atomic_load_explicit(&list->unflushed_batch_count,
 		memory_order_acquire) - list->trc->flush_threshold;
@@ -690,13 +699,13 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 		= &list->config->flush_ops;
 
 	if (flush_batch_count <= 0) {
-		return;
+		return 0;
 	}
 
 	new_snap = atomsnap_make_version(list->head_gate, (void*)list);
 	if (new_snap == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
-		return;
+		return 0;
 	}
 
 	head_snap = atomsnap_acquire_version(list->head_gate);
@@ -762,6 +771,8 @@ void candle_chunk_list_flush(struct candle_chunk_list *list)
 	 */
 	atomsnap_exchange_version(list->head_gate, new_snap);
 	atomsnap_release_version(head_snap);
+
+	return flush_done_count;
 }
 
 /**

@@ -127,10 +127,12 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
  *
  * @param    list: Pointer to the candle chunk list.
  *
+ * @return   Number of candles converted in this call.
+ *
  * The admin thread must ensure that the convert function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
+int candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list);
 
 /**
  * @brief    Finalize the current mutable candle and convert all remaining
@@ -145,12 +147,14 @@ void candle_chunk_list_finalize(struct candle_chunk_list *list);
  *
  * @param    list:  Pointer to the candle chunk list.
  *
+ * @return   The number of batches flushed in this call.
+ *
  * May invoke user-supplied flush callbacks.
  *
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-void candle_chunk_list_flush(struct candle_chunk_list *list);
+int candle_chunk_list_flush(struct candle_chunk_list *list);
 
 /**
  * @brief   Copy @count candles ending at @seq_end.

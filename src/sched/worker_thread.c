@@ -215,11 +215,12 @@ static void worker_do_convert(struct worker_state *state,
 	struct candle_chunk_list *list =
 		entry->candle_chunk_list_ptrs[candle_idx];
 	uint64_t start = tsc_cycles();
+	int converted_count = candle_chunk_list_convert_to_column_batch(list);
 
-	candle_chunk_list_convert_to_column_batch(list);
-
-	worker_stat_add_convert(&state->stat, candle_idx,
-		tsc_cycles() - start, 1);
+	if (converted_count > 0) {
+		worker_stat_add_convert(&state->stat, candle_idx,
+			tsc_cycles() - start, (uint64_t)converted_count);
+	}
 }
 
 /**
@@ -235,11 +236,12 @@ static void worker_do_flush(struct worker_state *state,
 	struct candle_chunk_list *list =
 		entry->candle_chunk_list_ptrs[candle_idx];
 	uint64_t start = tsc_cycles();
+	int flushed_batch_count = candle_chunk_list_flush(list);
 
-	candle_chunk_list_flush(list);
-
-	worker_stat_add_flush(&state->stat, candle_idx,
-		tsc_cycles() - start, 1);
+	if (flushed_batch_count) {
+		worker_stat_add_flush(&state->stat, candle_idx,
+			tsc_cycles() - start, (uint64_t)flushed_batch_count);
+	}
 }
 
 /**

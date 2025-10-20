@@ -154,7 +154,7 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 
 			out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
 			out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-			out[WORKER_STAT_STAGE_FLUSH] += (double)r->converted_rate;
+			out[WORKER_STAT_STAGE_FLUSH] += (double)r->flushable_batch_rate;
 		}
 	}
 
@@ -350,7 +350,7 @@ static void schedule_symbol_work(struct trcache *cache,
 		demand[WORKER_STAT_STAGE_CONVERT]
 			= (double)stage_rate->completed_rate + 1.0;
 		demand[WORKER_STAT_STAGE_FLUSH]
-			= (double)stage_rate->converted_rate + 1.0;
+			= (double)stage_rate->flushable_batch_rate + 1.0;
 
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
 			schedule_symbol_stage(cache, entry, i, demand[s], &env[s]);
