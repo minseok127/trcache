@@ -548,7 +548,7 @@ int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
 /**
  * @brief   Obtain candle chunk list for given symbol and type.
  */
-static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
+struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 	int symbol_id, int candle_idx)
 {
 	struct symbol_entry *entry;

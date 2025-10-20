@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdatomic.h>
 
+#include "meta/trcache_internal.h"
 #include "pipeline/trade_data_buffer.h"
 #include "utils/list_head.h"
 #include "utils/log.h"
@@ -22,10 +23,12 @@
  * @brief   Create and initialize a trade_data_buffer.
  *
  * @param   tc: Pointer to the #trcache.
+ * @param   symbol_id: Integer symbol ID.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
+struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
+	int symbol_id)
 {
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
@@ -80,6 +83,8 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc)
 	buf->produced_count = 0;
 	buf->next_tail_write_idx = 0;
 	buf->num_cursor = tc->num_candle_configs;
+	buf->trc = tc;
+	buf->symbol_id = symbol_id;
 
 	return buf;
 }
@@ -288,7 +293,56 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 }
 
 /**
+ * @brief   Apply trades from the buffer by the user thread.
+ *
+ * This function is called by the user thread (producer) when the
+ * trade_data_buffer is under memory pressure. It attempts to acquire a cursor
+ * for each candle type and process pending trades, thereby freeing up space
+ * in the buffer. This helps to alleviate back-pressure without blocking.
+ *
+ * @param   buf   Buffer to consume from.
+ */
+static void user_thread_apply_trades(struct trade_data_buffer *buf)
+{
+	struct trcache *tc = buf->trc;
+	struct trade_data_buffer_cursor *cur;
+	struct candle_chunk_list *list;
+	struct trcache_trade_data *array;
+	int count;
+
+	for (int i = 0; i < tc->num_candle_configs; i++) {
+		cur = trade_data_buffer_acquire_cursor(buf, i);
+		if (cur == NULL) {
+			/* This candle type is being processed by a worker thread. */
+			continue;
+		}
+
+		list = get_chunk_list(tc, buf->symbol_id, i);
+		if (list == NULL) {
+			trade_data_buffer_release_cursor(cur);
+			continue;
+		}
+
+		while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
+			for (int j = 0; j < count; j++) {
+				candle_chunk_list_apply_trade(list, &array[j]);
+			}
+			trade_data_buffer_consume(buf, cur, count);
+		}
+
+		trade_data_buffer_release_cursor(cur);
+	}
+}
+
+/**
  * @brief   Move free chunks into the free list.
+ *
+ * This function attempts to reclaim memory in several stages. First, it tries
+ * to move fully consumed chunks to the 'free_list'. If the memory limit is
+ * exceeded, it frees the chunks directly instead. If no chunks can be
+ * reclaimed and the 'free_list' is empty, it proactively calls
+ * 'user_thread_apply_trades' to have the current thread (the producer) process
+ * some of the pending trades, which may free up chunks for reuse.
  *
  * @param   buf:       Buffer to reap the free chunks.
  * @param   free_list: Linked list pointer holding recycled chunks.
@@ -298,9 +352,19 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 {
 	struct trade_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
+	bool is_memory_pressure = (buf->mem_acc->aux_limit > 0 &&
+		memstat_get_aux_total(&buf->mem_acc->ms) > buf->mem_acc->aux_limit);
 
 	if (free_list == NULL || list_empty(&buf->chunk_list)) {
 		return;
+	}
+
+	/*
+	 * If under memory pressure, proactively apply trades to free up chunks
+	 * before attempting to reap them.
+	 */
+	if (is_memory_pressure) {
+		user_thread_apply_trades(buf);
 	}
 
 	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
@@ -324,10 +388,14 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	}
 
 	if (last != NULL) {
-		if (buf->mem_acc->aux_limit == 0 || 
-			memstat_get_aux_total(&buf->mem_acc->ms) <= buf->mem_acc->aux_limit) {
-			list_bulk_move_tail(free_list, first, last);
-		} else {
+		/*
+		 * If still under memory pressure after the apply attempt,
+		 * free the chunks directly instead of recycling them.
+		 */
+		is_memory_pressure = (buf->mem_acc->aux_limit > 0 &&
+			memstat_get_aux_total(&buf->mem_acc->ms) > buf->mem_acc->aux_limit);
+
+		if (is_memory_pressure) {
 			node = first;
 			while (node != NULL) {
 				c = __get_trd_chunk_ptr(node);
@@ -343,6 +411,8 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 
 			buf->chunk_list.next = &chunk->list_node;
 			chunk->list_node.prev = &buf->chunk_list;
+		} else {
+			list_bulk_move_tail(free_list, first, last);
 		}
 	}
 }

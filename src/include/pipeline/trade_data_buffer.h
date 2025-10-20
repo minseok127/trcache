@@ -74,6 +74,8 @@ struct trade_data_buffer_cursor {
  * @num_cursor:          Number of valid cursors.
  * @next_tail_write_idx: Next write_idx of the tail chunk.
  * @mem_acc:             Memory accounting information for this buffer.
+ * @trc:                 Back-pointer to the main trcache instance.
+ * @symbol_id:           Integer symbol ID resolved via symbol table.
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -87,6 +89,8 @@ struct trade_data_buffer {
 	int num_cursor;
 	int next_tail_write_idx;
 	struct memory_accounting *mem_acc;
+	struct trcache *trc;
+	int symbol_id;
 };
 
 /**
@@ -133,11 +137,13 @@ static inline void trade_data_buffer_release_cursor(
 /**
  * @brief   Create and initialize a trade_data_buffer.
  *
- * @param   tc: Pointer to the #trcache.
+ * @param   tc:         Pointer to the #trcache.
+ * @param   symbol_id:  Integer symbol ID.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc);
+struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
+	int symbol_id);
 
 /**
  * @brief   Destroy a trade data buffer and free resources.

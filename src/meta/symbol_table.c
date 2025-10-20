@@ -268,7 +268,7 @@ static struct symbol_entry *init_symbol_entry(
 		return NULL;
 	}
 
-	entry->trd_buf = trade_data_buffer_init(tc);
+	entry->trd_buf = trade_data_buffer_init(tc, id);
 
 	if (entry->trd_buf == NULL) {
 		errmsg(stderr, "Allocation of trade_data_buffer is failed\n");

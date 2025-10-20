@@ -81,4 +81,10 @@ struct trcache {
 	struct memory_accounting mem_acc;
 };
 
+/**
+ * @brief   Obtain candle chunk list for given symbol and type.
+ */
+struct candle_chunk_list *get_chunk_list(struct trcache *tc,
+	int symbol_id, int candle_idx);
+
 #endif /* TRCACHE_INTERNAL_H */
