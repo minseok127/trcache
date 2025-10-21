@@ -12,10 +12,10 @@ INCLUDES = -I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include
 LDLIBS = -lpthread -lm
 
 # Target executable
-TARGET = benchmark
+TARGET = feed_only_benchmark
 
 # Source files
-SRCS = benchmark.c
+SRCS = feed_only_benchmark.c
 
 OBJS = $(SRCS:.c=.o)
 
