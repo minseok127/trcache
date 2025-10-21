@@ -35,11 +35,6 @@
 #define NUM_CANDLE_TYPES 7
 #define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
 
-/* Tick counts for candle types */
-static const uint32_t g_tick_counts[NUM_CANDLE_TYPES] = {
-	3, 5, 10, 20, 30, 60, 120
-};
-
 /* Candle Structure */
 struct my_tick_candle {
 	struct trcache_candle_base base;
@@ -461,6 +456,7 @@ static void* monitor_thread_main(void *arg)
 /* initialize_trcache remains the same */
 static int initialize_trcache(void)
 {
+	/* Define the 7 update_ops structs */
 	const struct trcache_candle_update_ops g_update_ops[NUM_CANDLE_TYPES] = {
 		[0] = { .init = tick_candle_init, .update = tick_candle_update_3 },
 		[1] = { .init = tick_candle_init, .update = tick_candle_update_5 },
@@ -470,17 +466,69 @@ static int initialize_trcache(void)
 		[5] = { .init = tick_candle_init, .update = tick_candle_update_60 },
 		[6] = { .init = tick_candle_init, .update = tick_candle_update_120 },
 	};
-	const struct trcache_batch_flush_ops g_flush_ops = { .flush = sync_flush_noop };
-	struct trcache_candle_config configs[NUM_CANDLE_TYPES];
-	for (int i = 0; i < NUM_CANDLE_TYPES; i++) {
-		configs[i] = (struct trcache_candle_config){
-			.user_candle_size = sizeof(struct my_tick_candle),
+	/* Define the shared no-op flush_ops */
+	const struct trcache_batch_flush_ops g_flush_ops = {
+		.flush = sync_flush_noop
+	};
+
+	/* Define NUM_FIELDS here for clarity */
+	const int num_fields = sizeof(g_tick_fields)
+		/ sizeof(struct trcache_field_def);
+	const size_t candle_size = sizeof(struct my_tick_candle);
+
+	/* Initialize the candle configuration array at declaration time */
+	struct trcache_candle_config configs[NUM_CANDLE_TYPES] = {
+		{ /* [0] - 3 Tick */
+			.user_candle_size = candle_size,
 			.field_definitions = g_tick_fields,
-			.num_fields = sizeof(g_tick_fields) / sizeof(struct trcache_field_def),
-			.update_ops = g_update_ops[i],
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[0],
 			.flush_ops = g_flush_ops,
-		};
-	}
+		},
+		{ /* [1] - 5 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[1],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [2] - 10 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[2],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [3] - 20 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[3],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [4] - 30 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[4],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [5] - 60 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[5],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [6] - 120 Tick */
+			.user_candle_size = candle_size,
+			.field_definitions = g_tick_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[6],
+			.flush_ops = g_flush_ops,
+		}
+	};
+
 	struct trcache_init_ctx ctx = {
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,

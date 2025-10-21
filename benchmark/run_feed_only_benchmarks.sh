@@ -11,8 +11,8 @@ RESULTS_DIR="results/feed_only_benchmark"
 BENCHMARK_EXE="./feed_only_benchmark"
 
 # Fixed parameters
-TOTAL_TIME=60   # Total experiment duration (seconds)
-WARMUP_TIME=15  # Warmup duration (seconds)
+TOTAL_TIME=600   # Total experiment duration (seconds)
+WARMUP_TIME=10  # Warmup duration (seconds)
 
 # Parameter ranges to iterate through
 # Zipf exponent (s) values array
