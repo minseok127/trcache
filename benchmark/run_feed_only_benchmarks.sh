@@ -5,10 +5,10 @@
 # ====================================================================
 
 # Directory path for saving results (relative to trcache project root)
-RESULTS_DIR="benchmark/results/feed_only_benchmark"
+RESULTS_DIR="results/feed_only_benchmark"
 
 # Path to the benchmark executable (relative to trcache project root)
-BENCHMARK_EXE="./benchmark/feed_only_benchmark"
+BENCHMARK_EXE="./feed_only_benchmark"
 
 # Fixed parameters
 TOTAL_TIME=60   # Total experiment duration (seconds)
@@ -16,7 +16,7 @@ WARMUP_TIME=15  # Warmup duration (seconds)
 
 # Parameter ranges to iterate through
 # Zipf exponent (s) values array
-ZIPF_S_VALUES=(0.0 0.8 1.0 1.2)
+ZIPF_S_VALUES=(0.0 1.2)
 
 # Feed thread (N) values array
 FEED_THREADS=(1 2 4 8)
