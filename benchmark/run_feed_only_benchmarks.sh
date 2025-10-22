@@ -86,7 +86,6 @@ for s in "${ZIPF_S_VALUES[@]}"; do
 			echo "Waiting 5 seconds..."
 			sleep 5
 			echo "-----------------------------------------------------"
-
 		done # End M loop
 	done # End N loop
 done # End S loop

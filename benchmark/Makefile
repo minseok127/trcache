@@ -1,7 +1,17 @@
-# Compiler and flags are intended to be inherited from the parent Makefile.
-# Default values are provided for standalone execution.
-CC ?= gcc
-CFLAGS ?= -Wall -Wextra -O2 -std=c11 -g -march=native
+CC = gcc
+CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC -march=native
+CFLAGS_DEBUG = -Wall -Wextra -O0 -g -pg -std=c11 -fPIC -march=native
+
+BUILD_MODE ?= release
+
+ifeq ($(BUILD_MODE), release)
+	CFLAGS = $(CFLAGS_RELEASE)
+else ifeq ($(BUILD_MODE), debug)
+	CFLAGS = $(CFLAGS_DEBUG)
+else
+	$(error Unknown BUILD_MODE: $(BUILD_MODE). Use 'release' or 'debug')
+endif
+
 PROJECT_ROOT := $(realpath ..)
 TRCACHE_LIB := $(PROJECT_ROOT)/libtrcache.a
 

@@ -318,7 +318,6 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
  * @return  Pointer to the popped chunk only for debugging purpose.
  */
 #ifdef TRCACHE_DEBUG
-	idx->mem_acc = mem_acc;
 struct candle_chunk *candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 {
 	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
