@@ -436,6 +436,7 @@ static void* monitor_thread_main(void *arg)
 		);
 		fflush(g_csv_file);
 		pthread_mutex_unlock(&g_csv_mutex);
+		printf("  [Monitor Thread] %d second\n", elapsed_sec);
 	}
 
 	printf("  [Monitor Thread] stopping.\n");
