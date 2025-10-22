@@ -92,7 +92,7 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 
 	/* Create ID map with string callbacks */
 	table->symbol_id_map = ht_create(
-		1024,					/* initial capacity */
+		8192,					/* initial capacity */
 		0xDEADBEEFULL,			/* seed */
 		murmur_hash,			/* hash function */
 		compare_symbol_str,		/* cmp_func */

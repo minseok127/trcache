@@ -1,8 +1,8 @@
 CC = gcc
 CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC -march=native
-CFLAGS_DEBUG = -Wall -Wextra -O0 -g -pg -std=c11 -fPIC -march=native
+CFLAGS_DEBUG = -Wall -Wextra -O0 -g -std=c11 -fPIC -march=native
 
-BUILD_MODE ?= release
+BUILD_MODE ?= debug
 
 ifeq ($(BUILD_MODE), release)
 	CFLAGS = $(CFLAGS_RELEASE)

@@ -158,7 +158,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	}
 
 	/* Initialize shared symbol table */
-	tc->symbol_table = symbol_table_init(1024);
+	tc->symbol_table = symbol_table_init(4096);
 	if (tc->symbol_table == NULL) {
 		errmsg(stderr, "Failure on symbol_table_init()\n");
 		pthread_key_delete(tc->pthread_trcache_key);
