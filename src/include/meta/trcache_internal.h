@@ -9,6 +9,7 @@
 #include "utils/hash_table.h"
 #include "utils/list_head.h"
 #include "utils/memstat.h"
+#include "utils/vector.h"
 #include "sched/worker_thread.h"
 #include "sched/admin_thread.h"
 #include "sched/sched_work_msg.h"
@@ -21,14 +22,15 @@ typedef struct trcache trcache;
  * trcache_tls_data - Per-thread cache.
  *   
  * @local_symbol_id_map:   Thread-local map from symbol string to ID.
- * @local_trd_databuf_map: Thread-local map from symbol ID to trd_databuf.
+ * @symbol_entry_cache:    Thread-local dynamic array (vector) mapping
+ *                         symbol ID to symbol_entry*.
  * @local_free_list:       Thread-local chunk free-list used by trd_databufs.
  * @trcache_ptr:           Back-pointer to owner trcache instance.
  * @thread_id:             Assigned index in tls_data_ptr_arr[].
  */
 struct trcache_tls_data {
 	struct ht_hash_table *local_symbol_id_map;
-	struct ht_hash_table *local_trd_databuf_map;
+	struct vector *symbol_entry_cache;
 	struct list_head local_free_list;
 	struct trcache *trcache_ptr;
 	int thread_id;
@@ -80,11 +82,5 @@ struct trcache {
 	struct worker_thread_args *worker_args;
 	struct memory_accounting mem_acc;
 };
-
-/**
- * @brief   Obtain candle chunk list for given symbol and type.
- */
-struct candle_chunk_list *get_chunk_list(struct trcache *tc,
-	int symbol_id, int candle_idx);
 
 #endif /* TRCACHE_INTERNAL_H */

@@ -6,6 +6,7 @@
 #include "sched/sched_work_msg.h"
 #include "utils/list_head.h"
 #include "utils/hash_table.h"
+#include "utils/vector.h"
 
 /*
  * worker_work_key - Hashable identifier for a work item.
@@ -34,12 +35,14 @@ struct worker_work_item {
 /**
  * worker_state - Per-worker runtime data.
  *
- * @worker_id:       Numeric ID assigned to the worker thread.
- * @stat:            Performance counters split per pipeline stage.
- * @sched_msg_queue: Queue for scheduler messages destined to this worker.
- * @done:            Flag signalled during shutdown.
- * @work_map:        Hash table tracking work owned by this worker.
- * @work_list:       List of work items for iteration order.
+ * @worker_id:           Numeric ID assigned to the worker thread.
+ * @stat:                Performance counters split per pipeline stage.
+ * @sched_msg_queue:     Queue for scheduler messages destined to this worker.
+ * @done:                Flag signalled during shutdown.
+ * @work_map:            Hash table tracking work owned by this worker.
+ * @work_list:           List of work items for iteration order.
+ * @symbol_entry_cache:  Worker-local cache (vector) mapping symbol ID to
+ *                       symbol_entry*. Grows dynamically.
  */
 struct worker_state {
 	int worker_id;
@@ -48,6 +51,7 @@ struct worker_state {
 	bool done;
 	struct ht_hash_table *work_map;
 	struct list_head work_list;
+	struct vector *symbol_entry_cache;
 };
 
 /**

@@ -36,6 +36,8 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 {
 	struct trcache_tls_data *tls_data_ptr
 		= pthread_getspecific(tc->pthread_trcache_key);
+	struct symbol_entry *null_entry = NULL;
+	const size_t initial_cap = 4096;
 
 	/* Already initialized, return it */
 	if (tls_data_ptr != NULL) {
@@ -49,9 +51,36 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	}
 
 	tls_data_ptr->local_symbol_id_map = NULL;
-	tls_data_ptr->local_trd_databuf_map = NULL;
 	tls_data_ptr->trcache_ptr = tc;
 	tls_data_ptr->thread_id = -1;
+
+	/* Initialize symbol_entry_cache vector */
+	tls_data_ptr->symbol_entry_cache
+		= vector_init(sizeof(struct symbol_entry *));
+
+	if (tls_data_ptr->symbol_entry_cache == NULL) {
+		errmsg(stderr, "Failed to initialize symbol_entry_cache vector\n");
+		free(tls_data_ptr);
+		return NULL;
+	}
+
+	if (vector_reserve(tls_data_ptr->symbol_entry_cache, initial_cap) != 0) {
+		errmsg(stderr, "Failed to reserve space for symbol_entry_cache\n");
+		vector_destroy(tls_data_ptr->symbol_entry_cache);
+		free(tls_data_ptr);
+		return NULL;
+	}
+
+	for (size_t i = 0; i < initial_cap; i++) {
+		if (vector_push_back(tls_data_ptr->symbol_entry_cache,
+				&null_entry) != 0) {
+			errmsg(stderr,
+				"Failed to push initial NULL at index %zu\n", i);
+			vector_destroy(tls_data_ptr->symbol_entry_cache);
+			free(tls_data_ptr);
+			return NULL;
+		}
+	}
 
 	/* Acquire a free thread ID */
 	pthread_mutex_lock(&tc->tls_id_mutex);
@@ -67,6 +96,7 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 
 	if (tls_data_ptr->thread_id == -1) {
 		errmsg(stderr, "Invalid thread ID\n");
+		vector_destroy(tls_data_ptr->symbol_entry_cache);
 		free(tls_data_ptr);
 		return NULL;
 	}
@@ -93,8 +123,8 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		ht_destroy(tls_data->local_symbol_id_map);
 	}
 
-	if (tls_data->local_trd_databuf_map != NULL) {
-		ht_destroy(tls_data->local_trd_databuf_map);
+	if (tls_data->symbol_entry_cache != NULL) {
+		vector_destroy(tls_data->symbol_entry_cache);
 	}
 
 	if (!list_empty(&tls_data->local_free_list)) {
@@ -546,25 +576,154 @@ int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
 }
 
 /**
- * @brief   Obtain candle chunk list for given symbol and type.
+ * @brief   Get symbol entry using thread-local cache.
+ *
+ * Checks the TLS vector cache first. If cache miss, look up in the global
+ * symbol table, cache the result (expanding cache if needed), and return it.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   tls:        Pointer to thread-local storage data.
+ * @param   symbol_id:  Symbol ID to lookup.
+ *
+ * @return  Pointer to the symbol_entry, or NULL on failure.
  */
-struct candle_chunk_list *get_chunk_list(struct trcache *tc,
+static struct symbol_entry *get_symbol_entry_tls(struct trcache *tc,
+	struct trcache_tls_data *tls, int symbol_id)
+{
+	struct symbol_entry *entry = NULL;
+	struct vector *cache_vec;
+
+	if (tls == NULL || symbol_id < 0) {
+		errmsg(stderr, "Invalid TLS data or symbol_id (%d)\n", symbol_id);
+		return NULL;
+	}
+
+	cache_vec = tls->symbol_entry_cache;
+
+	/* Check thread-local cache first */
+	if ((size_t)symbol_id < vector_size(cache_vec)) {
+		entry = *(struct symbol_entry **)vector_at(cache_vec, symbol_id);
+	}
+
+	/* Cache miss, look up in global table and cache it */
+	if (entry == NULL) {
+		entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+		if (entry == NULL) {
+			/* Do not log error here, caller might handle "not found" */
+			return NULL;
+		}
+
+		/* Ensure cache vector is large enough */
+		if ((size_t)symbol_id >= vector_size(cache_vec)) {
+			size_t current_size = vector_size(cache_vec);
+			size_t required_size = (size_t)symbol_id >= current_size * 2 ?
+				(size_t)symbol_id + 1 : current_size * 2;
+
+			if (required_size == 0) {
+				required_size = 4096; /* Initial size */
+			}
+
+			if (vector_reserve(cache_vec, required_size) != 0) {
+				errmsg(stderr,
+					"Failed to reserve space in symbol_entry_cache for id %d\n",
+					 symbol_id);
+				return entry;
+			}
+
+			/* Fill the gap with NULL */
+			struct symbol_entry *null_entry = NULL;
+			while (vector_size(cache_vec) <= (size_t)symbol_id) {
+				if (vector_push_back(cache_vec, &null_entry) != 0) {
+					errmsg(stderr,
+						"Failed to push NULL into symbol_entry_cache at %zu\n",
+						vector_size(cache_vec));
+					return entry;
+				}
+			}
+		}
+
+		/* Cache the newly found entry */
+		*(struct symbol_entry **)vector_at(cache_vec, symbol_id) = entry;
+	}
+
+	return entry;
+}
+
+/**
+ * @brief   Obtain candle chunk list for given symbol and type.
+ *
+ * Internal static function. Uses thread-local cache first.
+ */
+static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 	int symbol_id, int candle_idx)
 {
-	struct symbol_entry *entry;
+	struct symbol_entry *entry = NULL;
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 
-	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
+	if (tls == NULL) {
+		errmsg(stderr, "Failed to get TLS data in get_chunk_list\n");
+		return NULL;
+	}
+
+	entry = get_symbol_entry_tls(tc, tls, symbol_id);
 	if (entry == NULL) {
-		errmsg(stderr, "Invalid symbol id\n");
+		errmsg(stderr, "Symbol id %d not found via TLS cache or global table\n",
+			symbol_id);
 		return NULL;
 	}
 
+	/* Validate candle_idx */
 	if (candle_idx < 0 || candle_idx >= tc->num_candle_configs) {
-		errmsg(stderr, "Invalid candle_idx: %d\n", candle_idx);
+		errmsg(stderr, "Invalid candle_idx: %d (num_configs: %d)\n",
+			candle_idx, tc->num_candle_configs);
 		return NULL;
 	}
 
+	/* Return the candle chunk list pointer */
 	return entry->candle_chunk_list_ptrs[candle_idx];
+}
+
+/**
+ * @brief   Apply trades from the buffer by the user thread.
+ *
+ * This function is called by the user thread (producer) when the
+ * trade_data_buffer is under memory pressure. It attempts to acquire a cursor
+ * for each candle type and process pending trades, thereby freeing up space
+ * in the buffer. This helps to alleviate back-pressure without blocking.
+ *
+ * @param   buf:  Buffer to consume from.
+ */
+static void user_thread_apply_trades(struct trade_data_buffer *buf)
+{
+	struct trade_data_buffer_cursor *cur;
+	struct candle_chunk_list *list;
+	struct trcache_trade_data *array;
+	struct trcache *tc = buf->trc;
+	int count, symbol_id = buf->symbol_id;
+
+	for (int i = 0; i < tc->num_candle_configs; i++) {
+		list = get_chunk_list(tc, symbol_id, i);
+		if (list == NULL) {
+			errmsg(stderr, "Candle chunk list is NULL\n");
+			return;
+		}
+
+		cur = trade_data_buffer_acquire_cursor(buf, i);
+
+		/* This candle type is being processed by a worker thread. */
+		if (cur == NULL) {
+			continue;
+		}
+
+		while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
+			for (int j = 0; j < count; j++) {
+				candle_chunk_list_apply_trade(list, &array[j]);
+			}
+			trade_data_buffer_consume(buf, cur, count);
+		}
+
+		trade_data_buffer_release_cursor(cur);
+	}
 }
 
 /**
@@ -586,53 +745,41 @@ int trcache_feed_trade_data(struct trcache *tc,
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
 	struct trade_data_buffer *trd_databuf;
 	struct symbol_entry *symbol_entry;
-	bool found = false;
+	bool is_memory_pressure;
 
 	if (data == NULL || tls_data_ptr == NULL) {
 		errmsg(stderr, "Invalid #trcache_trade_data of tls_data_ptr\n");
 		return -1;
 	}
 
-	/* Initial state */
-	if (tls_data_ptr->local_trd_databuf_map == NULL) {
-		tls_data_ptr->local_trd_databuf_map
-			= ht_create(128, 0, NULL, NULL, NULL, NULL);
-
-		if (tls_data_ptr->local_trd_databuf_map == NULL) {
-			errmsg(stderr, "Failure on ht_create()\n");
-			return -1;
-		}
+	/* Get symbol entry using TLS cache */
+	symbol_entry = get_symbol_entry_tls(tc, tls_data_ptr, symbol_id);
+	if (symbol_entry == NULL) {
+		errmsg(stderr, "Symbol id %d not found via TLS or global table\n",
+			symbol_id);
+		return -1;
 	}
 
-	trd_databuf = (struct trade_data_buffer *) ht_find(
-		tls_data_ptr->local_trd_databuf_map, (void *)(uintptr_t)symbol_id,
-		sizeof(void *), &found);
-
-	if (!found) {
-		symbol_entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
-		if (symbol_entry == NULL) {
-			errmsg(stderr, "Invalid symbol id\n");
-			return -1;
-		}
-
-		trd_databuf = symbol_entry->trd_buf;
-		
-		/* Insert it to the local hash table */
-		if (ht_insert(tls_data_ptr->local_trd_databuf_map,
-				(void *)(uintptr_t)symbol_id, sizeof(void *),
-				trd_databuf) < 0) {
-			errmsg(stderr, "Failure on ht_insert()\n");
-			return -1;
-		}
+	/* Get the trade data buffer from the symbol entry */
+	trd_databuf = symbol_entry->trd_buf;
+	if (trd_databuf == NULL) {
+		errmsg(stderr, "Trade data buffer is NULL for symbol id %d\n",
+			symbol_id);
+		return -1;
 	}
 
-	/*
-	 * If we need free chunk, reap it from data buffer.
-	 */
+	/* If we need free chunk, reap it from data buffer. */
 	if (trd_databuf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
-		list_empty(&tls_data_ptr->local_free_list)) {
+			list_empty(&tls_data_ptr->local_free_list)) {
+		is_memory_pressure = (tc->mem_acc.aux_limit > 0 &&
+			memstat_get_aux_total(&tc->mem_acc.ms) > tc->mem_acc.aux_limit);
+
+		if (is_memory_pressure) {
+			user_thread_apply_trades(trd_databuf);
+		}
+
 		trade_data_buffer_reap_free_chunks(trd_databuf,
-			&tls_data_ptr->local_free_list);
+			&tls_data_ptr->local_free_list, is_memory_pressure);
 	}
 
 	/*

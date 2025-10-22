@@ -195,10 +195,15 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
 /**
  * @brief   Move free chunks into the free list.
  *
- * @param   buf:       Buffer to reap the free chunks.
- * @param   free_list: Linked list pointer holding recycled chunks.
+ * This function attempts to reclaim memory in several stages. First, it tries
+ * to move fully consumed chunks to the 'free_list'. If the memory limit is
+ * exceeded, it frees the chunks directly instead.
+ *
+ * @param   buf:                 Buffer to reap the free chunks.
+ * @param   free_list:           Linked list pointer holding recycled chunks.
+ * @param   is_memory_pressure:  Whether or not to free the chunks directly.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
-	struct list_head *free_list);
+	struct list_head *free_list, bool is_memory_pressure);
 
 #endif /* TRADE_DATA_BUFFER_H */
