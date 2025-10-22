@@ -691,18 +691,20 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
  * for each candle type and process pending trades, thereby freeing up space
  * in the buffer. This helps to alleviate back-pressure without blocking.
  *
- * @param   buf:  Buffer to consume from.
+ * @param   buf:           Buffer to consume from.
+ * @param   symbol_entry:  Target symbol entry.
  */
-static void user_thread_apply_trades(struct trade_data_buffer *buf)
+static void user_thread_apply_trades(struct trade_data_buffer *buf,
+	struct symbol_entry *symbol_entry)
 {
 	struct trade_data_buffer_cursor *cur;
 	struct candle_chunk_list *list;
 	struct trcache_trade_data *array;
 	struct trcache *tc = buf->trc;
-	int count, symbol_id = buf->symbol_id;
+	int count;
 
 	for (int i = 0; i < tc->num_candle_configs; i++) {
-		list = get_chunk_list(tc, symbol_id, i);
+		list = symbol_entry->candle_chunk_list_ptrs[i];
 		if (list == NULL) {
 			errmsg(stderr, "Candle chunk list is NULL\n");
 			return;
@@ -775,7 +777,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 			memstat_get_aux_total(&tc->mem_acc.ms) > tc->mem_acc.aux_limit);
 
 		if (is_memory_pressure) {
-			user_thread_apply_trades(trd_databuf);
+			user_thread_apply_trades(trd_databuf, symbol_entry);
 		}
 
 		trade_data_buffer_reap_free_chunks(trd_databuf,
