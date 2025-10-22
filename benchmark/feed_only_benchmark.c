@@ -32,7 +32,7 @@
 
 /* Constants */
 #define NUM_SYMBOLS 3000
-#define NUM_CANDLE_TYPES 7
+#define NUM_CANDLE_TYPES 1
 #define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
 
 /* Candle Structure */
@@ -215,12 +215,6 @@ static bool tick_candle_update_##N(struct trcache_candle_base *c, \
 }
 
 DEFINE_TICK_UPDATE_FUNC(3)
-DEFINE_TICK_UPDATE_FUNC(5)
-DEFINE_TICK_UPDATE_FUNC(10)
-DEFINE_TICK_UPDATE_FUNC(20)
-DEFINE_TICK_UPDATE_FUNC(30)
-DEFINE_TICK_UPDATE_FUNC(60)
-DEFINE_TICK_UPDATE_FUNC(120)
 
 static void* sync_flush_noop(struct trcache *cache,
 	struct trcache_candle_batch *batch, void *ctx)
@@ -458,13 +452,7 @@ static int initialize_trcache(void)
 {
 	/* Define the 7 update_ops structs */
 	const struct trcache_candle_update_ops g_update_ops[NUM_CANDLE_TYPES] = {
-		[0] = { .init = tick_candle_init, .update = tick_candle_update_3 },
-		[1] = { .init = tick_candle_init, .update = tick_candle_update_5 },
-		[2] = { .init = tick_candle_init, .update = tick_candle_update_10 },
-		[3] = { .init = tick_candle_init, .update = tick_candle_update_20 },
-		[4] = { .init = tick_candle_init, .update = tick_candle_update_30 },
-		[5] = { .init = tick_candle_init, .update = tick_candle_update_60 },
-		[6] = { .init = tick_candle_init, .update = tick_candle_update_120 },
+		[0] = { .init = tick_candle_init, .update = tick_candle_update_3 }
 	};
 	/* Define the shared no-op flush_ops */
 	const struct trcache_batch_flush_ops g_flush_ops = {
@@ -484,48 +472,6 @@ static int initialize_trcache(void)
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[0],
 			.flush_ops = g_flush_ops,
-		},
-		{ /* [1] - 5 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[1],
-			.flush_ops = g_flush_ops,
-		},
-		{ /* [2] - 10 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[2],
-			.flush_ops = g_flush_ops,
-		},
-		{ /* [3] - 20 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[3],
-			.flush_ops = g_flush_ops,
-		},
-		{ /* [4] - 30 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[4],
-			.flush_ops = g_flush_ops,
-		},
-		{ /* [5] - 60 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[5],
-			.flush_ops = g_flush_ops,
-		},
-		{ /* [6] - 120 Tick */
-			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
-			.num_fields = num_fields,
-			.update_ops = g_update_ops[6],
-			.flush_ops = g_flush_ops,
 		}
 	};
 
@@ -533,7 +479,7 @@ static int initialize_trcache(void)
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
 		.batch_candle_count_pow2 = 12,
-		.cached_batch_count_pow2 = 2,
+		.cached_batch_count_pow2 = 1,
 		.aux_memory_limit = 2ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
 	};
