@@ -329,15 +329,18 @@ static void write_csv_header(void)
 		"WorkerThreads,"     /* Config: Number of worker threads (M) */
 		"ZipfS,"             /* Config: Zipf exponent s */
 		"ApplyDemand,"       /* Stat: Estimated items/sec input to Apply */
-		"ApplySpeed,"        /* Stat: Measured items/sec processed by Apply */
+		"ApplyCapacity,"     /* Stat: Estimated items/sec output from Apply */
+		"ApplySpeed,"        /* Stat: Average items/sec processed by workers*/
 		"ApplyLimit,"        /* Stat: Workers assigned to Apply */
 		"ApplyStart,"        /* Stat: Start worker index for Apply */
 		"ConvertDemand,"     /* Stat: Estimated items/sec input to Convert */
-		"ConvertSpeed,"      /* Stat: Measured items/sec processed by Convert */
+		"ConvertCapacity,"   /* Stat: Estimated items/sec output from Convert */
+		"ConvertSpeed,"      /* Stat: Average items/sec processed by workers*/
 		"ConvertLimit,"      /* Stat: Workers assigned to Convert */
 		"ConvertStart,"      /* Stat: Start worker index for Convert */
 		"FlushDemand,"       /* Stat: Estimated items/sec input to Flush */
-		"FlushSpeed,"        /* Stat: Measured items/sec processed by Flush */
+		"FlushCapacity,"     /* Stat: Estimated items/sec output from Flush */
+		"FlushSpeed,"        /* Stat: Average items/sec processed by workers*/
 		"FlushLimit,"        /* Stat: Workers assigned to Flush */
 		"FlushStart,"        /* Stat: Start worker index for Flush */
 		"MemTradeBuf,"       /* Mem: Bytes used by trade_data_buffer */
@@ -408,22 +411,25 @@ static void* monitor_thread_main(void *arg)
 		pthread_mutex_lock(&g_csv_mutex);
 		fprintf(g_csv_file,
 			"%ld,%d,%d,%d,%.2f," /* Time, Elapsed, Threads, ZipfS */
-			"%.2f,%.2f,%d,%d,"   /* Apply D,S,L,St */
-			"%.2f,%.2f,%d,%d,"   /* Convert D,S,L,St */
-			"%.2f,%.2f,%d,%d,"   /* Flush D,S,L,St */
+			"%.2f,%.2f,%.2f,%d,%d,"   /* Apply D,C,S,L,St */
+			"%.2f,%.2f,%.2f,%d,%d,"   /* Convert D,C,S,L,St */
+			"%.2f,%.2f,%.2f,%d,%d,"   /* Flush D,C,S,L,St */
 			"%zu,%zu,%zu,%zu,%zu," /* Mem parts */
 			"%zu\n",             /* Mem Total */
 			now, elapsed_sec, g_config.num_feed_threads,
 			g_config.num_worker_threads, g_config.zipf_s,
 			dist_stats.pipeline_demand[WORKER_STAT_STAGE_APPLY],
+			dist_stats.stage_capacity[WORKER_STAT_STAGE_APPLY],
 			dist_stats.stage_speeds[WORKER_STAT_STAGE_APPLY],
 			dist_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
 			dist_stats.stage_starts[WORKER_STAT_STAGE_APPLY],
 			dist_stats.pipeline_demand[WORKER_STAT_STAGE_CONVERT],
+			dist_stats.stage_capacity[WORKER_STAT_STAGE_CONVERT],
 			dist_stats.stage_speeds[WORKER_STAT_STAGE_CONVERT],
 			dist_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
 			dist_stats.stage_starts[WORKER_STAT_STAGE_CONVERT],
 			dist_stats.pipeline_demand[WORKER_STAT_STAGE_FLUSH],
+			dist_stats.stage_capacity[WORKER_STAT_STAGE_FLUSH],
 			dist_stats.stage_speeds[WORKER_STAT_STAGE_FLUSH],
 			dist_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
 			dist_stats.stage_starts[WORKER_STAT_STAGE_FLUSH],
