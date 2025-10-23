@@ -945,6 +945,7 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	int limits[WORKER_STAT_STAGE_NUM];
 	int start[WORKER_STAT_STAGE_NUM];
 	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
+	double capacity[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	int end;
 
@@ -1012,11 +1013,19 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	compute_stage_limits(tc, limits);
 	compute_stage_starts(tc, limits, start);
 
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		capacity[s] = speed[s] * limits[s];
+	}
+
 	printf("Worker distribution and scheduler statistics:\n");
 	printf("  Stage speeds (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
 		   speed[WORKER_STAT_STAGE_APPLY],
 		   speed[WORKER_STAT_STAGE_CONVERT],
 		   speed[WORKER_STAT_STAGE_FLUSH]);
+	printf("  Stage Capacity (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
+		   capacity[WORKER_STAT_STAGE_APPLY],
+		   capacity[WORKER_STAT_STAGE_CONVERT],
+		   capacity[WORKER_STAT_STAGE_FLUSH]);
 	printf("  Pipeline demand (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
 		   demand[WORKER_STAT_STAGE_APPLY],
 		   demand[WORKER_STAT_STAGE_CONVERT],
@@ -1163,6 +1172,10 @@ int trcache_get_worker_distribution(struct trcache *cache,
 
 	compute_stage_limits(cache, stats->stage_limits);
 	compute_stage_starts(cache, stats->stage_limits, stats->stage_starts);
+
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		stats->stage_capacity[s] = stats->stage_speeds[s] * stats->stage_limits[s];
+	}
 
 	return 0;
 }

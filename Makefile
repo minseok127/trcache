@@ -4,7 +4,7 @@ AR = ar
 CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC
 CFLAGS_DEBUG = -Wall -Wextra -O0 -g -std=c11 -fPIC -DTRCACHE_DEBUG
 
-BUILD_MODE ?= debug
+BUILD_MODE ?= release
 
 ifeq ($(BUILD_MODE), release)
 	CFLAGS = $(CFLAGS_RELEASE)

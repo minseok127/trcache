@@ -482,10 +482,14 @@ typedef enum memstat_category {
  * trcache_worker_distribution_stats - Statistics on worker distribution
  *                                     and performance.
  *
- * @stage_speeds:     Measured processing speed (items/sec) for each stage,
- *                    indexed by 'worker_stat_stage_type'.
- * @pipeline_demand:  Estimated demand (items/sec) for each pipeline stage,
- *                    indexed by 'worker_stat_stage_type'.
+ * @stage_speeds:     Measured average processing *efficiency per worker*
+ *                    for each stage (items/sec/worker). Indicates how many
+ *                    items a single worker processes per second on average.
+ * @pipeline_demand:  Estimated *total required throughput* for each pipeline
+ *                    stage across the entire system (items/sec).
+ * @stage_capacity    Estimated *total processing capacity* for each stage
+ *                    (items/sec). Represents the theoretical maximum throughput
+ *                    if all allocated workers operate at peak efficiency.
  * @stage_limits:     Number of workers allocated to each stage,
  *                    indexed by 'worker_stat_stage_type'.
  * @stage_starts:     Starting worker index for each stage,
@@ -493,6 +497,7 @@ typedef enum memstat_category {
  */
 typedef struct trcache_worker_distribution_stats {
 	double stage_speeds[WORKER_STAT_STAGE_NUM];
+	double stage_capacity[WORKER_STAT_STAGE_NUM];
 	double pipeline_demand[WORKER_STAT_STAGE_NUM];
 	int stage_limits[WORKER_STAT_STAGE_NUM];
 	int stage_starts[WORKER_STAT_STAGE_NUM];
