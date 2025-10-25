@@ -77,10 +77,10 @@ struct benchmark_config {
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
 static _Atomic bool g_running = true;
-static _Atomic uint64_t g_trade_id_counter = 0;
 static int g_symbol_ids[NUM_SYMBOLS];
 static FILE *g_csv_file = NULL;
 static pthread_mutex_t g_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t g_feed_counter = 0;
 
 /* Function Prototypes */
 static void init_partition_zipf_generator(int start_rank, int num_symbols,
@@ -294,8 +294,7 @@ static void* feed_thread_main(void *arg)
 		/* Get the registered symbol ID */
 		symbol_id = g_symbol_ids[symbol_idx];
 		/* Get a unique trade ID */
-		trade_id = atomic_fetch_add_explicit(
-			&g_trade_id_counter, 1, memory_order_relaxed);
+		trade_id++;
 
 		/* Generate pseudo-random trade data */
 		trade.timestamp = (uint64_t)time(NULL) * 1000;
@@ -311,6 +310,8 @@ static void* feed_thread_main(void *arg)
 				"Feed thread %d failed to feed data for symbol %d\n",
 				args->thread_idx, symbol_id);
 		}
+
+		atomic_fetch_add(&g_feed_counter, 1);
 	}
 
 	printf("  [Feed Thread %d] stopping.\n", args->thread_idx);
@@ -376,6 +377,7 @@ static void* monitor_thread_main(void *arg)
 	time_t start_time = time(NULL);
 	time_t last_log_time = start_time;
 	int elapsed_sec = 0;
+	uint64_t prev_feed_counter = 0, current_feed_counter = g_feed_counter;
 
 	while (atomic_load_explicit(&g_running, memory_order_relaxed)) {
 		time_t now = time(NULL);
@@ -442,7 +444,11 @@ static void* monitor_thread_main(void *arg)
 		);
 		fflush(g_csv_file);
 		pthread_mutex_unlock(&g_csv_mutex);
-		printf("  [Monitor Thread] %d second\n", elapsed_sec);
+
+		current_feed_counter = atomic_load(&g_feed_counter);
+		printf("  [Monitor Thread] %d second, feed count: %lu\n",
+				elapsed_sec, current_feed_counter - prev_feed_counter);
+		prev_feed_counter = current_feed_counter;
 	}
 
 	printf("  [Monitor Thread] stopping.\n");
