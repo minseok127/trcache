@@ -14,6 +14,24 @@
 
 #include "trcache.h"
 
+#define RATE_EMA_SHIFT (2)     /* 2^2 = 4 */
+#define RATE_EMA_MULT  (3)     /* 4 - 1 */
+
+/**
+ * @brief   Update 64-bit exponential moving average (N=4, alpha=1/4).
+ *
+ * @param   ema:   Previous EMA value.
+ * @param   val:   New sample value.
+ *
+ * @return  Updated EMA value.
+ *
+ * EMA(t) = val(t) * (1/4) + (3/4) * EMA(t-1)
+ */
+static uint64_t ema_update_u64(uint64_t ema, uint64_t val)
+{
+	return (val + RATE_EMA_MULT * ema) >> RATE_EMA_SHIFT;
+}
+
 /**
  * @brief   Capture pipeline counters for one candle type.
  *
@@ -78,7 +96,7 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	diff = newc->produced_seq - oldc->produced_seq;
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->produced_rate = (uint64_t)tmp;
+	r->produced_rate = ema_update_u64(r->produced_rate, (uint64_t)tmp);
 
 	/*
 	 * Calculate the rate of completed candles/sec (input to CONVERT).
@@ -90,7 +108,7 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	}
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->completed_rate = (uint64_t)tmp;
+	r->completed_rate = ema_update_u64(r->completed_rate, (uint64_t)tmp);
 
 	/*
 	 * Calculate the rate of batches becoming flushable (input to FLUSH).
@@ -102,7 +120,8 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	}
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->flushable_batch_rate = (uint64_t)tmp;
+	r->flushable_batch_rate = ema_update_u64(r->flushable_batch_rate,
+		(uint64_t)tmp);
 }
 
 /**
