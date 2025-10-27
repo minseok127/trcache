@@ -14,24 +14,6 @@
 
 #include "trcache.h"
 
-#define RATE_EMA_SHIFT (7)    /* alpha = 1 / 2^7 */
-#define RATE_EMA_MULT  (127)
-
-/**
- * @brief   Update 64-bit exponential moving average.
- *
- * @param   ema:   Previous EMA value.
- * @param   val:   New sample value.
- *
- * @return  Updated EMA value.
- *
- * EMA(t) = val(t) * (1/128) + (1 - 1/128) * EMA(t-1)
- */
-static uint64_t ema_update_u64(uint64_t ema, uint64_t val)
-{
-	return (val + RATE_EMA_MULT * ema) >> RATE_EMA_SHIFT;
-}
-
 /**
  * @brief   Capture pipeline counters for one candle type.
  *
@@ -80,7 +62,6 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	const struct sched_stage_snapshot *oldc, uint64_t dt_ns,
 	struct trcache *cache)
 {
-	int old_over_threshold, new_over_threshold;
 	__uint128_t tmp;
 	uint64_t diff;
 	
@@ -97,7 +78,7 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	diff = newc->produced_seq - oldc->produced_seq;
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->produced_rate = ema_update_u64(r->produced_rate, (uint64_t)tmp);
+	r->produced_rate = (uint64_t)tmp;
 
 	/*
 	 * Calculate the rate of completed candles/sec (input to CONVERT).
@@ -109,25 +90,19 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	}
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->completed_rate = ema_update_u64(r->completed_rate, (uint64_t)tmp);
+	r->completed_rate = (uint64_t)tmp;
 
 	/*
 	 * Calculate the rate of batches becoming flushable (input to FLUSH).
 	 */
-	old_over_threshold = (oldc->unflushed_batch_count > cache->flush_threshold)
-		? (oldc->unflushed_batch_count - cache->flush_threshold) : 0;
-	new_over_threshold = (newc->unflushed_batch_count > cache->flush_threshold)
-		? (newc->unflushed_batch_count - cache->flush_threshold) : 0;
-
-	if (new_over_threshold > old_over_threshold) {
-		diff = new_over_threshold - old_over_threshold;
+	if (newc->unflushed_batch_count > cache->flush_threshold) {
+		diff = newc->unflushed_batch_count;
 	} else {
 		diff = 0;
 	}
 	tmp = (__uint128_t)diff * 1000000000ull;
 	tmp /= dt_ns;
-	r->flushable_batch_rate = ema_update_u64(r->flushable_batch_rate,
-		(uint64_t)tmp);
+	r->flushable_batch_rate = (uint64_t)tmp;
 }
 
 /**
