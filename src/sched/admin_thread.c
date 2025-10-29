@@ -598,6 +598,93 @@ static void allocate_idle_workers(int num_workers, int total_initial_need,
 	}
 }
 
+/**
+ * @brief   Ensure stages with demand have at least one worker and
+ *          adjust limits.
+ *
+ * This function guarantees that any stage with non-zero demand receives at
+ * least one worker. If adding these minimum workers causes the total allocated
+ * workers to exceed the available number, it iteratively removes workers from
+ * the stages with the highest allocation (avoiding stages that only have their
+ * guaranteed minimum) until the total matches the available count.
+ *
+ * @param   num_workers: Total number of available worker threads.
+ * @param   demand:      Array of estimated demand per stage.
+ * @param   limits_out:  Input/Output array of worker limits per stage. This
+ *                       array is modified in place.
+ */
+static void ensure_minimum_worker_allocation(int num_workers,
+	const double *demand, int *limits_out)
+{
+	int guaranteed_workers = 0;
+	int current_total_workers = 0;
+	int excess_workers = 0;
+
+	/* Ensure minimum allocation for stages with demand */
+	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+		if (demand[s] > 0.0 && limits_out[s] == 0) {
+			limits_out[s] = 1;
+			guaranteed_workers++;
+		}
+	}
+
+	/* If minimum guarantees were applied, check for excess workers */
+	if (guaranteed_workers > 0) {
+		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+			current_total_workers += limits_out[s];
+		}
+
+		excess_workers = current_total_workers - num_workers;
+
+		/* Reduce workers from stages with the highest limits if necessary */
+		while (excess_workers > 0) {
+			int max_limit = 0;
+			int max_stage = -1;
+			bool can_reduce = false;
+
+			/*
+			 * First pass: Find the stage with the most workers, excluding
+			 * those that only have the guaranteed minimum of 1.
+			 */
+			for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+				bool is_guaranteed_minimum
+					= (demand[s] > 0.0 && limits_out[s] == 1);
+				if (!is_guaranteed_minimum && limits_out[s] > max_limit) {
+					max_limit = limits_out[s];
+					max_stage = s;
+					can_reduce = true; // Found a stage to reduce from
+				}
+			}
+
+			/*
+			 * Second pass (fallback): If no stage could be reduced in the first
+			 * pass (e.g., all demanding stages have exactly 1 worker),
+			 * find any stage with more than 1 worker, regardless of demand.
+			 */
+			if (!can_reduce) {
+				max_limit = 1; // Reset max_limit check for this pass
+				for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
+					if (limits_out[s] > max_limit) {
+						max_limit = limits_out[s];
+						max_stage = s;
+						can_reduce = true;
+					}
+				}
+			}
+
+			/* Reduce worker count from the selected stage */
+			if (can_reduce && max_stage != -1) {
+				limits_out[max_stage]--;
+				excess_workers--;
+			} else {
+				errmsg(stderr,
+					"Could not reduce excess workers (%d) while "
+					"guaranteeing minimum allocation.\n", excess_workers);
+				break; /* Exit loop to avoid infinite loop */
+			}
+		}
+	}
+}
 
 /**
  * @brief   Final check and correction for worker limits.
@@ -651,6 +738,9 @@ void compute_stage_limits(struct trcache *cache, int *limits)
 		allocate_idle_workers(cache->num_workers, total_initial_need_int,
 			initial_need, speed, demand, limits);
 	}
+
+	/* Ensure stages with demand get at least one worker, adjust if needed */
+	ensure_minimum_worker_allocation(cache->num_workers, demand, limits);
 
 	finalize_limits(cache->num_workers, limits);
 }
