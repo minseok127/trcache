@@ -306,6 +306,13 @@ static void schedule_symbol_stage(struct trcache *cache,
 	struct stage_sched_env *env)
 {
 	if (env->limit <= 0) {
+		int cur = atomic_load(&entry->in_progress[env->stage][candle_idx]);
+		if (cur >= 0) {
+			/* remove candle index from previous worker bitmask */
+			cache->stage_ct_mask[env->stage][cur] &= ~(1u << candle_idx);
+			post_work_msg(cache, cur, candle_idx, env->stage,
+				entry->id, SCHED_MSG_REMOVE_WORK);
+		}
 		return;
 	}
 	
