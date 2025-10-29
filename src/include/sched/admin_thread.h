@@ -9,10 +9,16 @@
  *
  * @sched_msg_queue: Queue of scheduler messages for admin commands.
  * @done:            Flag signalled during shutdown.
+ * @prev_limits:     Worker limits calculated in the previous cycle.
+ * @prev_starts:     Worker start indices calculated in the previous cycle.
+ * @is_first_run:    Flag to indicate the first run of balance_workers.
  */
 struct admin_state {
 	sched_work_msg_queue *sched_msg_queue;
 	bool done;
+	int prev_limits[WORKER_STAT_STAGE_NUM];
+	int prev_starts[WORKER_STAT_STAGE_NUM];
+	bool is_first_run;
 };
 
 /**

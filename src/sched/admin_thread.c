@@ -6,6 +6,7 @@
 #include <math.h>
 #include <sched.h>
 #include <string.h>
+#include <stdbool.h>
 #include <time.h>
 
 #include "sched/admin_thread.h"
@@ -45,6 +46,10 @@ int admin_state_init(struct trcache *tc)
 		return -1;
 	}
 	state->done = false;
+
+	memset(state->prev_limits, -1, sizeof(state->prev_limits));
+	memset(state->prev_starts, -1, sizeof(state->prev_starts));
+	state->is_first_run = true;
 
 	return 0;
 }
@@ -800,11 +805,30 @@ static void balance_workers(struct trcache *cache)
 	int limits[WORKER_STAT_STAGE_NUM] = { 0, };
 	int stage_start[WORKER_STAT_STAGE_NUM] = { 0, };
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0, } };
+	bool limits_changed = false;
 	
 	reset_stage_ct_masks(cache);
 
 	compute_stage_limits(cache, limits);
 	compute_stage_starts(cache, limits, stage_start);
+
+	/* Compare current limits/starts with previous ones */
+	if (cache->admin_state.is_first_run ||
+			memcmp(cache->admin_state.prev_limits, limits,
+				sizeof(limits)) != 0 ||
+			memcmp(cache->admin_state.prev_starts, stage_start,
+				sizeof(stage_start)) != 0) {
+		limits_changed = true;
+		memcpy(cache->admin_state.prev_limits, limits,
+			sizeof(limits));
+		memcpy(cache->admin_state.prev_starts, stage_start,
+			sizeof(stage_start));
+		cache->admin_state.is_first_run = false;
+	}
+
+	if (!limits_changed) {
+		return;
+	}
 
 	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
 	arr = (struct symbol_entry **)ver->object;

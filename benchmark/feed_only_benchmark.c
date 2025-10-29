@@ -493,7 +493,7 @@ static int initialize_trcache(void)
 		.num_candle_configs = NUM_CANDLE_TYPES,
 		.batch_candle_count_pow2 = 12,
 		.cached_batch_count_pow2 = 1,
-		.aux_memory_limit = 2ULL * 1024 * 1024,
+		.aux_memory_limit = 128ULL * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
 	};
 	g_cache = trcache_init(&ctx);
