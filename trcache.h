@@ -263,6 +263,7 @@ typedef struct trcache_field_request {
  *                             for auxiliary data structures (i.e. everything
  *                             other than candle chunk list/index).
  * @num_worker_threads:        Number of worker threads.
+ * @max_symbols:               Maximum number of symbols that can be registered.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -275,6 +276,7 @@ typedef struct trcache_init_ctx {
 	int cached_batch_count_pow2;
 	size_t aux_memory_limit;
 	int num_worker_threads;
+	int max_symbols;
 } trcache_init_ctx;
 
 /**

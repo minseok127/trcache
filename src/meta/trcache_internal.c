@@ -36,8 +36,6 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 {
 	struct trcache_tls_data *tls_data_ptr
 		= pthread_getspecific(tc->pthread_trcache_key);
-	struct symbol_entry *null_entry = NULL;
-	const size_t initial_cap = 4096;
 
 	/* Already initialized, return it */
 	if (tls_data_ptr != NULL) {
@@ -54,33 +52,7 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 	tls_data_ptr->trcache_ptr = tc;
 	tls_data_ptr->thread_id = -1;
 
-	/* Initialize symbol_entry_cache vector */
-	tls_data_ptr->symbol_entry_cache
-		= vector_init(sizeof(struct symbol_entry *));
-
-	if (tls_data_ptr->symbol_entry_cache == NULL) {
-		errmsg(stderr, "Failed to initialize symbol_entry_cache vector\n");
-		free(tls_data_ptr);
-		return NULL;
-	}
-
-	if (vector_reserve(tls_data_ptr->symbol_entry_cache, initial_cap) != 0) {
-		errmsg(stderr, "Failed to reserve space for symbol_entry_cache\n");
-		vector_destroy(tls_data_ptr->symbol_entry_cache);
-		free(tls_data_ptr);
-		return NULL;
-	}
-
-	for (size_t i = 0; i < initial_cap; i++) {
-		if (vector_push_back(tls_data_ptr->symbol_entry_cache,
-				&null_entry) != 0) {
-			errmsg(stderr,
-				"Failed to push initial NULL at index %zu\n", i);
-			vector_destroy(tls_data_ptr->symbol_entry_cache);
-			free(tls_data_ptr);
-			return NULL;
-		}
-	}
+	INIT_LIST_HEAD(&tls_data_ptr->local_free_list);
 
 	/* Acquire a free thread ID */
 	pthread_mutex_lock(&tc->tls_id_mutex);
@@ -96,15 +68,23 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
 
 	if (tls_data_ptr->thread_id == -1) {
 		errmsg(stderr, "Invalid thread ID\n");
-		vector_destroy(tls_data_ptr->symbol_entry_cache);
 		free(tls_data_ptr);
 		return NULL;
 	}
 
 	/* Set argument of trcache_per_thread_destructor() */
-	pthread_setspecific(tc->pthread_trcache_key, (void *)tls_data_ptr);
+	if (pthread_setspecific(tc->pthread_trcache_key,
+			(void *)tls_data_ptr) != 0) {
+		errmsg(stderr, "Failed to set thread-specific data\n");
 
-	INIT_LIST_HEAD(&tls_data_ptr->local_free_list);
+		/* Rollback thread ID assignment */
+		pthread_mutex_lock(&tc->tls_id_mutex);
+		atomic_store(&tc->tls_id_assigned_flag[tls_data_ptr->thread_id], 0);
+		atomic_store(&tc->tls_data_ptr_arr[tls_data_ptr->thread_id], NULL);
+		pthread_mutex_unlock(&tc->tls_id_mutex);
+		free(tls_data_ptr);
+		return NULL;
+	}
 
 	return tls_data_ptr;
 }
@@ -118,13 +98,19 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
+	struct memory_accounting *mem_acc;
+	struct trcache *tc;
+
+	if (tls_data == NULL) {
+		return;
+	}
+
+	tc = tls_data->trcache_ptr;
+	mem_acc = &tc->mem_acc;
 
 	if (tls_data->local_symbol_id_map != NULL) {
 		ht_destroy(tls_data->local_symbol_id_map);
-	}
-
-	if (tls_data->symbol_entry_cache != NULL) {
-		vector_destroy(tls_data->symbol_entry_cache);
+		tls_data->local_symbol_id_map = NULL;
 	}
 
 	if (!list_empty(&tls_data->local_free_list)) {
@@ -132,6 +118,8 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		while (c != &tls_data->local_free_list) {
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
+			memstat_sub(&mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
+				sizeof(struct trade_data_chunk));
 			free(chunk);
 			c = n;
 		}
@@ -151,6 +139,10 @@ static void trcache_per_thread_destructor(void *value)
 {
 	struct trcache_tls_data *tls_data_ptr = (struct trcache_tls_data *)value;
 	struct trcache *tc = tls_data_ptr->trcache_ptr;
+
+	if (tls_data_ptr == NULL) {
+		return;
+	}
 
 	/* Give back the thread id into the trcache */
 	pthread_mutex_lock(&tc->tls_id_mutex);
@@ -178,6 +170,13 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
+	/* Validate ctx input first */
+	if (ctx == NULL || ctx->max_symbols <= 0 || ctx->num_worker_threads <= 0) {
+		errmsg(stderr, "Invalid arguments in trcache_init_ctx\n");
+		free(tc);
+		return NULL;
+	}
+
 	/* Create TLS key with destructor */
 	ret = pthread_key_create(&tc->pthread_trcache_key,
 		trcache_per_thread_destructor);
@@ -187,8 +186,18 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	/* Initialize shared symbol table */
-	tc->symbol_table = symbol_table_init(4096);
+	/* Copy configuration values */
+	tc->num_candle_configs = ctx->num_candle_configs;
+	tc->num_workers = ctx->num_worker_threads;
+	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
+	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
+	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
+	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
+	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
+	tc->max_symbols = ctx->max_symbols;
+
+	/* Initialize shared symbol table with fixed capacity */
+	tc->symbol_table = symbol_table_init(tc->max_symbols);
 	if (tc->symbol_table == NULL) {
 		errmsg(stderr, "Failure on symbol_table_init()\n");
 		pthread_key_delete(tc->pthread_trcache_key);
@@ -205,7 +214,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	tc->num_candle_configs = ctx->num_candle_configs;
+	/* Copy candle configurations (deep copy field definitions) */
 	if (ctx->candle_configs && tc->num_candle_configs > 0) {
 		size_t configs_size
 			= sizeof(trcache_candle_config) * tc->num_candle_configs;
@@ -228,90 +237,120 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 				struct trcache_field_def *defs_copy = malloc(defs_size);
 
 				if (defs_copy == NULL) {
-					errmsg(stderr, "Failed to allocate memory for field def\n");
-
+					errmsg(stderr,
+						"Failed to allocate memory for field def %d\n", i);
+					/* Clean up previously allocated definitions */
 					for (int j = 0; j < i; j++) {
 						free((void *)tc->candle_configs[j].field_definitions);
 					}
-
 					free(tc->candle_configs);
 					symbol_table_destroy(tc->symbol_table);
 					pthread_key_delete(tc->pthread_trcache_key);
 					free(tc);
 					return NULL;
 				}
-
 				memcpy(defs_copy, config->field_definitions, defs_size);
-
-				config->field_definitions = defs_copy;
+				config->field_definitions = defs_copy; /* Point to the copy */
+			} else {
+				/* Ensure consistent state even if no fields */
+				config->field_definitions = NULL;
+				config->num_fields = 0;
 			}
 		}
+	} else {
+		errmsg(stderr, "Invalid candle config\n");
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
 	}
 
-	tc->num_workers = ctx->num_worker_threads;
-	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
-	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
-	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
-	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
-	tc->mem_acc.aux_limit = ctx->aux_memory_limit;
+	/* Initialize TLS management mutex */
+	if (pthread_mutex_init(&tc->tls_id_mutex, NULL) != 0) {
+		errmsg(stderr, "Failed to initialize TLS ID mutex\n");
+		/* Cleanup already allocated candle config copies */
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
+		}
+		symbol_table_destroy(tc->symbol_table);
+		pthread_key_delete(tc->pthread_trcache_key);
+		free(tc);
+		return NULL;
+	}
 
-	pthread_mutex_init(&tc->tls_id_mutex, NULL);
-
+	/* Initialize scheduler message free list */
 	tc->sched_msg_free_list = scq_init(&tc->mem_acc);
 	if (tc->sched_msg_free_list == NULL) {
 		errmsg(stderr, "sched_msg_free_list allocation failed\n");
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		for(int i = 0; i < tc->num_candle_configs; i++) {
-			free((void *)tc->candle_configs[i].field_definitions);
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 		}
-		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
 	}
 
+	/* Initialize admin state */
 	if (admin_state_init(tc) != 0) {
 		errmsg(stderr, "admin_state_init failed\n");
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		for(int i = 0; i < tc->num_candle_configs; i++) {
-			free((void *)tc->candle_configs[i].field_definitions);
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 		}
-		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
 	}
 
+	/* Allocate worker states */
 	tc->worker_state_arr = calloc(tc->num_workers, sizeof(struct worker_state));
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
+		admin_state_destroy(&tc->admin_state);
+		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		for(int i = 0; i < tc->num_candle_configs; i++) {
-			free((void *)tc->candle_configs[i].field_definitions);
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 		}
-		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
 	}
 
+	/* Initialize worker states */
 	for (int i = 0; i < tc->num_workers; i++) {
 		if (worker_state_init(tc, i) != 0) {
-			errmsg(stderr, "worker_state_init failed\n");
+			errmsg(stderr, "worker_state_init failed for worker %d\n", i);
 			for (int j = 0; j < i; j++) {
 				worker_state_destroy(&tc->worker_state_arr[j]);
 			}
 			free(tc->worker_state_arr);
+			admin_state_destroy(&tc->admin_state);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
-			for(int j = 0; j < tc->num_candle_configs; j++) {
-				free((void *)tc->candle_configs[i].field_definitions);
+			if (tc->candle_configs) {
+				for (int j = 0; j < tc->num_candle_configs; j++) {
+					free((void *)tc->candle_configs[j].field_definitions);
+				}
+				free(tc->candle_configs);
 			}
-			free(tc->candle_configs);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -319,6 +358,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		}
 	}
 
+	/* Allocate worker thread resources */
 	tc->worker_threads = calloc(tc->num_workers, sizeof(pthread_t));
 	tc->worker_args = calloc(tc->num_workers,
 		sizeof(struct worker_thread_args));
@@ -333,16 +373,19 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		for(int i = 0; i < tc->num_candle_configs; i++) {
-			free((void *)tc->candle_configs[i].field_definitions);
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 		}
-		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
 		return NULL;
 	}
 
+	/* Create worker threads */
 	for (int i = 0; i < tc->num_workers; i++) {
 		tc->worker_args[i].cache = tc;
 		tc->worker_args[i].worker_id = i;
@@ -350,26 +393,33 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		ret = pthread_create(&tc->worker_threads[i], NULL,
 				worker_thread_main, &tc->worker_args[i]);
 		if (ret != 0) {
-			errmsg(stderr, "Failure on pthread_create() for worker\n");
-			tc->admin_state.done = true;
-			pthread_join(tc->admin_thread, NULL);
+			errmsg(stderr, "Failure on pthread_create() for worker %d: %s\n",
+				 i, strerror(ret));
+			/* Signal already created threads and admin to stop */
+			tc->admin_state.done = true; /* Try to stop admin if created */
 			for (int j = 0; j < i; j++) {
 				tc->worker_state_arr[j].done = true;
+			}
+			/* Join threads that were successfully created */
+			for (int j = 0; j < i; j++) {
 				pthread_join(tc->worker_threads[j], NULL);
 			}
+			/* Cleanup */
 			free(tc->worker_threads);
 			free(tc->worker_args);
-			for (int j = 0; j < tc->num_workers; j++) {
+			for (int j = 0; j < tc->num_workers; j++) { /* Destroy all states */
 				worker_state_destroy(&tc->worker_state_arr[j]);
 			}
 			free(tc->worker_state_arr);
 			admin_state_destroy(&tc->admin_state);
 			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
-			for(int j = 0; j < tc->num_candle_configs; j++) {
-				free((void *)tc->candle_configs[i].field_definitions);
+			if (tc->candle_configs) {
+				for (int j = 0; j < tc->num_candle_configs; j++) {
+					free((void *)tc->candle_configs[j].field_definitions);
+				}
+				free(tc->candle_configs);
 			}
-			free(tc->candle_configs);
 			symbol_table_destroy(tc->symbol_table);
 			pthread_key_delete(tc->pthread_trcache_key);
 			free(tc);
@@ -377,15 +427,22 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		}
 	}
 
+	/* Create admin thread */
 	ret = pthread_create(&tc->admin_thread, NULL, admin_thread_main, tc);
 	if (ret != 0) {
-		errmsg(stderr, "Failure on pthread_create() for admin\n");
-		free(tc->worker_threads);
-		free(tc->worker_args);
+		errmsg(stderr, "Failure on pthread_create() for admin: %s\n",
+			strerror(ret));
+		/* Signal all worker threads to stop */
 		for (int i = 0; i < tc->num_workers; i++) {
 			tc->worker_state_arr[i].done = true;
+		}
+		/* Join all worker threads */
+		for (int i = 0; i < tc->num_workers; i++) {
 			pthread_join(tc->worker_threads[i], NULL);
 		}
+		/* Cleanup */
+		free(tc->worker_threads);
+		free(tc->worker_args);
 		for (int i = 0; i < tc->num_workers; i++) {
 			worker_state_destroy(&tc->worker_state_arr[i]);
 		}
@@ -393,10 +450,12 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		admin_state_destroy(&tc->admin_state);
 		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
-		for(int i = 0; i < tc->num_candle_configs; i++) {
-			free((void *)tc->candle_configs[i].field_definitions);
+		if (tc->candle_configs) {
+			for (int i = 0; i < tc->num_candle_configs; i++) {
+				free((void *)tc->candle_configs[i].field_definitions);
+			}
+			free(tc->candle_configs);
 		}
-		free(tc->candle_configs);
 		symbol_table_destroy(tc->symbol_table);
 		pthread_key_delete(tc->pthread_trcache_key);
 		free(tc);
@@ -413,49 +472,72 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
  */
 void trcache_destroy(struct trcache *tc)
 {
+	struct trcache_tls_data *tls_data_ptr = NULL;
+
 	if (tc == NULL) {
 		return;
 	}
 
-	/* stop all threads */
-	tc->admin_state.done = true;
-	for (int i = 0; i < tc->num_workers; i++) {
-		tc->worker_state_arr[i].done = true;
+	/* Signal threads to stop */
+	if (!tc->admin_state.done) {
+		tc->admin_state.done = true;
+		pthread_join(tc->admin_thread, NULL);
 	}
 
-	pthread_join(tc->admin_thread, NULL);
 	for (int i = 0; i < tc->num_workers; i++) {
-		pthread_join(tc->worker_threads[i], NULL);
-	}
-
-	/* Return back trcache id */
-	pthread_key_delete(tc->pthread_trcache_key);
-
-	for (int i = 0; i < MAX_NUM_THREADS; i++) {
-		if (tc->tls_data_ptr_arr[i] != NULL) {
-			destroy_tls_data(tc->tls_data_ptr_arr[i]);
+		if (!tc->worker_state_arr[i].done) {
+			tc->worker_state_arr[i].done = true;
+			pthread_join(tc->worker_threads[i], NULL);
 		}
 	}
 
+	/* Destroy per-thread data that might still exist */
+	pthread_mutex_lock(&tc->tls_id_mutex);
+	for (int i = 0; i < MAX_NUM_THREADS; i++) {
+		tls_data_ptr = tc->tls_data_ptr_arr[i];
+		if (tls_data_ptr != NULL) {
+			/* Clear the pointer and mark as unused before destroying */
+			tc->tls_data_ptr_arr[i] = NULL;
+			tc->tls_id_assigned_flag[i] = 0;
+
+			/* Detach from pthread TLS mechanism *before* destroying */
+			if (pthread_getspecific(tc->pthread_trcache_key) == tls_data_ptr) {
+				pthread_setspecific(tc->pthread_trcache_key, NULL);
+			}
+			destroy_tls_data(tls_data_ptr);
+		}
+	}
+	pthread_mutex_unlock(&tc->tls_id_mutex);
+
+	/* Delete the TLS key itself */
+	pthread_key_delete(tc->pthread_trcache_key);
+
+	/* Destroy remaining shared resources */
 	pthread_mutex_destroy(&tc->tls_id_mutex);
-	
 	symbol_table_destroy(tc->symbol_table);
 	admin_state_destroy(&tc->admin_state);
 
 	for (int i = 0; i < tc->num_workers; i++) {
 		worker_state_destroy(&tc->worker_state_arr[i]);
 	}
-	
 	scq_destroy(tc->sched_msg_free_list);
 
+	/* Free arrays */
 	free(tc->worker_state_arr);
 	free(tc->worker_threads);
 	free(tc->worker_args);
-	free(tc->candle_configs);
 
+	/* Free deep-copied candle configs */
+	if (tc->candle_configs) {
+		for (int i = 0; i < tc->num_candle_configs; i++) {
+			free((void *)tc->candle_configs[i].field_definitions);
+		}
+		free(tc->candle_configs);
+	}
+
+	/* Free the main structure */
 	free(tc);
 }
-
 
 /**
  * @brief   Resolve symbol ID from string using TLS cache and shared table.
@@ -576,80 +658,6 @@ int trcache_lookup_symbol_id(struct trcache *tc, const char *symbol_str)
 }
 
 /**
- * @brief   Get symbol entry using thread-local cache.
- *
- * Checks the TLS vector cache first. If cache miss, look up in the global
- * symbol table, cache the result (expanding cache if needed), and return it.
- *
- * @param   tc:         Pointer to trcache instance.
- * @param   tls:        Pointer to thread-local storage data.
- * @param   symbol_id:  Symbol ID to lookup.
- *
- * @return  Pointer to the symbol_entry, or NULL on failure.
- */
-static struct symbol_entry *get_symbol_entry_tls(struct trcache *tc,
-	struct trcache_tls_data *tls, int symbol_id)
-{
-	struct symbol_entry *entry = NULL;
-	struct vector *cache_vec;
-
-	if (tls == NULL || symbol_id < 0) {
-		errmsg(stderr, "Invalid TLS data or symbol_id (%d)\n", symbol_id);
-		return NULL;
-	}
-
-	cache_vec = tls->symbol_entry_cache;
-
-	/* Check thread-local cache first */
-	if ((size_t)symbol_id < vector_size(cache_vec)) {
-		entry = *(struct symbol_entry **)vector_at(cache_vec, symbol_id);
-	}
-
-	/* Cache miss, look up in global table and cache it */
-	if (entry == NULL) {
-		entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
-		if (entry == NULL) {
-			/* Do not log error here, caller might handle "not found" */
-			return NULL;
-		}
-
-		/* Ensure cache vector is large enough */
-		if ((size_t)symbol_id >= vector_size(cache_vec)) {
-			size_t current_size = vector_size(cache_vec);
-			size_t required_size = (size_t)symbol_id >= current_size * 2 ?
-				(size_t)symbol_id + 1 : current_size * 2;
-
-			if (required_size == 0) {
-				required_size = 4096; /* Initial size */
-			}
-
-			if (vector_reserve(cache_vec, required_size) != 0) {
-				errmsg(stderr,
-					"Failed to reserve space in symbol_entry_cache for id %d\n",
-					 symbol_id);
-				return entry;
-			}
-
-			/* Fill the gap with NULL */
-			struct symbol_entry *null_entry = NULL;
-			while (vector_size(cache_vec) <= (size_t)symbol_id) {
-				if (vector_push_back(cache_vec, &null_entry) != 0) {
-					errmsg(stderr,
-						"Failed to push NULL into symbol_entry_cache at %zu\n",
-						vector_size(cache_vec));
-					return entry;
-				}
-			}
-		}
-
-		/* Cache the newly found entry */
-		*(struct symbol_entry **)vector_at(cache_vec, symbol_id) = entry;
-	}
-
-	return entry;
-}
-
-/**
  * @brief   Obtain candle chunk list for given symbol and type.
  *
  * Internal static function. Uses thread-local cache first.
@@ -658,17 +666,9 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 	int symbol_id, int candle_idx)
 {
 	struct symbol_entry *entry = NULL;
-	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 
-	if (tls == NULL) {
-		errmsg(stderr, "Failed to get TLS data in get_chunk_list\n");
-		return NULL;
-	}
-
-	entry = get_symbol_entry_tls(tc, tls, symbol_id);
+	entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 	if (entry == NULL) {
-		errmsg(stderr, "Symbol id %d not found via TLS cache or global table\n",
-			symbol_id);
 		return NULL;
 	}
 
@@ -754,8 +754,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 		return -1;
 	}
 
-	/* Get symbol entry using TLS cache */
-	symbol_entry = get_symbol_entry_tls(tc, tls_data_ptr, symbol_id);
+	symbol_entry = symbol_table_lookup_entry(tc->symbol_table, symbol_id);
 	if (symbol_entry == NULL) {
 		errmsg(stderr, "Symbol id %d not found via TLS or global table\n",
 			symbol_id);
@@ -947,6 +946,7 @@ void trcache_print_worker_distribution(struct trcache *tc)
 	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	double capacity[WORKER_STAT_STAGE_NUM] = { 0.0, };
 	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
+	struct symbol_entry *e;
 	int end;
 
 	if (!tc) {
@@ -982,9 +982,6 @@ void trcache_print_worker_distribution(struct trcache *tc)
 
 	{
 		struct symbol_table *table = tc->symbol_table;
-		struct atomsnap_version *ver
-			= atomsnap_acquire_version(table->symbol_ptr_array_gate);
-		struct symbol_entry **arr = (struct symbol_entry **)ver->object;
 		int num = table->num_symbols;
 
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
@@ -992,7 +989,7 @@ void trcache_print_worker_distribution(struct trcache *tc)
 		}
 
 		for (int i = 0; i < num; i++) {
-			struct symbol_entry *e = arr[i];
+			e = &table->symbol_entries[i];
 
 			for (int j = 0; j < tc->num_candle_configs; j++) {
 				struct sched_stage_rate *r
@@ -1006,8 +1003,6 @@ void trcache_print_worker_distribution(struct trcache *tc)
 					+= (double)r->flushable_batch_rate;
 			}
 		}
-
-		atomsnap_release_version(ver);
 	}
 
 	compute_stage_limits(tc, limits);
@@ -1108,6 +1103,8 @@ void trcache_print_total_memory_breakdown(struct trcache *cache)
 int trcache_get_worker_distribution(struct trcache *cache,
 	trcache_worker_distribution_stats *stats)
 {
+	struct symbol_entry *e;
+
 	if (!cache || !stats) {
 		return -1;
 	}
@@ -1142,9 +1139,6 @@ int trcache_get_worker_distribution(struct trcache *cache,
 
 	{
 		struct symbol_table *table = cache->symbol_table;
-		struct atomsnap_version *ver
-			= atomsnap_acquire_version(table->symbol_ptr_array_gate);
-		struct symbol_entry **arr = (struct symbol_entry **)ver->object;
 		int num = table->num_symbols;
 
 		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
@@ -1152,7 +1146,7 @@ int trcache_get_worker_distribution(struct trcache *cache,
 		}
 
 		for (int i = 0; i < num; i++) {
-			struct symbol_entry *e = arr[i];
+			e = &table->symbol_entries[i];
 
 			for (int j = 0; j < cache->num_candle_configs; j++) {
 				struct sched_stage_rate *r
@@ -1166,8 +1160,6 @@ int trcache_get_worker_distribution(struct trcache *cache,
 					+= (double)r->flushable_batch_rate;
 			}
 		}
-
-		atomsnap_release_version(ver);
 	}
 
 	compute_stage_limits(cache, stats->stage_limits);

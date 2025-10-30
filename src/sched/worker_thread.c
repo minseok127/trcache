@@ -81,86 +81,6 @@ static void worker_remove_work(struct worker_state *state, uint64_t key)
 }
 
 /**
- * @brief   Get symbol entry using worker-local cache.
- *
- * Checks the worker's local cache vector first. If cache miss, look up in the
- * global symbol table, cache the result (expanding cache if needed),
- * and return it. Newly expanded cache slots are initialized to NULL.
- *
- * @param   cache:      Pointer to the global trcache instance.
- * @param   state:      Pointer to the worker's state containing the cache.
- * @param   symbol_id:  Symbol ID to lookup.
- *
- * @return  Pointer to the symbol_entry, or NULL on failure.
- */
-static struct symbol_entry *worker_get_symbol_entry(struct trcache *cache,
-	struct worker_state *state, int symbol_id)
-{
-	struct symbol_entry *entry = NULL;
-	struct vector *cache_vec;
-
-	if (state == NULL || symbol_id < 0) {
-		errmsg(stderr, "Invalid worker state or symbol_id (%d)\n", symbol_id);
-		return NULL;
-	}
-
-	cache_vec = state->symbol_entry_cache;
-	if (cache_vec == NULL) {
-		/* Should not happen if worker_state_init succeeded */
-		errmsg(stderr, "Worker symbol entry cache is NULL for worker %d\n",
-			state->worker_id);
-		return NULL;
-	}
-
-	/* Check worker-local cache first */
-	if ((size_t)symbol_id < vector_size(cache_vec)) {
-		entry = *(struct symbol_entry **)vector_at(cache_vec, symbol_id);
-	}
-
-	/* Cache miss, look up in global table and cache it */
-	if (entry == NULL) {
-		entry = symbol_table_lookup_entry(cache->symbol_table, symbol_id);
-		if (entry == NULL) {
-			return NULL;
-		}
-
-		/* Ensure cache vector is large enough */
-		if ((size_t)symbol_id >= vector_size(cache_vec)) {
-			size_t current_size = vector_size(cache_vec);
-			size_t required_size = (size_t)symbol_id >= current_size * 2 ?
-				(size_t)symbol_id + 1 : current_size * 2;
-
-			if (required_size == 0) {
-				required_size = 4096; /* Initial size */
-			}
-
-			if (vector_reserve(cache_vec, required_size) != 0) {
-				errmsg(stderr,
-					"Worker %d failed to reserve space for id %d\n",
-					state->worker_id, symbol_id);
-				return entry;
-			}
-
-			/* Fill the gap with NULL */
-			struct symbol_entry *null_entry = NULL;
-			while (vector_size(cache_vec) <= (size_t)symbol_id) {
-				if (vector_push_back(cache_vec, &null_entry) != 0) {
-					errmsg(stderr,
-						"Worker %d failed to push NULL at index %zu\n",
-						state->worker_id, vector_size(cache_vec));
-					return entry;
-				}
-			}
-		}
-
-		/* Cache the newly found entry */
-		*(struct symbol_entry **)vector_at(cache_vec, symbol_id) = entry;
-	}
-
-	return entry;
-}
-
-/**
  * @brief   Process a SCHED_MSG_ADD_WORK message.
  *
  * @param   cache:  Global cache instance.
@@ -171,7 +91,7 @@ static void worker_handle_add_work(struct trcache *cache,
 	struct worker_state *state, struct sched_work_cmd *cmd)
 {
 	struct symbol_entry *entry
-		= worker_get_symbol_entry(cache, state, cmd->symbol_id);
+		= symbol_table_lookup_entry(cache->symbol_table, cmd->symbol_id);
 	int cur_val, expected = -1;
 	uint64_t key;
 
@@ -203,7 +123,7 @@ static void worker_handle_remove_work(struct trcache *cache,
 	struct worker_state *state, struct sched_work_cmd *cmd)
 {
 	struct symbol_entry *entry
-		= worker_get_symbol_entry(cache, state, cmd->symbol_id);
+		= symbol_table_lookup_entry(cache->symbol_table, cmd->symbol_id);
 	uint64_t key;
 	int cur;
 
@@ -339,14 +259,9 @@ static void worker_execute_item(struct trcache *cache,
 	struct worker_state *state, struct worker_work_item *item)
 {
 	struct symbol_entry *entry
-		= worker_get_symbol_entry(cache, state, item->key.symbol_id);
+		= symbol_table_lookup_entry(cache->symbol_table, item->key.symbol_id);
 
 	if (!entry) {
-		errmsg(stderr,
-			"Worker %d: Symbol %d not found for work item "
-			"stage %d, candle %d. Removing item.\n",
-			state->worker_id, item->key.symbol_id,
-			item->key.stage, item->key.candle_idx);
 		return;
 	}
 
@@ -379,8 +294,8 @@ static void worker_run_all_work(struct trcache *cache,
 	
 	while (pos != &state->work_list) {
 		item = list_entry(pos, struct worker_work_item, node);
-		worker_execute_item(cache, state, item);
 		pos = pos->next;
+		worker_execute_item(cache, state, item);
 	}
 }
 
@@ -397,7 +312,6 @@ int worker_state_init(struct trcache *tc, int worker_id)
 {
 	struct worker_state *state;
 	size_t initial_cap = 4096;
-	struct symbol_entry *null_entry = NULL;
 
 	if (!tc) {
 		errmsg(stderr, "Invalid trcache pointer\n");
@@ -422,36 +336,6 @@ int worker_state_init(struct trcache *tc, int worker_id)
 		errmsg(stderr, "work_map allocation failed\n");
 		scq_destroy(state->sched_msg_queue);
 		return -1;
-	}
-
-	state->symbol_entry_cache = vector_init(sizeof(struct symbol_entry *));
-	if (state->symbol_entry_cache == NULL) {
-		errmsg(stderr, "Worker %d: symbol_entry_cache vector_init failed\n",
-			worker_id);
-		scq_destroy(state->sched_msg_queue);
-		ht_destroy(state->work_map);
-		return -1;
-	}
-
-	if (vector_reserve(state->symbol_entry_cache, initial_cap) != 0) {
-		errmsg(stderr, "Worker %d: symbol_entry_cache vector_reserve failed\n",
-			worker_id);
-		scq_destroy(state->sched_msg_queue);
-		ht_destroy(state->work_map);
-		vector_destroy(state->symbol_entry_cache);
-		return -1;
-	}
-
-	for (size_t i = 0; i < initial_cap; i++) {
-		if (vector_push_back(state->symbol_entry_cache, &null_entry) != 0) {
-			errmsg(stderr,
-				"Worker %d: failed to push initial NULL at index %zu\n",
-				worker_id, i);
-			scq_destroy(state->sched_msg_queue);
-			ht_destroy(state->work_map);
-			vector_destroy(state->symbol_entry_cache);
-			return -1;
-		}
 	}
 	
 	INIT_LIST_HEAD(&state->work_list);
@@ -491,11 +375,6 @@ void worker_state_destroy(struct worker_state *state)
 
 		ht_destroy(state->work_map);
 		state->work_map = NULL;
-	}
-
-	if (state->symbol_entry_cache) {
-		vector_destroy(state->symbol_entry_cache);
-		state->symbol_entry_cache = NULL;
 	}
 }
 

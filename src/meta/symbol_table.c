@@ -19,68 +19,15 @@
 #include "trcache.h"
 
 /**
- * @brief   atomsnap version allocation callback.
- *
- * Allocates a new atomsnap_version and its underlying array of
- * symbol_entry pointers.
- *
- * @param   arg:  Capacity for the pointer array (cast via (uint64_t)arg).
- *
- * @return  Pointer to initialized atomsnap_version, or NULL on error.
- */
-static struct atomsnap_version *symbol_array_version_alloc(void *arg) {
-	struct atomsnap_version *version = malloc(sizeof(struct atomsnap_version));
-	uint64_t capacity = (uint64_t)arg;
-
-	if (version == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
-		return NULL;
-	}
-
-	/* Allocate symbol_entry pointer array */
-	version->object = malloc(capacity * sizeof(void *));
-	if (version->object == NULL) {
-		errmsg(stderr, "Allocation of array is failed\n");
-		free(version);
-		return NULL;
-	}
-
-	version->free_context = NULL;
-
-	/* atomsnap_make_version initializes gate and opaque */
-	return version;
-}
-
-/**
- * @brief   atomsnap version free callback.
- *
- * Frees the object array and the version struct itself.
- *
- * @param   version: atomsnap_version to free.
- */
-static void symbol_array_version_free(struct atomsnap_version *version) {
-	struct symbol_entry **symbol_array
-		= (struct symbol_entry **) version->object;
-	free(symbol_array);
-	free(version);
-}
-
-/**
  * @brief   Create a new symbol_table.
  *
- * @param   initial_capacity: Initial bucket/array size (power of two).
+ * @param   max_capacity: The maximum number of symbols to support (fixed size).
  *
  * @return  Pointer to a newly allocated symbol_table, or NULL on error.
  *
- * @thread-safety Single-threaded: must be called before any concurrent access.
  */
-struct symbol_table *symbol_table_init(int initial_capacity)
+struct symbol_table *symbol_table_init(int max_capacity)
 {
-	struct atomsnap_init_context ctx = {
-		.atomsnap_alloc_impl = symbol_array_version_alloc,
-		.atomsnap_free_impl = symbol_array_version_free
-	};
-	struct atomsnap_version *symbol_ptr_array_version = NULL;
 	struct symbol_table *table = calloc(1, sizeof(struct symbol_table));
 
 	if (table == NULL) {
@@ -102,34 +49,22 @@ struct symbol_table *symbol_table_init(int initial_capacity)
 
 	if (table->symbol_id_map == NULL) {
 		errmsg(stderr, "Failure on ht_create()\n");
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
 		free(table);
 		return NULL;
 	}
 
-	/* Create gate for version management */
-	table->symbol_ptr_array_gate = atomsnap_init_gate(&ctx);
-	if (table->symbol_ptr_array_gate == NULL) {
-		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
+	/* Pre-allocate the fixed-size symbol entry array */
+	table->symbol_entries = calloc(max_capacity, sizeof(struct symbol_entry));
+	if (table->symbol_entries == NULL) {
+		errmsg(stderr, "Allocation of symbol_entries array failed\n");
 		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
 		free(table);
 		return NULL;
 	}
 
-	/* Install initial empty version */
-	symbol_ptr_array_version = atomsnap_make_version(
-		table->symbol_ptr_array_gate, (void *)(uintptr_t)initial_capacity);
-	if (symbol_ptr_array_version == NULL) {
-		errmsg(stderr, "Failure on atomsnap_make_version()\n");
-		atomsnap_destroy_gate(table->symbol_ptr_array_gate);
-		ht_destroy(table->symbol_id_map);
-		free(table);
-		return NULL;
-	}
-
-	atomsnap_exchange_version(table->symbol_ptr_array_gate,
-		symbol_ptr_array_version);
-
-	table->capacity = initial_capacity;
+	table->capacity = max_capacity;
 	table->num_symbols = 0;
 
 	return table;
@@ -139,13 +74,9 @@ struct symbol_table *symbol_table_init(int initial_capacity)
  * @brief   Destroy a symbol_table and free all resources.
  *
  * @param   symbol_table:	Pointer returned by init_symbol_table().
- *
- * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
 void symbol_table_destroy(struct symbol_table *table)
 {
-	struct symbol_entry **symbol_ptr_array = NULL;
-	struct atomsnap_version *version = NULL;
 	struct symbol_entry *entry = NULL;
 
 	if (table == NULL) {
@@ -156,10 +87,8 @@ void symbol_table_destroy(struct symbol_table *table)
 
 	pthread_mutex_destroy(&table->ht_hash_table_mutex);
 
-	version = atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	symbol_ptr_array = (struct symbol_entry **) version->object;
 	for (int i = 0; i < table->num_symbols; i++) {
-		entry = symbol_ptr_array[i];
+		entry = &table->symbol_entries[i];
 
 		for (int j = 0; j < MAX_CANDLE_TYPES; j++) {
 			if (entry->candle_chunk_list_ptrs[j] != NULL) {
@@ -170,41 +99,28 @@ void symbol_table_destroy(struct symbol_table *table)
 
 		trade_data_buffer_destroy(entry->trd_buf);
 		free(entry->symbol_str);
-		free(entry);
 	}
-	atomsnap_release_version(version);
 
-	/* This will call symbol_array_version_free() */
-	atomsnap_destroy_gate(table->symbol_ptr_array_gate);
-
+	free(table->symbol_entries);
 	free(table);
 }
 
 /**
  * @brief   Lookup a symbol by ID.
  *
- * Lock-free, reader-safe via atomsnap.
- *
  * @param   table:     Pointer to symbol_table.
  * @param   symbol_id: Symbol ID to lookup.
  *
  * @return  Pointer to #symbol_entry, or NULL if out of range.
- *
- * @thread-safety Safe for concurrent readers.
  */
 struct symbol_entry *symbol_table_lookup_entry(
 	struct symbol_table *table, int symbol_id)
 {
-	struct atomsnap_version *version =
-		atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	struct symbol_entry **ptr_array = (struct symbol_entry **) version->object;
 	struct symbol_entry *result = NULL;
 
 	if (symbol_id >= 0 && symbol_id < table->num_symbols) {
-		result = ptr_array[symbol_id];
+		result = &table->symbol_entries[symbol_id];
 	}
-
-	atomsnap_release_version(version);
 
 	return result;
 }
@@ -239,33 +155,27 @@ int symbol_table_lookup_symbol_id(struct symbol_table *table,
 }
 
 /**
- * @brief   Allocate a new symbol entry.
+ * @brief   Initialize a new symbol entry.
  *
  * @param   tc:          Pointer to the #trcache.
+ * @param   entry:       Pointer to the pre-allocated symbol_entry slot.
  * @param   id:          Symbol ID to assign.
  * @param   symbol_str:  Symbol string to assign.
  *
- * @return  Pointer to entry, or NULL on failure.
+ * @return  0 on success, -1 on failure.
  */
-static struct symbol_entry *init_symbol_entry(
-	struct trcache *tc, int id, const char *symbol_str)
+static int init_symbol_entry(struct trcache *tc,
+	struct symbol_entry *entry, int id, const char *symbol_str)
 {
 	struct candle_chunk_list_init_ctx ctx = { 0, };
-	struct symbol_entry *entry = calloc(1, sizeof(struct symbol_entry));
 	struct candle_chunk_list *candle_chunk_list_ptr;
-
-	if (entry == NULL) {
-		errmsg(stderr, "#symbol_entry allocation failed\n");
-		return NULL;
-	}
 
 	entry->symbol_str = duplicate_symbol_str(symbol_str,
 		strlen(symbol_str) + 1);
 
 	if (entry->symbol_str == NULL) {
 		errmsg(stderr, "Failure on duplicate_symbol_str()\n");
-		free(entry);
-		return NULL;
+		return -1;
 	}
 
 	entry->trd_buf = trade_data_buffer_init(tc, id);
@@ -273,8 +183,8 @@ static struct symbol_entry *init_symbol_entry(
 	if (entry->trd_buf == NULL) {
 		errmsg(stderr, "Allocation of trade_data_buffer is failed\n");
 		free(entry->symbol_str);
-		free(entry);
-		return NULL;
+		entry->symbol_str = NULL;
+		return -1;
 	}
 
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
@@ -298,8 +208,9 @@ static struct symbol_entry *init_symbol_entry(
 
 			trade_data_buffer_destroy(entry->trd_buf);
 			free(entry->symbol_str);
-			free(entry);
-			return NULL;
+			entry->symbol_str = NULL;
+			entry->trd_buf = NULL;
+			return -1;
 		}
 
 		entry->candle_chunk_list_ptrs[i] = candle_chunk_list_ptr;
@@ -307,7 +218,7 @@ static struct symbol_entry *init_symbol_entry(
 
 	entry->id = id;
 
-	return entry;
+	return 0;
 }
 
 /**
@@ -327,14 +238,32 @@ static struct symbol_entry *init_symbol_entry(
 int symbol_table_register(struct trcache *tc, struct symbol_table *table,
 	const char *symbol_str)
 {
-	struct symbol_entry **symbol_array = NULL;
-	struct atomsnap_version *version = NULL, *new_version = NULL;
-	int id, oldcap, newcap;
+	struct symbol_entry *entry = NULL;
+	bool found = false;
+	void *value;
+	int id;
 
 	pthread_mutex_lock(&table->ht_hash_table_mutex);
 
+	/* Check if symbol is already registered */
+	value = ht_find(table->symbol_id_map, symbol_str,
+			strlen(symbol_str) + 1, &found);
+	if (found) {
+		pthread_mutex_unlock(&table->ht_hash_table_mutex);
+		return (int)(uintptr_t)value;
+	}
+
 	id = table->num_symbols;
 
+	/* Check if table is full */
+	if (id >= table->capacity) {
+		errmsg(stderr, "Symbol table is full. Max capacity: %d\n",
+			table->capacity);
+		pthread_mutex_unlock(&table->ht_hash_table_mutex);
+		return -1;
+	}
+
+	/* Insert into hash map first */
 	if (ht_insert(table->symbol_id_map, symbol_str,
 			strlen(symbol_str) + 1, /* string + NULL */
 			(void *)(uintptr_t)id) < 0) {
@@ -343,45 +272,17 @@ int symbol_table_register(struct trcache *tc, struct symbol_table *table,
 		return -1;
 	}
 
-	version = atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	symbol_array = (struct symbol_entry **) version->object;
-	oldcap = table->capacity;
-
-	/* Resize the array (CoW) */
-	if (id >= oldcap) {
-		newcap = oldcap * 2;
-
-		new_version = atomsnap_make_version(
-			table->symbol_ptr_array_gate, (void *)(uintptr_t)newcap);
-
-		if (new_version == NULL) {
-			errmsg(stderr, "Failure on atomsnap_make_version()\n");
-			pthread_mutex_unlock(&table->ht_hash_table_mutex);
-			return -1;
-		}
-
-		memcpy((struct symbol_entry **) new_version->object,
-			(struct symbol_entry **) version->object,
-			oldcap * sizeof(struct symbol_entry *));
-
-		table->capacity = newcap;
-
-		symbol_array = (struct symbol_entry **) new_version->object;
-
-		atomsnap_exchange_version(table->symbol_ptr_array_gate, new_version);
-	}
-
-	symbol_array[id] = init_symbol_entry(tc, id, symbol_str);
-
-	if (symbol_array[id] == NULL) {
-		atomsnap_release_version(version);
+	/* Get the pre-allocated slot and initialize it */
+	entry = &table->symbol_entries[id];
+	if (init_symbol_entry(tc, entry, id, symbol_str) != 0) {
+		errmsg(stderr, "Failure on init_symbol_entry() for id %d\n", id);
+		/* Rollback ht_insert */
+		ht_remove(table->symbol_id_map, symbol_str, strlen(symbol_str) + 1);
 		pthread_mutex_unlock(&table->ht_hash_table_mutex);
 		return -1;
 	}
 
 	table->num_symbols++;
-
-	atomsnap_release_version(version);
 
 	pthread_mutex_unlock(&table->ht_hash_table_mutex);
 

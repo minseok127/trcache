@@ -13,7 +13,6 @@
 #include "meta/symbol_table.h"
 #include "sched/sched_pipeline_stats.h"
 #include "sched/worker_thread.h"
-#include "concurrent/atomsnap.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
 
@@ -77,19 +76,13 @@ void admin_state_destroy(struct admin_state *state)
 void update_all_pipeline_stats(struct trcache *cache)
 {
 	struct symbol_table *table = cache->symbol_table;
-	struct atomsnap_version *ver = NULL;
-	struct symbol_entry **arr = NULL;
 	int num = 0;
 
-	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	arr = (struct symbol_entry **)ver->object;
 	num = table->num_symbols;
 
 	for (int i = 0; i < num; i++) {
-		sched_pipeline_calc_rates(cache, arr[i]);
+		sched_pipeline_calc_rates(cache, &table->symbol_entries[i]);
 	}
-
-	atomsnap_release_version(ver);
 }
 
 /**
@@ -143,9 +136,6 @@ static void compute_worker_speeds(struct trcache *cache, double *out)
 static void compute_pipeline_demand(struct trcache *cache, double *out)
 {
 	struct symbol_table *table = cache->symbol_table;
-	struct atomsnap_version *ver
-		= atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	struct symbol_entry **arr = (struct symbol_entry **)ver->object;
 	int num = table->num_symbols;
 
 	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
@@ -153,7 +143,7 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 	}
 
 	for (int i = 0; i < num; i++) {
-		struct symbol_entry *e = arr[i];
+		struct symbol_entry *e = &table->symbol_entries[i];
 
 		for (int j = 0; j < cache->num_candle_configs; j++) {
 			struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[j];
@@ -163,8 +153,6 @@ static void compute_pipeline_demand(struct trcache *cache, double *out)
 			out[WORKER_STAT_STAGE_FLUSH] += (double)r->flushable_batch_rate;
 		}
 	}
-
-	atomsnap_release_version(ver);
 }
 
 /**
@@ -799,9 +787,7 @@ void compute_stage_starts(struct trcache *cache, int *limits, int *start)
 static void balance_workers(struct trcache *cache)
 {
 	struct symbol_table *table = cache->symbol_table;
-	struct atomsnap_version *ver = NULL;
-	struct symbol_entry **arr = NULL;
-	int num = 0;
+	int num = table->num_symbols;
 	int limits[WORKER_STAT_STAGE_NUM] = { 0, };
 	int stage_start[WORKER_STAT_STAGE_NUM] = { 0, };
 	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0, } };
@@ -830,15 +816,10 @@ static void balance_workers(struct trcache *cache)
 		return;
 	}
 
-	ver = atomsnap_acquire_version(table->symbol_ptr_array_gate);
-	arr = (struct symbol_entry **)ver->object;
-	num = table->num_symbols;
-
 	for (int i = 0; i < num; i++) {
-		schedule_symbol_work(cache, arr[i], load, limits, stage_start);
+		schedule_symbol_work(cache, &table->symbol_entries[i],
+			load, limits, stage_start);
 	}
-
-	atomsnap_release_version(ver);
 }
 
 /**

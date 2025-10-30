@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <pthread.h>
 
-#include "concurrent/atomsnap.h"
 #include "pipeline/candle_chunk_list.h"
 #include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
@@ -37,17 +36,16 @@ struct symbol_entry {
  *
  * @ht_hash_table_mutex:    Protects registration path.
  * @symbol_id_map:          Hash table that maps from string to ID.
- * @symbol_ptr_array_gate:  Gate for snapshot versioning.
+ * @symbol_entries:         Pre-allocated array of all symbol entries.
  * @num_symbols:            Number of registered symbols.
  * @capacity:               Allocated array capacity.
  *
  * This table holds the symbol entries accessed by both user and system threads.
- * Synchronization for table expansion is handled through atomsnap.
  */
 struct symbol_table {
 	pthread_mutex_t ht_hash_table_mutex;
 	struct ht_hash_table *symbol_id_map;
-	struct atomsnap_gate *symbol_ptr_array_gate;
+	struct symbol_entry *symbol_entries;
 	int num_symbols;
 	int capacity;
 };
@@ -55,34 +53,26 @@ struct symbol_table {
 /**
  * @brief   Create a new symbol_table.
  *
- * @param   initial_capacity: Initial bucket/array size (power of two).
+ * @param   max_capacity: The maximum number of symbols to support (fixed size).
  *
  * @return  Pointer to a newly allocated symbol_table, or NULL on error.
- *
- * @thread-safety Single-threaded: must be called before any concurrent access.
  */
-struct symbol_table *symbol_table_init(int initial_capacity);
+struct symbol_table *symbol_table_init(int max_capacity);
 
 /**
  * @brief   Destroy a symbol_table and free all resources.
  *
  * @param   symbol_table:	Pointer returned by init_symbol_table().
- *
- * @thread-safety Single-threaded: ensure no other threads are using the table.
  */
 void symbol_table_destroy(struct symbol_table *symbol_table);
 
 /**
- * @brief   Lookup a symbol entry by ID.
- *
- * Lock-free, reader-safe via atomsnap.
+ * @brief   Lookup a symbol by ID.
  *
  * @param   table:     Pointer to symbol_table.
  * @param   symbol_id: Symbol ID to lookup.
  *
  * @return  Pointer to #symbol_entry, or NULL if out of range.
- *
- * @thread-safety Safe for concurrent readers.
  */
 struct symbol_entry *symbol_table_lookup_entry(
 	struct symbol_table *table, int symbol_id);
