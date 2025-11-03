@@ -162,13 +162,15 @@ static void trcache_per_thread_destructor(void *value)
  */
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
-	struct trcache *tc = calloc(1, sizeof(struct trcache));
+	struct trcache *tc = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trcache));
 	int ret;
 
 	if (tc == NULL) {
 		errmsg(stderr, "#trcache allocation failed\n");
 		return NULL;
 	}
+
+	memset(tc, 0, sizeof(struct trcache));
 
 	/* Validate ctx input first */
 	if (ctx == NULL || ctx->max_symbols <= 0 || ctx->num_worker_threads <= 0) {

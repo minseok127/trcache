@@ -39,25 +39,29 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 		return NULL;
 	}
 
-	buf = malloc(sizeof(struct trade_data_buffer));
+	buf = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trade_data_buffer));
 
 	if (buf == NULL) {
 		errmsg(stderr, "#trade_data_buffer allocation failed\n");
 		return NULL;
 	}
 
+	memset(buf, 0, sizeof(struct trade_data_buffer));
+
 	buf->mem_acc = &tc->mem_acc;
 
 	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
 		sizeof(struct trade_data_buffer));
 
-	chunk = malloc(sizeof(struct trade_data_chunk));
+	chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trade_data_chunk));
 
 	if (chunk == NULL) {
 		errmsg(stderr, "#trade_data_chunk allocation failed\n");
 		free(buf);
 		return NULL;
 	}
+
+	memset(chunk, 0, sizeof(struct trade_data_chunk));
 
 	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
 		sizeof(struct trade_data_chunk));
@@ -157,11 +161,15 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			list_move_tail(free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
 		} else {
-			new_chunk = malloc(sizeof(struct trade_data_chunk));
+			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
+				sizeof(struct trade_data_chunk));
+
 			if (new_chunk == NULL) {
 				errmsg(stderr, "#trade_data_chunk allocation failed\n");
 				return -1;
 			}
+
+			memset(new_chunk, 0, sizeof(struct trade_data_chunk));
 
 			memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
 				sizeof(struct trade_data_chunk));

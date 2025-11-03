@@ -38,13 +38,13 @@ struct candle_row_page {
  *
  * @spinlock:             Lock used to protect the candle being updated.
  * @num_completed:        Number of records (candles) immutable.
- * @num_converted:        Number of records (candles) converted to column batch.
  * @mutable_page_idx:     Page index of the candle being updated.
  * @mutable_row_idx:      Index of the row being updated within the page.
+ * @num_converted:        Number of records (candles) converted to column batch.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
- * @is_flushed:           Flag to indicate flush state.
  * @flush_handle:         Returned pointer of trcache_batch_flush_ops->flush().
+ * @is_flushed:           Flag to indicate flush state.
  * @next:                 Linked list pointer to the next chunk.
  * @prev:                 Linked list pointer to the previous chunk.
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
@@ -58,22 +58,46 @@ struct candle_row_page {
  * efficient processing.
  */
 struct candle_chunk {
+	/*
+	 * Group 1: Apply-thread hot data (exclusive write access).
+	 * Also contented by readers querying the mutable candle.
+	 */
+	____cacheline_aligned
 	pthread_spinlock_t spinlock;
 	_Atomic int num_completed;
-	_Atomic int num_converted;
 	int mutable_page_idx;
 	int mutable_row_idx;
+
+	/*
+	 * Group 2: Convert-thread hot data (exclusive write access).
+	 * Written only by the CONVERT worker.
+	 */
+	____cacheline_aligned
+	_Atomic int num_converted;
 	int converting_page_idx;
 	int converting_row_idx;
-	int is_flushed;
+
+	/*
+	 * Group 3: Flush-thread cold data (exclusive, infrequent write).
+	 * Written once by the FLUSH worker.
+	 */
+	____cacheline_aligned
 	void *flush_handle;
+	int is_flushed;
+
+	/*
+	 * Group 4: Pointers and Read-mostly / Cold data.
+	 * These are pointers (mostly read-only) or written once at init.
+	 */
+	____cacheline_aligned
 	struct candle_chunk *next;
 	struct candle_chunk *prev;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
 	struct trcache *trc;
-};
+
+} ____cacheline_aligned;
 
 /**
  * @brief   Compute the linear index of a record in the chunk.

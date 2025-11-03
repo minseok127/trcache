@@ -55,13 +55,19 @@ struct candle_chunk_list_init_ctx {
 /*
  * candle_chunk_list - List of chunks containing candles (row and column batch).
  *
- * @mutable_seq:             Sequence number of mutable candle.
- * @last_seq_converted:      Highest seqnum already converted to COLUMN batch.
- * @unflushed_batch_count:   Number of batches not yet flushed.
- * @tail:                    Tail of the linked list where new chunks are added.
  * @candle_mutable_chunk:    Chunk containing mutable candle.
+ * @tail:                    Tail of the linked list where new chunks are added.
+ * @mutable_seq:             Sequence number of mutable candle.
+ * @ema_cycles_per_apply:    EMA cycles per single APPLY item.
  * @converting_chunk:        Chunk being converted to a column batch.
+ * @last_seq_converted:      Highest seqnum already converted to COLUMN batch.
+ * @ema_cycles_per_convert:  EMA cycles per single CONVERT item.
  * @head_gate:               Gate managing head versions.
+ * @ema_cycles_per_flush:    EMA cycles per single FLUSH item.
+ * @apply_worker_id:         Ownership of APPLY stage.
+ * @convert_worker_id:       Ownership of CONVERT stage.
+ * @flush_worker_id:         Ownership of FLUSH stage.
+ * @unflushed_batch_count:   Number of batches not yet flushed.
  * @config:                  Pointer to the configuration for this candle type.
  * @trc:                     #trcache back-pointer.
  * @chunk_index:             Chunk index based on sequence number and timestamp.
@@ -70,20 +76,62 @@ struct candle_chunk_list_init_ctx {
  * @symbol_id:               Integer symbol ID resolved via symbol table.
  */
 struct candle_chunk_list {
-	_Atomic uint64_t mutable_seq;
-	_Atomic uint64_t last_seq_converted;
-	_Atomic int unflushed_batch_count;
-	struct candle_chunk *tail;
+	/*
+	 * Group 1: Apply-thread hot data (exclusive write access).
+	 * Written only by the worker that owns the APPLY task.
+	 */
+	____cacheline_aligned
 	struct candle_chunk *candle_mutable_chunk;
+	struct candle_chunk *tail;
+	_Atomic uint64_t mutable_seq;
+	_Atomic uint64_t ema_cycles_per_apply;
+
+	/*
+	 * Group 2: Convert-thread hot data (exclusive write access).
+	 * Written only by the worker that owns the CONVERT task.
+	 */
+	____cacheline_aligned	
 	struct candle_chunk *converting_chunk;
+	_Atomic uint64_t last_seq_converted;
+	_Atomic uint64_t ema_cycles_per_convert;
+
+	/*
+	 * Group 3: Flush-thread hot data (exclusive write access).
+	 * Written only by the worker that owns the FLUSH task.
+	 */
+	____cacheline_aligned
 	struct atomsnap_gate *head_gate;
+	_Atomic uint64_t ema_cycles_per_flush;
+
+	/*
+	 * Group 4: High-contention worker claim atomics (True Sharing).
+	 * Written via CAS by *any* worker attempting to claim a task.
+	 */
+	____cacheline_aligned
+	_Atomic int apply_worker_id;
+	_Atomic int convert_worker_id;
+	_Atomic int flush_worker_id;
+
+	/*
+	 * Group 5: Shared counter (True Sharing).
+	 * Written by CONVERT (add) and FLUSH (sub) workers.
+	 */
+	____cacheline_aligned
+	_Atomic int unflushed_batch_count;
+
+	/*
+	 * Group 6: Read-mostly / Cold data.
+	 * Initialized once, then read frequently. No false-sharing risk.
+	 */
+	____cacheline_aligned
 	const struct trcache_candle_config *config;
 	struct trcache *trc;
 	struct candle_chunk_index *chunk_index;
 	int row_page_count;
 	int candle_idx;
 	int symbol_id;
-};
+
+} ____cacheline_aligned;
 
 /**
  * @brief   Allocate and initialize the #candle_chunk_list.

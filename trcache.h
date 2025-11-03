@@ -24,14 +24,26 @@ extern "C" {
 #define MAX_CANDLE_TYPES (32)
 
 /*
- * @brief   Alignment (in bytes) of every vector array.
- *
- * 64 is enough for AVX-512 and current ARM SVE256. Increase if a wider
- * vector ISA comes along.
+ * 64 is enough for AVX-512 and current ARM SVE256.
+ * Increase if a wider vector ISA comes along.
  */
 #ifndef TRCACHE_SIMD_ALIGN
 #define TRCACHE_SIMD_ALIGN (64)
 #endif /* TRCACHE_SIMD_ALIGN */
+
+/*
+ * 64-byte cache line alignment.
+ */
+#ifndef CACHE_LINE_SIZE
+#define CACHE_LINE_SIZE (64)
+#endif /* CACHE_LINE_SIZE */
+
+/*
+ * Data structure memory alignement macro.
+ */
+#ifndef ____cacheline_aligned
+#define ____cacheline_aligned __attribute__((aligned(CACHE_LINE_SIZE)))
+#endif /* ____cacheline_aligned */
 
 typedef struct trcache trcache;
 

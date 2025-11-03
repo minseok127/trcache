@@ -34,17 +34,33 @@
  *       the caller.
  */
 struct trade_data_chunk {
+	/*
+	 * Group 1: Producer (Feed Thread) hot data.
+	 * Written when pushing data or reaping chunks.
+	 */
+	____cacheline_aligned
 	struct list_head list_node;
 	_Atomic int write_idx;
+
+	/*
+	 * Group 2: Consumer (Apply Thread) hot data.
+	 * Written by multiple consumers calling trade_data_buffer_consume().
+	 */
+	____cacheline_aligned
 	_Atomic int num_consumed_cursor;
+
+	/*
+	 * Group 3: Data payload.
+	 */
+	____cacheline_aligned
 	struct trcache_trade_data entries[NUM_TRADE_CHUNK_CAP];
-};
+
+} ____cacheline_aligned;
 
 #ifndef __get_trd_chunk_ptr
 #define __get_trd_chunk_ptr(list_node_ptr) \
 	list_entry(list_node_ptr, struct trade_data_chunk, list_node)
 #endif /* __get_trd_chunk_ptr */
-	
 
 /*
  * trade_data_buffer_cursor - Cursor for iterating and consuming a buffer.
@@ -70,12 +86,12 @@ struct trade_data_buffer_cursor {
  *
  * @chunk_list:          Linked list for chunks.
  * @produced_count:      Number of data items supplied to this buffer.
- * @cursor_arr:          Cursor array (only valid types are initialized).
- * @num_cursor:          Number of valid cursors.
  * @next_tail_write_idx: Next write_idx of the tail chunk.
+ * @num_cursor:          Number of valid cursors.
  * @mem_acc:             Memory accounting information for this buffer.
  * @trc:                 Back-pointer to the main trcache instance.
  * @symbol_id:           Integer symbol ID resolved via symbol table.
+ * @cursor_arr:          Cursor array (only valid types are initialized).
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -83,15 +99,34 @@ struct trade_data_buffer_cursor {
  * linking a new chunk.
  */
 struct trade_data_buffer {
+	/*
+	 * Group 1: Producer (Feed Thread) hot data.
+	 * Written when pushing data or reaping chunks.
+	 */
+	____cacheline_aligned
 	struct list_head chunk_list;
 	uint64_t produced_count;
-	struct trade_data_buffer_cursor cursor_arr[MAX_CANDLE_TYPES];
-	int num_cursor;
 	int next_tail_write_idx;
+
+	/*
+	 * Group 2: Read-mostly / Cold data.
+	 * Initialized once, then read.
+	 */
+	____cacheline_aligned
+	int num_cursor;
 	struct memory_accounting *mem_acc;
 	struct trcache *trc;
 	int symbol_id;
-};
+
+	/*
+	 * Group 3: Consumer (Apply Thread) hot data area.
+	 * This is an array of aligned cursors. Each cursor is written by
+	 * a different Apply thread.
+	 */
+	____cacheline_aligned
+	struct trade_data_buffer_cursor cursor_arr[MAX_CANDLE_TYPES];
+
+} ____cacheline_aligned;
 
 /**
  * @brief   Obtain a cursor positioned at the given type.

@@ -189,11 +189,13 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
-	list = malloc(sizeof(struct candle_chunk_list));
+	list = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk_list));
 	if (list == NULL) {
 		errmsg(stderr, "#candle_chunk_list allocation failed\n");
 		return NULL;
 	}
+
+	memset(list, 0, sizeof(struct candle_chunk_list));
 
 	list->trc = ctx->trc;
 	list->config = &ctx->trc->candle_configs[ctx->candle_idx];

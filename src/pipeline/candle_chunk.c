@@ -171,11 +171,13 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	};
 	size_t batch_total_size = 0;
 
-	chunk = malloc(sizeof(struct candle_chunk));
+	chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk));
 	if (chunk == NULL) {
 		errmsg(stderr, "#candle_chunk allocation failed\n");
 		return NULL;
 	}
+
+	memset(chunk, 0, sizeof(struct candle_chunk));
 
 	if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
 		errmsg(stderr, "Initialization of spinlock failed\n");
