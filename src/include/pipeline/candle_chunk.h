@@ -59,27 +59,37 @@ struct candle_row_page {
  */
 struct candle_chunk {
 	/*
-	 * Group 1: Apply-thread hot data (exclusive write access).
-	 * Also contented by readers querying the mutable candle.
+	 * Group 1: Reader Contention Lock.
+	 *
+	 * This spinlock is contended by the 'In-Memory' (Apply) worker
+	 * and any 'Reader' thread calling copy_mutable_row.
+	 *
+	 * It is isolated to its own cache line to prevent False Sharing
+	 * with Group 2.
 	 */
 	____cacheline_aligned
 	pthread_spinlock_t spinlock;
+
+	/*
+	 * Group 2: 'In-Memory' Worker (Apply + Convert) hot data.
+	 * Written only by the Apply/Convert worker.
+	 *
+	 * This layout is aligned with the new scheduling logic, which co-locates
+	 * 'Apply' and 'Convert' tasks for the same list onto a single core
+	 * to maximize cache locality.
+	 */
+	____cacheline_aligned
 	_Atomic int num_completed;
 	int mutable_page_idx;
 	int mutable_row_idx;
 
-	/*
-	 * Group 2: Convert-thread hot data (exclusive write access).
-	 * Written only by the CONVERT worker.
-	 */
-	____cacheline_aligned
 	_Atomic int num_converted;
 	int converting_page_idx;
 	int converting_row_idx;
 
 	/*
 	 * Group 3: Flush-thread cold data (exclusive, infrequent write).
-	 * Written once by the FLUSH worker.
+	 * Written once by the Flush worker.
 	 */
 	____cacheline_aligned
 	void *flush_handle;

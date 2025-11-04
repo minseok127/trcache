@@ -64,9 +64,6 @@ struct candle_chunk_list_init_ctx {
  * @ema_cycles_per_convert:  EMA cycles per single CONVERT item.
  * @head_gate:               Gate managing head versions.
  * @ema_cycles_per_flush:    EMA cycles per single FLUSH item.
- * @apply_worker_id:         Ownership of APPLY stage.
- * @convert_worker_id:       Ownership of CONVERT stage.
- * @flush_worker_id:         Ownership of FLUSH stage.
  * @unflushed_batch_count:   Number of batches not yet flushed.
  * @config:                  Pointer to the configuration for this candle type.
  * @trc:                     #trcache back-pointer.
@@ -77,8 +74,12 @@ struct candle_chunk_list_init_ctx {
  */
 struct candle_chunk_list {
 	/*
-	 * Group 1: Apply-thread hot data (exclusive write access).
-	 * Written only by the worker that owns the APPLY task.
+	 * Group 1: 'In-Memory' Worker (Apply + Convert) hot data.
+	 * Written only by the worker that owns the Apply/Convert tasks.
+	 *
+	 * This layout is aligned with the scheduling logic, which tries to place
+	 * 'Apply' and 'Convert' tasks for the same list onto a same core to
+	 * maximize cache locality.
 	 */
 	____cacheline_aligned
 	struct candle_chunk *candle_mutable_chunk;
@@ -86,17 +87,12 @@ struct candle_chunk_list {
 	_Atomic uint64_t mutable_seq;
 	_Atomic uint64_t ema_cycles_per_apply;
 
-	/*
-	 * Group 2: Convert-thread hot data (exclusive write access).
-	 * Written only by the worker that owns the CONVERT task.
-	 */
-	____cacheline_aligned	
 	struct candle_chunk *converting_chunk;
 	_Atomic uint64_t last_seq_converted;
 	_Atomic uint64_t ema_cycles_per_convert;
 
 	/*
-	 * Group 3: Flush-thread hot data (exclusive write access).
+	 * Group 2: 'I/O' Worker (Flush) hot data.
 	 * Written only by the worker that owns the FLUSH task.
 	 */
 	____cacheline_aligned
@@ -104,23 +100,14 @@ struct candle_chunk_list {
 	_Atomic uint64_t ema_cycles_per_flush;
 
 	/*
-	 * Group 4: High-contention worker claim atomics (True Sharing).
-	 * Written via CAS by *any* worker attempting to claim a task.
-	 */
-	____cacheline_aligned
-	_Atomic int apply_worker_id;
-	_Atomic int convert_worker_id;
-	_Atomic int flush_worker_id;
-
-	/*
-	 * Group 5: Shared counter (True Sharing).
+	 * Group 3: Shared counter (True Sharing).
 	 * Written by CONVERT (add) and FLUSH (sub) workers.
 	 */
 	____cacheline_aligned
 	_Atomic int unflushed_batch_count;
 
 	/*
-	 * Group 6: Read-mostly / Cold data.
+	 * Group 4: Read-mostly / Cold data.
 	 * Initialized once, then read frequently. No false-sharing risk.
 	 */
 	____cacheline_aligned
