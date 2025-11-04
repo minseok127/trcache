@@ -90,13 +90,14 @@ int admin_state_init(struct trcache *tc)
 	im_bitmap_alloc_size = num_workers * in_mem_words * sizeof(uint64_t);
 	flush_bitmap_alloc_size = num_workers * flush_words * sizeof(uint64_t);
 
-	/* Allocate calculation buffers */
-	state->next_im_bitmaps = calloc(1, im_bitmap_alloc_size);
-	state->next_flush_bitmaps = calloc(1, flush_bitmap_alloc_size);
-
-	/* Allocate comparison buffers */
-	state->current_im_bitmaps = calloc(1, im_bitmap_alloc_size);
-	state->current_flush_bitmaps = calloc(1, flush_bitmap_alloc_size);
+	state->next_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		im_bitmap_alloc_size);
+	state->next_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		flush_bitmap_alloc_size);
+	state->current_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		im_bitmap_alloc_size);
+	state->current_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		flush_bitmap_alloc_size);
 	
 	if (state->next_im_bitmaps == NULL || state->next_flush_bitmaps == NULL ||
 		state->current_im_bitmaps == NULL || state->current_flush_bitmaps == NULL)
@@ -104,6 +105,11 @@ int admin_state_init(struct trcache *tc)
 		errmsg(stderr, "Admin bitmap buffer allocation failed\n");
 		goto cleanup_bitmaps;
 	}
+
+	memset(state->next_im_bitmaps, 0, im_bitmap_alloc_size);
+	memset(state->next_flush_bitmaps, 0, flush_bitmap_alloc_size);
+	memset(state->current_im_bitmaps, 0, im_bitmap_alloc_size);
+	memset(state->current_flush_bitmaps, 0, flush_bitmap_alloc_size);
 
 	return 0;
 
