@@ -11,7 +11,6 @@
 #include "utils/memstat.h"
 #include "sched/worker_thread.h"
 #include "sched/admin_thread.h"
-#include "sched/sched_work_msg.h"
 
 #include "trcache.h"
 
@@ -37,7 +36,6 @@ struct trcache_tls_data {
  *
  * @mem_acc:                 All modules use &mem_acc to update memory usage.
  * @admin_state:             State structure for admin thread.
- * @stage_ct_mask:           Candle-type ownership mask per stage/worker.
  * @pthread_trcache_key:     Key for pthread_get/setspecific.
  * @tls_id_mutex:            Protects allocation/release of thread IDs.
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
@@ -51,7 +49,6 @@ struct trcache_tls_data {
  * @flush_threshold:         How many candle batches to buffer before flush.
  * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
  * @worker_state_arr:        Per-worker state array of length @num_workers.
- * @sched_msg_free_list:     Free list for scheduler message objects.
  * @admin_thread:            Handle for admin thread.
  * @worker_threads:          Array of handles for worker threads.
  * @worker_args:             Per-worker argument array used at start.
@@ -73,14 +70,7 @@ struct trcache {
 	struct admin_state admin_state;
 
 	/*
-	 * Group 3: Admin Thread Scheduler Mask.
-	 * Written frequently by Admin thread during scheduling.
-	 */
-	____cacheline_aligned	
-	uint32_t stage_ct_mask[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS];
-
-	/*
-	 * Group 4: TLS Management (High-Contention Mutex).
+	 * Group 3: TLS Management (High-Contention Mutex).
 	 * Accessed by all threads, but only at thread init/exit.
 	 */
 	____cacheline_aligned
@@ -90,7 +80,7 @@ struct trcache {
 	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 
 	/*
-	 * Group 5: Read-Only / "Cold" Pointers and Configuration.
+	 * Group 4: Read-Only / "Cold" Pointers and Configuration.
 	 * Set at init() and read by all threads. No false sharing risk.
 	 */
 	____cacheline_aligned
@@ -103,7 +93,6 @@ struct trcache {
 	int flush_threshold;
 	int flush_threshold_pow2;
 	struct worker_state *worker_state_arr;
-	sched_work_msg_free_list *sched_msg_free_list;
 	pthread_t admin_thread;
 	pthread_t *worker_threads;
 	struct worker_thread_args *worker_args;

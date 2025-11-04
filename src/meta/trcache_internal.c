@@ -16,7 +16,6 @@
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
-#include "sched/sched_work_msg.h"
 #include "sched/admin_thread.h"
 
 #include "trcache.h"
@@ -173,8 +172,16 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	memset(tc, 0, sizeof(struct trcache));
 
 	/* Validate ctx input first */
-	if (ctx == NULL || ctx->max_symbols <= 0 || ctx->num_worker_threads <= 0) {
-		errmsg(stderr, "Invalid arguments in trcache_init_ctx\n");
+	if (ctx == NULL || ctx->max_symbols <= 0 || ctx->num_worker_threads <= 2) {
+		errmsg(stderr, "trcache_init_ctx is NULL\n");
+		free(tc);
+		return NULL;
+	} else if (ctx->max_symbols <= 0) {
+		errmsg(stderr, "Invalid max_symbols\n");
+		free(tc);
+		return NULL;
+	} else if (ctx->num_worker_threads <= 2) {
+		errmsg(stderr, "num_worker_threads is less than 2\n");
 		free(tc);
 		return NULL;
 	}
@@ -199,7 +206,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->max_symbols = ctx->max_symbols;
 
 	/* Initialize shared symbol table with fixed capacity */
-	tc->symbol_table = symbol_table_init(tc->max_symbols);
+	tc->symbol_table = symbol_table_init(tc->max_symbols,
+		tc->num_candle_configs);
 	if (tc->symbol_table == NULL) {
 		errmsg(stderr, "Failure on symbol_table_init()\n");
 		pthread_key_delete(tc->pthread_trcache_key);
@@ -283,27 +291,9 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	}
 
-	/* Initialize scheduler message free list */
-	tc->sched_msg_free_list = scq_init(&tc->mem_acc);
-	if (tc->sched_msg_free_list == NULL) {
-		errmsg(stderr, "sched_msg_free_list allocation failed\n");
-		pthread_mutex_destroy(&tc->tls_id_mutex);
-		if (tc->candle_configs) {
-			for (int i = 0; i < tc->num_candle_configs; i++) {
-				free((void *)tc->candle_configs[i].field_definitions);
-			}
-			free(tc->candle_configs);
-		}
-		symbol_table_destroy(tc->symbol_table);
-		pthread_key_delete(tc->pthread_trcache_key);
-		free(tc);
-		return NULL;
-	}
-
 	/* Initialize admin state */
 	if (admin_state_init(tc) != 0) {
 		errmsg(stderr, "admin_state_init failed\n");
-		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		if (tc->candle_configs) {
 			for (int i = 0; i < tc->num_candle_configs; i++) {
@@ -322,7 +312,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	if (tc->worker_state_arr == NULL) {
 		errmsg(stderr, "worker_state_arr allocation failed\n");
 		admin_state_destroy(&tc->admin_state);
-		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		if (tc->candle_configs) {
 			for (int i = 0; i < tc->num_candle_configs; i++) {
@@ -345,7 +334,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			}
 			free(tc->worker_state_arr);
 			admin_state_destroy(&tc->admin_state);
-			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
 			if (tc->candle_configs) {
 				for (int j = 0; j < tc->num_candle_configs; j++) {
@@ -373,7 +361,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		}
 		free(tc->worker_state_arr);
 		admin_state_destroy(&tc->admin_state);
-		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		if (tc->candle_configs) {
 			for (int i = 0; i < tc->num_candle_configs; i++) {
@@ -414,7 +401,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			}
 			free(tc->worker_state_arr);
 			admin_state_destroy(&tc->admin_state);
-			scq_destroy(tc->sched_msg_free_list);
 			pthread_mutex_destroy(&tc->tls_id_mutex);
 			if (tc->candle_configs) {
 				for (int j = 0; j < tc->num_candle_configs; j++) {
@@ -450,7 +436,6 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		}
 		free(tc->worker_state_arr);
 		admin_state_destroy(&tc->admin_state);
-		scq_destroy(tc->sched_msg_free_list);
 		pthread_mutex_destroy(&tc->tls_id_mutex);
 		if (tc->candle_configs) {
 			for (int i = 0; i < tc->num_candle_configs; i++) {
@@ -522,7 +507,6 @@ void trcache_destroy(struct trcache *tc)
 	for (int i = 0; i < tc->num_workers; i++) {
 		worker_state_destroy(&tc->worker_state_arr[i]);
 	}
-	scq_destroy(tc->sched_msg_free_list);
 
 	/* Free arrays */
 	free(tc->worker_state_arr);
@@ -934,124 +918,6 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 }
 
 /**
- * @brief   Print current worker distribution per pipeline stage.
- *
- * Gathers pipeline statistics and computes how many workers the admin
- * scheduler would allocate to each stage. The ranges are printed to stdout.
- *
- * @param   tc: Handle from trcache_init().
- */
-void trcache_print_worker_distribution(struct trcache *tc)
-{
-	int limits[WORKER_STAT_STAGE_NUM];
-	int start[WORKER_STAT_STAGE_NUM];
-	double speed[WORKER_STAT_STAGE_NUM] = { 0.0, };
-	double capacity[WORKER_STAT_STAGE_NUM] = { 0.0, };
-	double demand[WORKER_STAT_STAGE_NUM] = { 0.0, };
-	struct symbol_entry *e;
-	int end;
-
-	if (!tc) {
-		return;
-	}
-
-	{
-		double hz = tsc_cycles_per_sec();
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			uint64_t cycles = 0, count = 0;
-
-			for (int w = 0; w < tc->num_workers; w++) {
-				struct worker_stat_board *b = &tc->worker_state_arr[w].stat;
-
-				for (int i = 0; i < tc->num_candle_configs; i++) {
-					if (s == WORKER_STAT_STAGE_APPLY) {
-						cycles += b->apply_stat[i].cycles;
-						count  += b->apply_stat[i].work_count;
-					} else if (s == WORKER_STAT_STAGE_CONVERT) {
-						cycles += b->convert_stat[i].cycles;
-						count  += b->convert_stat[i].work_count;
-					} else {
-						cycles += b->flush_stat[i].cycles;
-						count  += b->flush_stat[i].work_count;
-					}
-				}
-			}
-
-			speed[s] = (cycles != 0) ? ((double)count * hz / (double)cycles) : 0.0;
-		}
-	}
-
-	{
-		struct symbol_table *table = tc->symbol_table;
-		int num = table->num_symbols;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			demand[s] = 0.0;
-		}
-
-		for (int i = 0; i < num; i++) {
-			e = &table->symbol_entries[i];
-
-			for (int j = 0; j < tc->num_candle_configs; j++) {
-				struct sched_stage_rate *r
-					= &e->pipeline_stats.stage_rates[j];
-
-				demand[WORKER_STAT_STAGE_APPLY]
-					+= (double)r->produced_rate;
-				demand[WORKER_STAT_STAGE_CONVERT]
-					+= (double)r->completed_rate;
-				demand[WORKER_STAT_STAGE_FLUSH]
-					+= (double)r->flushable_batch_rate;
-			}
-		}
-	}
-
-	compute_stage_limits(tc, limits);
-	compute_stage_starts(tc, limits, start);
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		capacity[s] = speed[s] * limits[s];
-	}
-
-	printf("Worker distribution and scheduler statistics:\n");
-	printf("  Stage speeds (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
-		   speed[WORKER_STAT_STAGE_APPLY],
-		   speed[WORKER_STAT_STAGE_CONVERT],
-		   speed[WORKER_STAT_STAGE_FLUSH]);
-	printf("  Stage Capacity (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
-		   capacity[WORKER_STAT_STAGE_APPLY],
-		   capacity[WORKER_STAT_STAGE_CONVERT],
-		   capacity[WORKER_STAT_STAGE_FLUSH]);
-	printf("  Pipeline demand (items/s): APPLY=%.2f, CONVERT=%.2f, FLUSH=%.2f\n",
-		   demand[WORKER_STAT_STAGE_APPLY],
-		   demand[WORKER_STAT_STAGE_CONVERT],
-		   demand[WORKER_STAT_STAGE_FLUSH]);
-	printf("  Stage limits: APPLY=%d, CONVERT=%d, FLUSH=%d\n",
-		   limits[WORKER_STAT_STAGE_APPLY],
-		   limits[WORKER_STAT_STAGE_CONVERT],
-		   limits[WORKER_STAT_STAGE_FLUSH]);
-	printf("  Stage starts: APPLY=%d, CONVERT=%d, FLUSH=%d\n",
-		   start[WORKER_STAT_STAGE_APPLY],
-		   start[WORKER_STAT_STAGE_CONVERT],
-		   start[WORKER_STAT_STAGE_FLUSH]);
-
-	printf("Worker distribution:\n");
-	end = start[WORKER_STAT_STAGE_APPLY] +
-		  limits[WORKER_STAT_STAGE_APPLY] - 1;
-	printf("  APPLY   : %d..%d\n",
-		   start[WORKER_STAT_STAGE_APPLY], end);
-	end = start[WORKER_STAT_STAGE_CONVERT] +
-		  limits[WORKER_STAT_STAGE_CONVERT] - 1;
-	printf("  CONVERT : %d..%d\n",
-		   start[WORKER_STAT_STAGE_CONVERT], end);
-	end = start[WORKER_STAT_STAGE_FLUSH] +
-		  limits[WORKER_STAT_STAGE_FLUSH] - 1;
-	printf("  FLUSH   : %d..%d\n",
-		   start[WORKER_STAT_STAGE_FLUSH], end);
-}
-
-/**
  * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
  *
  * @param   cache: Pointer to a trcache instance as returned from trcache_init().
@@ -1092,86 +958,6 @@ void trcache_print_total_memory_breakdown(struct trcache *cache)
 
 	struct memstat *ms = &cache->mem_acc.ms;
 	memstat_errmsg_status(ms, false);
-}
-
-/**
- * @brief   Get the current worker distribution and scheduler statistics.
- *
- * @param   cache:  Handle from trcache_init().
- * @param   stats:  Pointer to a user-allocated struct to be filled.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_worker_distribution(struct trcache *cache,
-	trcache_worker_distribution_stats *stats)
-{
-	struct symbol_entry *e;
-
-	if (!cache || !stats) {
-		return -1;
-	}
-
-	{
-		double hz = tsc_cycles_per_sec();
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			uint64_t cycles = 0, count = 0;
-
-			for (int w = 0; w < cache->num_workers; w++) {
-				struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-
-				for (int i = 0; i < cache->num_candle_configs; i++) {
-					if (s == WORKER_STAT_STAGE_APPLY) {
-						cycles += b->apply_stat[i].cycles;
-						count += b->apply_stat[i].work_count;
-					} else if (s == WORKER_STAT_STAGE_CONVERT) {
-						cycles += b->convert_stat[i].cycles;
-						count += b->convert_stat[i].work_count;
-					} else {
-						cycles += b->flush_stat[i].cycles;
-						count += b->flush_stat[i].work_count;
-					}
-				}
-			}
-
-			stats->stage_speeds[s] = (cycles != 0) ?
-				((double)count * hz / (double)cycles) : 0.0;
-		}
-	}
-
-	{
-		struct symbol_table *table = cache->symbol_table;
-		int num = table->num_symbols;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			stats->pipeline_demand[s] = 0.0;
-		}
-
-		for (int i = 0; i < num; i++) {
-			e = &table->symbol_entries[i];
-
-			for (int j = 0; j < cache->num_candle_configs; j++) {
-				struct sched_stage_rate *r
-					= &e->pipeline_stats.stage_rates[j];
-
-				stats->pipeline_demand[WORKER_STAT_STAGE_APPLY]
-					+= (double)r->produced_rate;
-				stats->pipeline_demand[WORKER_STAT_STAGE_CONVERT]
-					+= (double)r->completed_rate;
-				stats->pipeline_demand[WORKER_STAT_STAGE_FLUSH]
-					+= (double)r->flushable_batch_rate;
-			}
-		}
-	}
-
-	compute_stage_limits(cache, stats->stage_limits);
-	compute_stage_starts(cache, stats->stage_limits, stats->stage_starts);
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		stats->stage_capacity[s] = stats->stage_speeds[s] * stats->stage_limits[s];
-	}
-
-	return 0;
 }
 
 /**

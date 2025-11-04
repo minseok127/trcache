@@ -7,20 +7,34 @@
 #include <sched.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
+#include "meta/trcache_internal.h"
 #include "sched/sched_pipeline_stats.h"
 #include "sched/worker_thread.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
 
 /*
- * Definition of the global timestamp maintained by the admin thread.
- * See admin_thread.h for the corresponding declaration.
+ * Bit manipulation helpers for 64-bit bitmaps.
  */
-_Atomic uint64_t g_admin_current_ts_ms = 0;
+#define BITS_PER_WORD (64)
+#define WORD_OFFSET(bit) ((bit) / BITS_PER_WORD)
+#define BIT_OFFSET(bit) ((bit) % BITS_PER_WORD)
+#define IS_BIT_SET(bitmap, bit) \
+	(bitmap[WORD_OFFSET(bit)] & (1ULL << BIT_OFFSET(bit)))
+
+/**
+ * @brief   Helper to calculate bitmap size in bytes (padded to uint64_t).
+ */
+static inline size_t get_bitmap_bytes(int num_bits)
+{
+	int num_words = (num_bits + (BITS_PER_WORD - 1)) / BITS_PER_WORD;
+	return num_words * sizeof(uint64_t);
+}
 
 /**
  * @brief   Initialise the admin thread state.
@@ -32,6 +46,9 @@ _Atomic uint64_t g_admin_current_ts_ms = 0;
 int admin_state_init(struct trcache *tc)
 {
 	struct admin_state *state;
+	size_t num_tasks, snaps_size, rates_size, costs_size;
+	size_t num_workers, in_mem_words, flush_words;
+	size_t im_bitmap_alloc_size, flush_bitmap_alloc_size;
 
 	if (!tc) {
 		errmsg(stderr, "Invalid trcache pointer\n");
@@ -39,18 +56,69 @@ int admin_state_init(struct trcache *tc)
 	}
 
 	state = &(tc->admin_state);
-	state->sched_msg_queue = scq_init(&tc->mem_acc);
-	if (state->sched_msg_queue == NULL) {
-		errmsg(stderr, "admin sched_msg_queue allocation failed\n");
-		return -1;
-	}
 	state->done = false;
 
-	memset(state->prev_limits, -1, sizeof(state->prev_limits));
-	memset(state->prev_starts, -1, sizeof(state->prev_starts));
-	state->is_first_run = true;
+	/* 1. Allocate admin-local statistics arrays */
+	num_tasks = (size_t)tc->num_candle_configs * (size_t)tc->max_symbols;
+	snaps_size = num_tasks * sizeof(struct sched_stage_snapshot);
+	rates_size = num_tasks * sizeof(struct sched_stage_rate);
+	costs_size = num_tasks * sizeof(struct admin_task_costs);
+
+	state->stage_snaps = calloc(1, snaps_size);
+	state->stage_rates = calloc(1, rates_size);
+	state->task_costs = calloc(1, costs_size);
+
+	if (state->stage_snaps == NULL || state->stage_rates == NULL ||
+		state->task_costs == NULL) {
+		errmsg(stderr, "Admin statistics array allocation failed\n");
+		goto cleanup_stats;
+	}
+	
+	/* Initialize snapshot completed_seq to UINT64_MAX */
+	for (size_t i = 0; i < num_tasks; i++) {
+		state->stage_snaps[i].completed_seq = UINT64_MAX;
+	}
+
+	/* 2. Allocate admin-local bitmap buffers (for calculation and comparison) */
+	num_workers = (size_t)tc->num_workers;
+	in_mem_words = get_bitmap_bytes(num_tasks * 2) / 8;
+	flush_words = get_bitmap_bytes(num_tasks) / 8;
+
+	state->in_mem_words_per_worker = in_mem_words;
+	state->flush_words_per_worker = flush_words;
+
+	im_bitmap_alloc_size = num_workers * in_mem_words * sizeof(uint64_t);
+	flush_bitmap_alloc_size = num_workers * flush_words * sizeof(uint64_t);
+
+	/* Allocate calculation buffers */
+	state->next_im_bitmaps = calloc(1, im_bitmap_alloc_size);
+	state->next_flush_bitmaps = calloc(1, flush_bitmap_alloc_size);
+
+	/* Allocate comparison buffers */
+	state->current_im_bitmaps = calloc(1, im_bitmap_alloc_size);
+	state->current_flush_bitmaps = calloc(1, flush_bitmap_alloc_size);
+	
+	if (state->next_im_bitmaps == NULL || state->next_flush_bitmaps == NULL ||
+		state->current_im_bitmaps == NULL || state->current_flush_bitmaps == NULL)
+	{
+		errmsg(stderr, "Admin bitmap buffer allocation failed\n");
+		goto cleanup_bitmaps;
+	}
 
 	return 0;
+
+cleanup_bitmaps:
+	free(state->next_im_bitmaps);
+	free(state->next_flush_bitmaps);
+	free(state->current_im_bitmaps);
+	free(state->current_flush_bitmaps);
+
+cleanup_stats:
+	free(state->stage_snaps);
+	free(state->stage_rates);
+	free(state->task_costs);
+
+	return -1;
 }
 
 /**
@@ -64,716 +132,511 @@ void admin_state_destroy(struct admin_state *state)
 		return;
 	}
 
-	scq_destroy(state->sched_msg_queue);
-	state->sched_msg_queue = NULL;
+	/* Free the dynamically allocated statistics arrays */
+	free(state->stage_snaps);
+	free(state->stage_rates);
+	free(state->task_costs);
+
+	/* Free the dynamically allocated bitmap buffers */
+	free(state->next_im_bitmaps);
+	free(state->next_flush_bitmaps);
+	free(state->current_im_bitmaps);
+	free(state->current_flush_bitmaps);
+}
+
+#define RATE_EMA_SHIFT (2)     /* 2^2 = 4 */
+#define RATE_EMA_MULT  (3)     /* 4 - 1 */
+
+/**
+ * @brief   Update 64-bit exponential moving average (N=4, alpha=1/4).
+ *
+ * @param   ema:   Previous EMA value.
+ * @param   val:   New sample value.
+ *
+ * @return  Updated EMA value.
+ *
+ * EMA(t) = val(t) * (1/4) + (3/4) * EMA(t-1)
+ */
+static uint64_t ema_update_u64(uint64_t ema, uint64_t val)
+{
+	/* Handle initial value (0 from calloc) */
+	if (ema == 0) {
+		return val; /* First sample */
+	}
+	return (val + RATE_EMA_MULT * ema) >> RATE_EMA_SHIFT;
 }
 
 /**
- * @brief   Update pipeline statistics for all symbols.
+ * @brief   Capture pipeline counters for one candle type.
+ *
+ * @param   entry:       Symbol entry containing the pipeline.
+ * @param   candle_idx:  Candle type identifier.
+ * @param   stage:       Output snapshot structure.
+ */
+static void snapshot_stage(struct symbol_entry *entry, int candle_idx,
+	struct sched_stage_snapshot *stage)
+{
+	struct candle_chunk_list *list
+		= entry->candle_chunk_list_ptrs[candle_idx];
+	uint64_t mutable_seq;
+
+	if (entry->trd_buf == NULL || list == NULL) {
+		/* Symbol might be partially initialized, skip */
+		return;
+	}
+
+	stage->produced_seq = entry->trd_buf->produced_count;
+
+	mutable_seq = atomic_load_explicit(&list->mutable_seq, 
+		memory_order_acquire);
+
+	if (mutable_seq == UINT64_MAX) {
+		stage->completed_seq = UINT64_MAX;
+	} else if (mutable_seq == 0) {
+		stage->completed_seq = 0;
+	} else {
+		stage->completed_seq = mutable_seq - 1;
+	}
+
+	stage->unflushed_batch_count = atomic_load_explicit(
+		&list->unflushed_batch_count, memory_order_acquire);
+}
+
+/**
+ * @brief   Update throughput EMA for a pipeline stage.
+ *
+ * @param   r:       Rate structure to update.
+ * @param   newc:    New snapshot of counters.
+ * @param   oldc:    Previous snapshot of counters (from admin_state).
+ * @param   dt_ns:   Elapsed time between snapshots in nanoseconds.
+ * @param   cache:   Global cache instance for flush threhold info.
+ */
+static void update_stage_rate(struct sched_stage_rate *r,
+	const struct sched_stage_snapshot *newc,
+	const struct sched_stage_snapshot *oldc, uint64_t dt_ns,
+	struct trcache *cache)
+{
+	__uint128_t tmp;
+	uint64_t diff;
+	
+	/*
+	 * If no time passed, or this is the first sample,
+	 * skip the update. The EMA will just keep its previous value.
+	 */
+	if (dt_ns == 0) {
+		return;
+	}
+
+	/*
+	 * Calculate the rate of trades/sec (input to APPLY).
+	 */
+	diff = newc->produced_seq - oldc->produced_seq;
+	tmp = (__uint128_t)diff * 1000000000ull;
+	tmp /= dt_ns;
+	r->produced_rate = ema_update_u64(r->produced_rate, (uint64_t)tmp);
+
+	/*
+	 * Calculate the rate of completed candles/sec (input to CONVERT).
+	 */
+	if (oldc->completed_seq == UINT64_MAX) {
+		diff = (newc->completed_seq == UINT64_MAX) ?
+			0 : newc->completed_seq + 1;
+	} else {
+		diff = newc->completed_seq - oldc->completed_seq;
+	}
+	tmp = (__uint128_t)diff * 1000000000ull;
+	tmp /= dt_ns;
+	r->completed_rate = ema_update_u64(r->completed_rate, (uint64_t)tmp);
+
+	/*
+	 * Calculate the rate of batches becoming flushable (input to FLUSH).
+	 */
+	if (newc->unflushed_batch_count > cache->flush_threshold) {
+		diff = newc->unflushed_batch_count;
+	} else {
+		diff = 0;
+	}
+	tmp = (__uint128_t)diff * 1000000000ull;
+	tmp /= dt_ns;
+	r->flushable_batch_rate = ema_update_u64(r->flushable_batch_rate,
+		(uint64_t)tmp);
+}
+
+/**
+ * @brief   Refresh pipeline statistics for all symbols.
+ *
+ * This function polls all symbol entries and updates the admin-thread-local
+ * statistics arrays in 'admin_state'.
  *
  * @param   cache:  Global cache instance.
  */
 void update_all_pipeline_stats(struct trcache *cache)
 {
 	struct symbol_table *table = cache->symbol_table;
-	int num = 0;
-
-	num = table->num_symbols;
-
-	for (int i = 0; i < num; i++) {
-		sched_pipeline_calc_rates(cache, &table->symbol_entries[i]);
-	}
-}
-
-/**
- * @brief   Compute average worker throughput per stage.
- *
- * @param   cache:  Global cache instance.
- * @param   out:    Array indexed by stage, filled with items per second.
- */
-static void compute_worker_speeds(struct trcache *cache, double *out)
-{
-	double hz = tsc_cycles_per_sec();
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		uint64_t cycles = 0;
-		uint64_t count = 0;
-
-		for (int w = 0; w < cache->num_workers; w++) {
-			struct worker_stat_board *b = &cache->worker_state_arr[w].stat;
-
-			for (int i = 0; i < cache->num_candle_configs; i++) {
-				if (s == WORKER_STAT_STAGE_APPLY) {
-					cycles += b->apply_stat[i].cycles;
-					count += b->apply_stat[i].work_count;
-				} else if (s == WORKER_STAT_STAGE_CONVERT) {
-					cycles += b->convert_stat[i].cycles;
-					count += b->convert_stat[i].work_count;
-				} else { // FLUSH
-					cycles += b->flush_stat[i].cycles;
-					count += b->flush_stat[i].work_count;
-				}
-			}
-		}
-		
-		if (cycles != 0) {
-			out[s] = (double)count * hz / (double)cycles;
-		} else if (count > 0){
-			/* fallback when cycles==0 but work was done */
-			out[s] = (double)count;
-		} else {
-			out[s] = 0.0;
-		}
-	}
-}
-
-/**
- * @brief   Aggregate pipeline throughput across all symbols.
- *
- * @param   cache:  Global cache instance.
- * @param   out:    Array indexed by stage, filled with items per second.
- */
-static void compute_pipeline_demand(struct trcache *cache, double *out)
-{
-	struct symbol_table *table = cache->symbol_table;
-	int num = table->num_symbols;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		out[s] = 0.0;
-	}
-
-	for (int i = 0; i < num; i++) {
-		struct symbol_entry *e = &table->symbol_entries[i];
-
-		for (int j = 0; j < cache->num_candle_configs; j++) {
-			struct sched_stage_rate *r = &e->pipeline_stats.stage_rates[j];
-
-			out[WORKER_STAT_STAGE_APPLY] += (double)r->produced_rate;
-			out[WORKER_STAT_STAGE_CONVERT] += (double)r->completed_rate;
-			out[WORKER_STAT_STAGE_FLUSH] += (double)r->flushable_batch_rate;
-		}
-	}
-}
-
-/**
- * @brief   Clear worker bitmasks.
- */
-static void reset_stage_ct_masks(struct trcache *cache)
-{
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		for (int w = 0; w < cache->num_workers; w++) {
-			cache->stage_ct_mask[s][w] = 0;
-		}
-	}
-}
+	struct admin_state *admin = &cache->admin_state;
+	int num_symbols = atomic_load_explicit((int*)&table->num_symbols,
+		memory_order_acquire);
 	
-/**
- * @brief   Send a work message to a worker.
- *
- * @param   cache:      Global cache instance.
- * @param   worker_id:  Destination worker index.
- * @param   candle_idx: Candle type index.
- * @param   stage:      Pipeline stage.
- * @param   symbol_id:  Target symbol ID.
- * @param   kind:       Message type to send.
- */
-static void post_work_msg(struct trcache *cache, int worker_id,
-       int candle_idx, worker_stat_stage_type stage,
-       int symbol_id, enum sched_msg_type kind)
-{
-	struct worker_state *state = &cache->worker_state_arr[worker_id];
-	struct sched_work_msg *msg =
-		sched_work_msg_alloc(cache->sched_msg_free_list);
+	uint64_t now_ns = tsc_cycles_to_ns(tsc_cycles());
 
-	if (msg == NULL) {
-		return;
-	}
+	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			struct symbol_entry *entry = &table->symbol_entries[sym_idx];
+			
+			/* Calculate index in the 1D admin-local arrays */
+			size_t idx = (size_t)type_idx * (size_t)table->capacity +
+				(size_t)sym_idx;
+			
+			struct sched_stage_snapshot *old_snap = &admin->stage_snaps[idx];
+			struct sched_stage_rate *rate = &admin->stage_rates[idx];
+			struct sched_stage_snapshot new_snap;
+			
+			/* 1. Get new snapshot */
+			snapshot_stage(entry, type_idx, &new_snap);
 
-	msg->cmd.symbol_id = symbol_id;
-	msg->cmd.stage = stage;
-	msg->cmd.candle_idx = candle_idx;
-	msg->type = kind;
+			/*
+			 * 2. Calculate rate
+			 * Check if old snapshot is uninitialized (from calloc or init)
+			 */
+			uint64_t dt_ns = (old_snap->produced_seq == 0 &&
+				old_snap->completed_seq == UINT64_MAX) ?
+				0 : (now_ns - old_snap->timestamp_ns);
 
-	sched_post_work_msg(state->sched_msg_queue, msg);
-}
+			update_stage_rate(rate, &new_snap, old_snap, dt_ns, cache);
 
-/**
- * @brief   Choose the worker with the lowest adjusted load.
- *
- * Each load entry is penalised when the worker is not currently handling
- * the candle type according to its mask.
- *
- * @param   load:       Array of per-worker load counters.
- * @param   limit:      Number of valid entries in @load.
- * @param   mask:       Per-worker bitmask for the stage.
- * @param   candle_idx: Candle type index being scheduled.
- *
- * @return  Index of the least-loaded worker.
- */
-static int choose_best_worker(double *load, int limit,
-	uint32_t *mask, int candle_idx)
-{
-	const double PENALTY = 10.0;
-	int best = 0;
-	double best_score = load[0] +
-		((mask[0] & (1u << candle_idx)) ? 0.0 : PENALTY);
-	
-	for (int w = 1; w < limit; w++) {
-		double score = load[w] +
-			((mask[w] & (1u << candle_idx)) ? 0.0 : PENALTY);
-		if (score < best_score) {
-			best_score = score;
-			best = w;
+			/* 3. Store new snapshot */
+			new_snap.timestamp_ns = now_ns;
+			*old_snap = new_snap;
 		}
 	}
-	
-	return best;
 }
 
-/*
- * stage_sched_env - Parameters for scheduling a pipeline stage.
- *
- * @stage:  Pipeline stage identifier.
- * @load:   Pointer to the per-worker load array for this stage.
- * @limit:  Number of workers that may handle this stage.
- * @start:  Index of the first worker assigned to this stage.
+/**
+ * @brief Tracks the budget assignment state for a single worker group.
  */
-struct stage_sched_env {
-	worker_stat_stage_type stage;
-	double *load;
-	int limit;
-	int start;
+struct budget_assign_state {
+	double budget_per_worker;
+	double current_budget;
+	int current_worker_idx;
+	int num_workers_in_group;
+	int start_worker_idx;
 };
 
 /**
- * @brief   Update the worker assignment for a symbol stage.
+ * @brief   Refresh pipeline *cost* statistics for all symbols.
  *
- * If the stage is already assigned to @worker, nothing is done. Otherwise a
- * remove message is sent to the current worker (if any) and an add message is
- * posted to the new worker.
- *
- * @param   cache:      Global cache instance.
- * @param   entry:      Target symbol entry.
- * @param   candle_idx: Candle type identifier.
- * @param   env:        Scheduling environment for the stage.
- * @param   worker:     Destination worker index.
- */
-static void update_stage_assignment(struct trcache *cache,
-	struct symbol_entry *entry, int candle_idx,
-	struct stage_sched_env *env, int worker)
-{
-	int cur = atomic_load(&entry->in_progress[env->stage][candle_idx]);
-	if (cur == worker) {
-		return;
-	}
-				
-	if (cur >= 0) {
-		/* remove candle index from previous worker bitmask */
-		cache->stage_ct_mask[env->stage][cur] &= ~(1u << candle_idx);
-		post_work_msg(cache, cur, candle_idx, env->stage,
-			entry->id, SCHED_MSG_REMOVE_WORK);
-	}
-	
-	post_work_msg(cache, worker, candle_idx, env->stage,
-		entry->id, SCHED_MSG_ADD_WORK);
-	
-	/* assign candle index to new worker bitmask */
-	cache->stage_ct_mask[env->stage][worker] |= (1u << candle_idx);
-}
-
-/**
- * @brief   Distribute demand for a single stage across workers.
- *
- * Chooses the least loaded worker, updates its load counter and adjusts the
- * worker assignment accordingly.
- *
- * @param   cache:       Global cache instance.
- * @param   entry:       Target symbol entry.
- * @param   candle_idx:  Candle type identifier.
- * @param   demand:      Estimated demand for this stage.
- * @param   env:         Scheduling environment describing stage limits.
- */
-static void schedule_symbol_stage(struct trcache *cache,
-	struct symbol_entry *entry,
-	int candle_idx, double demand,
-	struct stage_sched_env *env)
-{
-	if (env->limit <= 0) {
-		int cur = atomic_load(&entry->in_progress[env->stage][candle_idx]);
-		if (cur >= 0) {
-			/* remove candle index from previous worker bitmask */
-			cache->stage_ct_mask[env->stage][cur] &= ~(1u << candle_idx);
-			post_work_msg(cache, cur, candle_idx, env->stage,
-				entry->id, SCHED_MSG_REMOVE_WORK);
-		}
-		return;
-	}
-	
-	int best = choose_best_worker(env->load, env->limit,
-		cache->stage_ct_mask[env->stage], candle_idx) + env->start;
-	env->load[best - env->start] += demand;
-	
-	update_stage_assignment(cache, entry, candle_idx, env, best);
-}
-	
-/**
- * @brief   Schedule work for all stages of a symbol.
- *
- * Initialises per-stage scheduling environments and distributes demand for each
- * candle type across workers.
- *
- * @param   cache:         Global cache instance.
- * @param   entry:         Target symbol entry.
- * @param   load:          Two-dimensional array storing load per stage/worker.
- * @param   stage_limits:  Maximum number of workers allowed per stage.
- * @param   stage_start:   Index of the first worker allocated to each stage.
- */
-static void schedule_symbol_work(struct trcache *cache,
-	struct symbol_entry *entry, double load[][MAX_NUM_THREADS],
-	const int *stage_limits, const int *stage_start)
-{
-	struct stage_sched_env env[WORKER_STAT_STAGE_NUM];
-	double demand[WORKER_STAT_STAGE_NUM];
-	struct sched_stage_rate *stage_rate;
-	
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		env[s].stage = s;
-		env[s].load = load[s];
-		env[s].limit = stage_limits[s];
-		env[s].start = stage_start[s];
-	}
-
-	for (int i = 0; i < cache->num_candle_configs; i++) {
-		stage_rate = &entry->pipeline_stats.stage_rates[i];
-
-		demand[WORKER_STAT_STAGE_APPLY]
-			= (double)stage_rate->produced_rate + 1.0;
-		demand[WORKER_STAT_STAGE_CONVERT]
-			= (double)stage_rate->completed_rate + 1.0;
-		demand[WORKER_STAT_STAGE_FLUSH]
-			= (double)stage_rate->flushable_batch_rate + 1.0;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			schedule_symbol_stage(cache, entry, i, demand[s], &env[s]);
-		}
-	}
-}
-
-/**
- * @brief   Calculate initial worker needs per stage based on demand/speed.
- *
- * @param   speed:            Array of worker speeds per stage.
- * @param   demand:           Array of pipeline demand per stage.
- * @param   initial_need_out: Output array for initial needs.
- *
- * @return  Total initial needed workers across all stages.
- */
-static int calculate_initial_needs(const double *speed,
-	const double *demand, int *initial_need_out)
-{
-	int total_initial_need = 0;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		if (speed[s] > 0) {
-			initial_need_out[s] = (int)ceil(demand[s] / speed[s]);
-		} else if (demand[s] > 0) {
-			initial_need_out[s] = 1;
-		} else {
-			initial_need_out[s] = 0;
-		}
-		total_initial_need += initial_need_out[s];
-	}
-
-	return total_initial_need;
-}
-
-/**
- * @brief   Calculate precise needs and total for proportional allocation.
- *
- * @param   speed:                  Array of worker speeds per stage.
- * @param   demand:                 Array of pipeline demand per stage.
- * @param   initial_need:           Array of initial needs (used if speed=0).
- * @param   stage_precise_need_out: Output array for precise needs.
- *
- * @return  Total precise need across all stages.
- */
-static double calculate_proportional_needs(const double *speed,
-	const double *demand, const int* initial_need,
-	double *stage_precise_need_out)
-{
-	double total_precise_need = 0.0;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; ++s) {
-		if (speed[s] > 0) {
-			stage_precise_need_out[s] = demand[s] / speed[s];
-		} else if (demand[s] > 0) {
-			stage_precise_need_out[s] = (double)initial_need[s];
-		} else {
-			stage_precise_need_out[s] = 0.0;
-		}
-		total_precise_need += stage_precise_need_out[s];
-	}
-
-	return total_precise_need;
-}
-
-/**
- * @brief   Distribute remaining workers based on largest fractional needs.
- *
- * @param   num_workers:     Total available workers.
- * @param   total_allocated: Workers allocated in the integer phase.
- * @param   need_fraction:   Array of fractional needs remaining.
- * @param   limits_out:      Output array for final worker limits.
- */
-static void distribute_remaining_workers(int num_workers, int total_allocated,
-	double *need_fraction, int *limits_out)
-{
-	int remaining = num_workers - total_allocated;
-
-	while (remaining > 0) {
-		int best_stage = -1;
-		double max_fraction = -1.0;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			if (need_fraction[s] > max_fraction) {
-				max_fraction = need_fraction[s];
-				best_stage = s;
-			}
-		}
-
-		if (best_stage == -1 || max_fraction <= 0) {
-			for (int s_fb = 0; s_fb < WORKER_STAT_STAGE_NUM; s_fb++) {
-				int current_total = 0;
-
-				for(int sc = 0; sc < WORKER_STAT_STAGE_NUM; sc++) {
-					current_total += limits_out[sc];
-				}
-
-				if (current_total < num_workers) {
-					limits_out[s_fb]++;
-					if (--remaining == 0) {
-						break;
-					}
-				} else {
-					remaining = 0;
-					break;
-				}
-			}
-
-			if (remaining > 0) {
-				errmsg(stderr, "Failed to allocate remain workers\n");
-				break;
-			}
-		} else {
-			limits_out[best_stage]++;
-			need_fraction[best_stage] = -1.0;
-			remaining--;
-		}
-	}
-}
-
-/**
- * @brief   Allocate integer part of workers based on proportional needs.
- *
- * @param   num_workers:        Total available workers.
- * @param   precise_total_need: Sum of precise needs.
- * @param   stage_precise_need: Array of precise needs per stage.
- * @param   need_fraction_out:  Output array for fractional remainders.
- * @param   limits_out:         Output array for integer allocated limits.
- *
- * @return  Total workers allocated in this phase.
- */
-static int allocate_integer_part(int num_workers, double precise_total_need,
-	const double* stage_precise_need, double* need_fraction_out,
-	int* limits_out)
-{
-	int total_allocated = 0;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		double ratio = stage_precise_need[s] / precise_total_need;
-		double alloc_double = (double)num_workers * ratio;
-		limits_out[s] = (int)floor(alloc_double);
-		need_fraction_out[s] = alloc_double - limits_out[s];
-		total_allocated += limits_out[s];
-	}
-
-	return total_allocated;
-}
-
-/**
- * @brief   Allocate workers proportionally when need > available.
- *
- * @param   num_workers:  Total available workers.
- * @param   speed:        Array of worker speeds per stage.
- * @param   demand:       Array of pipeline demand per stage.
- * @param   initial_need: Array of initial needs (used if speed=0).
- * @param   limits_out:   Output array for final worker limits.
- */
-static void allocate_workers_proportionally(int num_workers,
-	const double *speed, const double *demand, const int* initial_need,
-	int *limits_out)
-{
-	double stage_precise_need[WORKER_STAT_STAGE_NUM] = {0.0};
-	double need_fraction[WORKER_STAT_STAGE_NUM] = {0.0};
-	int total_allocated = 0;
-	double precise_total_need;
-
-	precise_total_need = calculate_proportional_needs(speed, demand,
-		initial_need, stage_precise_need);
-
-	if (precise_total_need <= 0) {
-		int wps = num_workers / WORKER_STAT_STAGE_NUM;
-		int rem = num_workers % WORKER_STAT_STAGE_NUM;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			limits_out[s] = wps + (s < rem ? 1 : 0);
-			total_allocated += limits_out[s];
-		}
-
-		if (total_allocated != num_workers && WORKER_STAT_STAGE_NUM > 0) {
-			 limits_out[0] += (num_workers - total_allocated);
-		}
-
-		return;
-    }
-
-	total_allocated = allocate_integer_part(num_workers, precise_total_need,
-		stage_precise_need, need_fraction, limits_out);
-
-	distribute_remaining_workers(num_workers, total_allocated,
-		need_fraction, limits_out);
-}
-
-
-/**
- * @brief   Allocate idle workers when need <= available.
- *
- * @param   num_workers:        Total available workers.
- * @param   total_initial_need: Sum of initial needs.
- * @param   initial_need:       Array of initial needs per stage.
- * @param   speed:              Array of worker speeds per stage.
- * @param   demand:             Array of pipeline demand per stage.
- * @param   limits_out:         Output array for final worker limits.
- */
-static void allocate_idle_workers(int num_workers, int total_initial_need,
-	const int *initial_need, const double *speed, const double *demand,
-	int *limits_out)
-{
-	int remaining_workers = num_workers - total_initial_need;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		limits_out[s] = initial_need[s];
-	}
-
-	if (remaining_workers > 0) {
-		int best_stage = -1;
-		double best_ratio = -1.0;
-
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			double ratio = 0.0;
-			if (speed[s] > 0) {
-				ratio = demand[s] / speed[s];
-			} else if (demand[s] > 0) {
-				ratio = 1e12;
-			}
-
-			if (ratio > best_ratio) {
-				best_ratio = ratio;
-				best_stage = s;
-			}
-		}
-
-		if (best_stage == -1) {
-			best_stage = WORKER_STAT_STAGE_APPLY;
-		}
-
-		limits_out[best_stage] += remaining_workers;
-	}
-}
-
-/**
- * @brief   Ensure stages with demand have at least one worker and
- *          adjust limits.
- *
- * This function guarantees that any stage with non-zero demand receives at
- * least one worker. If adding these minimum workers causes the total allocated
- * workers to exceed the available number, it iteratively removes workers from
- * the stages with the highest allocation (avoiding stages that only have their
- * guaranteed minimum) until the total matches the available count.
- *
- * @param   num_workers: Total number of available worker threads.
- * @param   demand:      Array of estimated demand per stage.
- * @param   limits_out:  Input/Output array of worker limits per stage. This
- *                       array is modified in place.
- */
-static void ensure_minimum_worker_allocation(int num_workers,
-	const double *demand, int *limits_out)
-{
-	int guaranteed_workers = 0;
-	int current_total_workers = 0;
-	int excess_workers = 0;
-
-	/* Ensure minimum allocation for stages with demand */
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		if (demand[s] > 0.0 && limits_out[s] == 0) {
-			limits_out[s] = 1;
-			guaranteed_workers++;
-		}
-	}
-
-	/* If minimum guarantees were applied, check for excess workers */
-	if (guaranteed_workers > 0) {
-		for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-			current_total_workers += limits_out[s];
-		}
-
-		excess_workers = current_total_workers - num_workers;
-
-		/* Reduce workers from stages with the highest limits if necessary */
-		while (excess_workers > 0) {
-			int max_limit = 0;
-			int max_stage = -1;
-			bool can_reduce = false;
-
-			/*
-			 * First pass: Find the stage with the most workers, excluding
-			 * those that only have the guaranteed minimum of 1.
-			 */
-			for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-				bool is_guaranteed_minimum
-					= (demand[s] > 0.0 && limits_out[s] == 1);
-				if (!is_guaranteed_minimum && limits_out[s] > max_limit) {
-					max_limit = limits_out[s];
-					max_stage = s;
-					can_reduce = true; // Found a stage to reduce from
-				}
-			}
-
-			/*
-			 * Second pass (fallback): If no stage could be reduced in the first
-			 * pass (e.g., all demanding stages have exactly 1 worker),
-			 * find any stage with more than 1 worker, regardless of demand.
-			 */
-			if (!can_reduce) {
-				max_limit = 1; // Reset max_limit check for this pass
-				for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-					if (limits_out[s] > max_limit) {
-						max_limit = limits_out[s];
-						max_stage = s;
-						can_reduce = true;
-					}
-				}
-			}
-
-			/* Reduce worker count from the selected stage */
-			if (can_reduce && max_stage != -1) {
-				limits_out[max_stage]--;
-				excess_workers--;
-			} else {
-				errmsg(stderr,
-					"Could not reduce excess workers (%d) while "
-					"guaranteeing minimum allocation.\n", excess_workers);
-				break; /* Exit loop to avoid infinite loop */
-			}
-		}
-	}
-}
-
-/**
- * @brief   Final check and correction for worker limits.
- *
- * @param   num_workers: Total available workers.
- * @param   limits:      Array of calculated limits to finalize.
- */
-static void finalize_limits(int num_workers, int *limits)
-{
-	int final_total_check = 0;
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; ++s) {
-		if (limits[s] < 0) {
-			limits[s] = 0;
-		}
-		final_total_check += limits[s];
-	}
-
-	if (final_total_check != num_workers) {
-		int diff = num_workers - final_total_check;
-		errmsg(stderr,
-			"Limit mismatch: total %d != needed %d. Adjust by %d.\n",
-			final_total_check, num_workers, diff);
-		return;
-	}
-}
-
-/**
- * @brief   Estimate worker limits per stage based on demand and speed.
+ * This function reads the EMA cycle costs from all candle_chunk_lists
+ * and stores a snapshot in 'admin_state.task_costs'.
  *
  * @param   cache:  Global cache instance.
- * @param   limits: Output array (size WORKER_STAT_STAGE_NUM) for limits.
  */
-void compute_stage_limits(struct trcache *cache, int *limits)
+static void update_all_task_costs(struct trcache *cache)
 {
-	double speed[WORKER_STAT_STAGE_NUM] = { 0.0 };
-	double demand[WORKER_STAT_STAGE_NUM] = { 0.0 };
-	int initial_need[WORKER_STAT_STAGE_NUM] = { 0 };
-	int total_initial_need_int = 0;
+	struct symbol_table *table = cache->symbol_table;
+	struct admin_state *admin = &cache->admin_state;
+	int num_symbols = atomic_load_explicit((int*)&table->num_symbols,
+		memory_order_acquire);
 
-	compute_worker_speeds(cache, speed);
-	compute_pipeline_demand(cache, demand);
+	const double MIN_COST = 1.0; /* Assume 1 cycle if EMA is 0 */
+	
+	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			struct candle_chunk_list *list =
+				table->symbol_entries[sym_idx].candle_chunk_list_ptrs[type_idx];
+			
+			size_t idx = (size_t)type_idx * (size_t)table->capacity +
+				(size_t)sym_idx;
+			
+			double cost_apply = (double)atomic_load_explicit(
+				&list->ema_cycles_per_apply, memory_order_acquire);
+			double cost_convert = (double)atomic_load_explicit(
+				&list->ema_cycles_per_convert, memory_order_acquire);
+			double cost_flush = (double)atomic_load_explicit(
+				&list->ema_cycles_per_flush, memory_order_acquire);
 
-	total_initial_need_int = calculate_initial_needs(speed, demand,
-		initial_need);
+			admin->task_costs[idx].cost_apply =
+				(cost_apply > 0) ? cost_apply : MIN_COST;
+			admin->task_costs[idx].cost_convert =
+				(cost_convert > 0) ? cost_convert : MIN_COST;
+			admin->task_costs[idx].cost_flush =
+				(cost_flush > 0) ? cost_flush : MIN_COST;
+		}
+	}
+}
 
-	if (total_initial_need_int > cache->num_workers) {
-		allocate_workers_proportionally(cache->num_workers, speed, demand,
-			initial_need, limits);
+/**
+ * @brief   Calculates total cycle costs for In-Memory and Flush groups.
+ *
+ * @param   cache:                 Global cache instance.
+ * @param   admin:                 Admin state containing demand stats.
+ * @param   symtab:                Symbol table.
+ * @param   out_in_memory_cycles:  Total cycles needed for Apply+Convert.
+ * @param   out_flush_cycles:      Total cycles needed for Flush.
+ */
+static void calculate_total_cycle_needs(struct trcache *cache,
+	struct admin_state *admin, struct symbol_table *symtab,
+	double *out_in_memory_cycles, double *out_flush_cycles)
+{
+	double total_im_cycles = 0.0;
+	double total_flush_cycles = 0.0;
+	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
+		memory_order_acquire);
+	
+	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			size_t idx = (size_t)type_idx * (size_t)symtab->capacity +
+				(size_t)sym_idx;
+			
+			struct sched_stage_rate *demand = &admin->stage_rates[idx];
+			struct admin_task_costs *cost = &admin->task_costs[idx];
+
+			/* Add demand (items per sec) * cost (cycles per item) */
+			total_im_cycles
+				+= (double)demand->produced_rate * cost->cost_apply;
+			total_im_cycles
+				+= (double)demand->completed_rate * cost->cost_convert;
+			total_flush_cycles
+				+= (double)demand->flushable_batch_rate * cost->cost_flush;
+		}
+	}
+
+	*out_in_memory_cycles = total_im_cycles;
+	*out_flush_cycles = total_flush_cycles;
+}
+
+/**
+ * @brief   Determines worker counts for In-Memory and Flush groups.
+ *
+ * @param   num_workers:            Total workers available.
+ * @param   total_im_cycles:        Total cycles needed for Apply+Convert.
+ * @param   total_flush_cycles:     Total cycles needed for Flush.
+ * @param   out_num_im_workers:     (out) Number of workers for In-Memory.
+ * @param   out_num_flush_workers:  (out) Number of workers for Flush.
+ */
+static void calculate_worker_group_distribution(int num_workers,
+	double total_im_cycles, double total_flush_cycles,
+	int *out_num_im_workers, int *out_num_flush_workers)
+{
+	double total_cycles = total_im_cycles + total_flush_cycles;
+
+	if (total_cycles == 0) {
+		*out_num_im_workers = num_workers; /* Default: all to in-memory */
+		*out_num_flush_workers = 0;
 	} else {
-		allocate_idle_workers(cache->num_workers, total_initial_need_int,
-			initial_need, speed, demand, limits);
+		*out_num_im_workers = (int)ceil(
+			(total_im_cycles / total_cycles) * num_workers);
+		*out_num_flush_workers = num_workers - *out_num_im_workers;
+
+		/*
+		 * Ensure flush always gets at least one worker if it has work,
+		 * and In-Memory always gets one if it has work.
+		 */
+		if (total_flush_cycles > 0 && *out_num_flush_workers == 0 &&
+				*out_num_im_workers > 0) {
+			*out_num_flush_workers = 1;
+			*out_num_im_workers = num_workers - 1;
+		} else if (total_im_cycles > 0 && *out_num_im_workers == 0 &&
+				*out_num_flush_workers > 0) {
+			*out_num_im_workers = 1;
+			*out_num_flush_workers = num_workers - 1;
+		}
 	}
-
-	/* Ensure stages with demand get at least one worker, adjust if needed */
-	ensure_minimum_worker_allocation(cache->num_workers, demand, limits);
-
-	finalize_limits(cache->num_workers, limits);
 }
 
 /**
- * @brief   Calculate starting worker index for each stage sequentially.
- *
- * @param   cache:  Global cache instance.
- * @param   limits: Input array of worker limits per stage.
- * @param   start:  Output array (size WORKER_STAT_STAGE_NUM) for start indices.
+ * @brief   Sets a specific bit in a bitmap.
  */
-void compute_stage_starts(struct trcache *cache, int *limits, int *start)
+static inline void set_bitmap_bit(uint64_t *bitmap, int bit_index)
 {
-	start[WORKER_STAT_STAGE_APPLY] = 0;
-	start[WORKER_STAT_STAGE_CONVERT] =
-		start[WORKER_STAT_STAGE_APPLY] + limits[WORKER_STAT_STAGE_APPLY];
-	start[WORKER_STAT_STAGE_FLUSH] =
-		start[WORKER_STAT_STAGE_CONVERT] + limits[WORKER_STAT_STAGE_CONVERT];
+	bitmap[WORD_OFFSET(bit_index)] |= (1ULL << BIT_OFFSET(bit_index));
+}
 
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; ++s) {
-		if (start[s] < 0) {
-			errmsg(stderr, "Warn: Negative start %d stage %d\n", start[s], s);
-			start[s] = 0;
+/**
+ * @brief   Helper function to assign a task to a worker in a budget group.
+ *
+ * It checks the budget, advances the worker if necessary, and sets the
+ * corresponding bit in the correct local bitmap.
+ *
+ * @param   state:             Mutable state of the budget group.
+ * @param   task_cost:         The cycle cost of the task to assign.
+ * @param   local_bitmaps_all: Pointer to the start of all local bitmaps.
+ * @param   words_per_bitmap:  Size of a single worker's bitmap (in words).
+ * @param   bit_index:         The bit index to set for this task.
+ */
+static void assign_task_to_budget_group(struct budget_assign_state *state,
+	double task_cost, uint64_t *local_bitmaps_all, size_t words_per_bitmap,
+	int bit_index)
+{
+	if (state->num_workers_in_group == 0) {
+		return;
+	}
+
+	/*
+	 * Check if budget is exceeded AND we can move to a new worker.
+	 * (The last worker in the group takes all remaining tasks)
+	 */
+	int max_worker_idx_in_group = state->start_worker_idx +
+		state->num_workers_in_group - 1;
+
+	if (state->current_budget < task_cost &&
+		state->current_worker_idx < max_worker_idx_in_group)
+	{
+		/* Move to next worker */
+		state->current_worker_idx++;
+		state->current_budget = state->budget_per_worker;
+	}
+
+	/* Assign task to the current worker's bitmap */
+	uint64_t *worker_bitmap_start = local_bitmaps_all +
+		(state->current_worker_idx * words_per_bitmap);
+	
+	set_bitmap_bit(worker_bitmap_start, bit_index);
+	state->current_budget -= task_cost;
+}
+
+/**
+ * @brief   Assigns all tasks to worker bitmaps based on cycle budgets.
+ *
+ * This function calculates the *next* assignment and stores it in
+ * the admin_state's 'next_...' bitmap buffers.
+ *
+ * @param   cache:              Global cache instance.
+ * @param   admin:              Admin state containing demand stats.
+ * @param   symtab:             Symbol table.
+ * @param   num_im_workers:     Number of workers in In-Memory group.
+ * @param   num_flush_workers:  Number of workers in Flush group.
+ * @param   total_im_cycles:    Total cycle budget for the In-Memory group.
+ * @param   total_flush_cycles: Total cycle budget for the Flush group.
+ */
+static void assign_tasks_to_bitmaps(struct trcache *cache,
+	struct admin_state *admin,	struct symbol_table *symtab,
+	int num_im_workers, int num_flush_workers,
+	double total_im_cycles, double total_flush_cycles)
+{
+	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
+		memory_order_acquire);
+	int max_syms = symtab->capacity;
+	size_t in_mem_words = admin->in_mem_words_per_worker;
+	size_t flush_words = admin->flush_words_per_worker;
+	
+	/* Clear the 'next' buffers for recalculation */
+	memset(admin->next_im_bitmaps, 0,
+		cache->num_workers * in_mem_words * sizeof(uint64_t));
+	memset(admin->next_flush_bitmaps, 0,
+		cache->num_workers * flush_words * sizeof(uint64_t));
+
+	/* Initialize state for the In-Memory group */
+	struct budget_assign_state im_state = {
+		.budget_per_worker = (num_im_workers > 0) ?
+			total_im_cycles / num_im_workers : 0,
+		.current_worker_idx = 0,
+		.num_workers_in_group = num_im_workers,
+		.start_worker_idx = 0
+	};
+	im_state.current_budget = im_state.budget_per_worker;
+
+	/* Initialize state for the Flush group */
+	struct budget_assign_state flush_state = {
+		.budget_per_worker = (num_flush_workers > 0) ?
+			total_flush_cycles / num_flush_workers : 0,
+		.current_worker_idx = num_im_workers,
+		.num_workers_in_group = num_flush_workers,
+		.start_worker_idx = num_im_workers
+	};
+	flush_state.current_budget = flush_state.budget_per_worker;
+	
+	/* Main assignment loop: (Type -> Symbol) for cache locality */
+	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			size_t task_idx = (size_t)type_idx * (size_t)max_syms +
+				(size_t)sym_idx;
+			struct sched_stage_rate *demand = &admin->stage_rates[task_idx];
+			struct admin_task_costs *cost = &admin->task_costs[task_idx];
+			
+			/* Assign In-Memory (Apply) */
+			double apply_task_cost
+				= (double)demand->produced_rate * cost->cost_apply;
+			assign_task_to_budget_group(&im_state, apply_task_cost,
+				admin->next_im_bitmaps, in_mem_words, (task_idx * 2));
+
+			/* Assign In-Memory (Convert) */
+			double convert_task_cost
+				= (double)demand->completed_rate * cost->cost_convert;
+			assign_task_to_budget_group(&im_state, convert_task_cost,
+				admin->next_im_bitmaps, in_mem_words, (task_idx * 2) + 1);
+
+			/* Assign Flush */
+			double flush_task_cost
+				= (double)demand->flushable_batch_rate * cost->cost_flush;
+			assign_task_to_budget_group(&flush_state, flush_task_cost,
+				admin->next_flush_bitmaps, flush_words, task_idx);
 		}
+	}
+}
 
-		if (cache->num_workers > 0 && start[s] >= cache->num_workers
-			&& limits[s] > 0) {
-			errmsg(stderr, "Warn: Start %d >= workers %d stage %d\n",
-					start[s], cache->num_workers, s);
-			start[s] = cache->num_workers - 1;
-		} else if (cache->num_workers == 0) {
-			start[s] = 0;
-		}
+/**
+ * @brief   Compares 'next' bitmaps with 'current'
+ *          and updates workers if changed.
+ *
+ * @param   cache:          Global cache instance.
+ * @param   admin:          Admin state containing all bitmap buffers.
+ * @param   num_im_workers: Number of workers assigned to In-Memory group.
+ */
+static void publish_new_assignments_to_workers(struct trcache *cache,
+	struct admin_state *admin, int num_im_workers)
+{
+	size_t in_mem_bytes = admin->in_mem_words_per_worker * sizeof(uint64_t);
+	size_t flush_bytes = admin->flush_words_per_worker * sizeof(uint64_t);
 
-		if (start[s] + limits[s] > cache->num_workers) {
-			errmsg(stderr, "Warn: Stage %d range [%d, %d) > workers %d\n",
-					s, start[s], start[s] + limits[s], cache->num_workers);
-			limits[s] = cache->num_workers - start[s];
-			if (limits[s] < 0) {
-				limits[s] = 0;
+	for (int i = 0; i < cache->num_workers; i++) {
+		struct worker_state *state = &cache->worker_state_arr[i];
+		int old_group = atomic_load_explicit(&state->group_id,
+			memory_order_acquire);
+		
+		if (i < num_im_workers) {
+			/* This is an In-Memory worker */
+			int new_group = GROUP_IN_MEMORY;
+			uint64_t *next_bitmap = admin->next_im_bitmaps +
+				(i * admin->in_mem_words_per_worker);
+			uint64_t *current_bitmap = admin->current_im_bitmaps +
+				(i * admin->in_mem_words_per_worker);
+
+			/* Check if group or bitmap content has changed */
+			if (old_group != new_group ||
+				memcmp(next_bitmap, current_bitmap, in_mem_bytes) != 0)
+			{
+				atomic_store_explicit(&state->group_id, new_group,
+					memory_order_release);
+				memcpy(state->in_memory_bitmap, next_bitmap, in_mem_bytes);
+				memset(state->flush_bitmap, 0, flush_bytes);
+				
+				/* Save copy of new bitmap */
+				memcpy(current_bitmap, next_bitmap, in_mem_bytes);
+				memset(admin->current_flush_bitmaps +
+					(i * admin->flush_words_per_worker), 0, flush_bytes);
+			}
+
+		} else {
+			/* This is a Flush worker */
+			int new_group = GROUP_FLUSH;
+			uint64_t *next_bitmap = admin->next_flush_bitmaps +
+				(i * admin->flush_words_per_worker);
+			uint64_t *current_bitmap = admin->current_flush_bitmaps +
+				(i * admin->flush_words_per_worker);
+
+			/* Check if group or bitmap content has changed */
+			if (old_group != new_group ||
+				memcmp(next_bitmap, current_bitmap, flush_bytes) != 0)
+			{
+				atomic_store_explicit(&state->group_id, new_group,
+					memory_order_release);
+				memcpy(state->flush_bitmap, next_bitmap, flush_bytes);
+				memset(state->in_memory_bitmap, 0, in_mem_bytes);
+
+				/* Save copy of new bitmap */
+				memcpy(current_bitmap, next_bitmap, flush_bytes);
+				memset(admin->current_im_bitmaps +
+					(i * admin->in_mem_words_per_worker), 0, in_mem_bytes);
 			}
 		}
 	}
@@ -782,44 +645,51 @@ void compute_stage_starts(struct trcache *cache, int *limits, int *start)
 /**
  * @brief   Balance work assignments across workers.
  *
+ * This is the main scheduler function.
+ * 1. Calculates total cycle requirements for (Apply+Convert) vs (Flush).
+ * 2. Divides workers into two groups based on the cycle ratio.
+ * 3. Calculates a cycle "budget" for each worker in each group.
+ * 4. Iterates (Type -> Symbol) and assigns tasks to workers' 'next'
+ *    local bitmaps, consuming their budget.
+ * 5. Compares 'next' bitmaps to 'current' bitmaps and updates
+ *    workers only if a change is detected.
+ *
  * @param   cache:  Global cache instance.
  */
 static void balance_workers(struct trcache *cache)
 {
-	struct symbol_table *table = cache->symbol_table;
-	int num = table->num_symbols;
-	int limits[WORKER_STAT_STAGE_NUM] = { 0, };
-	int stage_start[WORKER_STAT_STAGE_NUM] = { 0, };
-	double load[WORKER_STAT_STAGE_NUM][MAX_NUM_THREADS] = { { 0, } };
-	bool limits_changed = false;
+	struct admin_state *admin = &cache->admin_state;
+	struct symbol_table *symtab = cache->symbol_table;
+	int num_workers = cache->num_workers;
+	double total_im_cycles = 0.0;
+	double total_flush_cycles = 0.0;
+	int num_im_workers = 0;
+	int num_flush_workers = 0;
 	
-	reset_stage_ct_masks(cache);
+	/* 
+	 * 1. Calculate total cycle needs.
+	 *    (reads from admin->stage_rates and admin->task_costs)
+	 */
+	calculate_total_cycle_needs(
+		cache, admin, symtab, &total_im_cycles, &total_flush_cycles);
+	
+	/* 2. Determine worker group sizes */
+	calculate_worker_group_distribution(num_workers, total_im_cycles,
+		total_flush_cycles, &num_im_workers, &num_flush_workers);
 
-	compute_stage_limits(cache, limits);
-	compute_stage_starts(cache, limits, stage_start);
+	/*
+	 * 3. Assign tasks to the 'next' local bitmaps.
+	 *    (This function clears 'next_...' bitmaps internally and
+	 *     reads from admin->stage_rates and admin->task_costs)
+	 */
+	assign_tasks_to_bitmaps(cache, admin, symtab, num_im_workers,
+		num_flush_workers, total_im_cycles, total_flush_cycles);
 
-	/* Compare current limits/starts with previous ones */
-	if (cache->admin_state.is_first_run ||
-			memcmp(cache->admin_state.prev_limits, limits,
-				sizeof(limits)) != 0 ||
-			memcmp(cache->admin_state.prev_starts, stage_start,
-				sizeof(stage_start)) != 0) {
-		limits_changed = true;
-		memcpy(cache->admin_state.prev_limits, limits,
-			sizeof(limits));
-		memcpy(cache->admin_state.prev_starts, stage_start,
-			sizeof(stage_start));
-		cache->admin_state.is_first_run = false;
-	}
-
-	if (!limits_changed) {
-		return;
-	}
-
-	for (int i = 0; i < num; i++) {
-		schedule_symbol_work(cache, &table->symbol_entries[i],
-			load, limits, stage_start);
-	}
+	/*
+	 * 4. Publish new assignments to workers,
+	 *    only if they differ from 'current' assignments.
+	 */
+	publish_new_assignments_to_workers(cache, admin, num_im_workers);
 }
 
 /**
@@ -834,20 +704,18 @@ static void balance_workers(struct trcache *cache)
 void *admin_thread_main(void *arg)
 {
 	struct trcache *cache = (struct trcache *)arg;
-	struct timespec ts;
-	uint64_t now_ms;
 
 	while (!cache->admin_state.done) {
-		if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
-			now_ms = (uint64_t)ts.tv_sec * 1000ULL 
-				+ (uint64_t)(ts.tv_nsec / 1000000ULL);
-			atomic_store_explicit(&g_admin_current_ts_ms, now_ms,
-				memory_order_release);
-		}
-
+		/* 1. Update demand statistics (reads from hardware) */
 		update_all_pipeline_stats(cache);
+
+		/* 2. Update cost statistics (reads from candle_chunk_lists) */
+		update_all_task_costs(cache);
+
+		/* 3. Re-balance worker assignments */
 		balance_workers(cache);
-		usleep((useconds_t)(ADMIN_THREAD_PERIOD_MS * 1000U));
+		
+		sched_yield();
 	}
 
 	return NULL;

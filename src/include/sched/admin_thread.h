@@ -1,50 +1,58 @@
 #ifndef ADMIN_THREAD_H
 #define ADMIN_THREAD_H
 
+#include "sched/sched_pipeline_stats.h"
+
 #include "trcache.h"
-#include "sched/sched_work_msg.h"
 
 /**
- * admin_state - Runtime state for the admin thread.
+ * @brief Admin-local snapshot of task costs (EMA cycles per item).
  *
- * @sched_msg_queue: Queue of scheduler messages for admin commands.
- * @done:            Flag signalled during shutdown.
- * @prev_limits:     Worker limits calculated in the previous cycle.
- * @prev_starts:     Worker start indices calculated in the previous cycle.
- * @is_first_run:    Flag to indicate the first run of balance_workers.
+ * Stored in (candle_type, symbol_id) major order, matching
+ * stage_snaps and stage_rates.
  */
-struct admin_state {
-	sched_work_msg_queue *sched_msg_queue;
-	bool done;
-	int prev_limits[WORKER_STAT_STAGE_NUM];
-	int prev_starts[WORKER_STAT_STAGE_NUM];
-	bool is_first_run;
+struct admin_task_costs {
+	double cost_apply;
+	double cost_convert;
+	double cost_flush;
 };
 
-/**
- * @brief   Period of the admin thread main loop in milliseconds.
+/*
+ * admin_state - Runtime state for the admin thread.
  *
- * The admin thread wakes up at this interval to perform routine duties
- * such as updating pipeline statistics and balancing worker loads.
- * A millisecond granularity is used rather than a fixed one‑second sleep
- * so that callers can tune responsiveness as needed. The default
- * period corresponds to one second. Override this definition at
- * compile time to customise the admin thread frequency.
- */
-#ifndef ADMIN_THREAD_PERIOD_MS
-#define ADMIN_THREAD_PERIOD_MS 1000
-#endif
-
-/**
- * @brief   Externally visible timestamp maintained by the admin thread.
+ * @stage_snaps:              Pointer to an array of napshot structures.
+ * @stage_rates:              Pointer to an array of rate structures.
+ * @task_costs:               Admin-local array for task costs (EMA cycles).
+ * @next_im_bitmaps:          Reusable buffer for calculating the next
+ *                            In-Memory assignment.
+ * @next_flush_bitmaps:       Reusable buffer for calculating the next
+ *                            Flush assignment.
+ * @current_im_bitmaps:       Stores a copy of the last published
+ *                            In-Memory assignment.
+ * @current_flush_bitmaps:    Stores a copy of the last published
+ *                            Flush assignment.
+ * @in_mem_words_per_worker:  Size (in uint64_t words) of a single
+ *                            worker's In-Memory bitmap.
+ * @flush_words_per_worker:   Size (in uint64_t words) of a single
+ *                            worker's Flush bitmap.
+ * @done:                     Flag signalled during shutdown.
  *
- * On each wakeup, the admin thread records the current real‑time clock
- * (in milliseconds since the Unix epoch) into this global. Other threads may
- * read this variable to make time‑based decisions – for example, determining
- * whether a time‑interval candle has crossed its boundary. It is declared as
- * _Atomic to permit lock‑free loads.
+ * The arrays are indexed using: [type_idx * max_symbols + sym_idx]
+ * to match the admin thread's loop (Type -> Symbol) and the
+ * new ownership flag layout.
  */
-extern _Atomic uint64_t g_admin_current_ts_ms;
+struct admin_state {
+	struct sched_stage_snapshot *stage_snaps;
+	struct sched_stage_rate *stage_rates;
+	struct admin_task_costs *task_costs;
+	uint64_t *next_im_bitmaps;
+	uint64_t *next_flush_bitmaps;
+	uint64_t *current_im_bitmaps;
+	uint64_t *current_flush_bitmaps;
+	size_t in_mem_words_per_worker;
+	size_t flush_words_per_worker;
+	bool done;
+};
 
 /**
  * @brief   Initialise the admin thread state.
@@ -76,29 +84,11 @@ void *admin_thread_main(void *arg);
 /**
  * @brief   Refresh pipeline statistics for all symbols.
  *
+ * This function polls all symbol entries and updates the admin-thread-local
+ * statistics arrays in 'admin_state'.
+ *
  * @param   cache:  Global cache instance.
  */
 void update_all_pipeline_stats(struct trcache *cache);
-
-/**
- * @brief   Estimate worker limits per pipeline stage.
- *
- * @param   cache:  Global cache instance.
- * @param   limits: Output array sized WORKER_STAT_STAGE_NUM.
- */
-void compute_stage_limits(struct trcache *cache, int *limits);
-
-/**
- * @brief   Derive worker start indices for each pipeline stage.
- *
- * Uses @limits to position stage worker ranges within the total worker pool.
- * When the worker count is too small, @limits is overwritten with fallback
- * values.
- *
- * @param   cache:  Global cache instance.
- * @param   limits: Per-stage worker limits.
- * @param   start:  Output array sized WORKER_STAT_STAGE_NUM.
- */
-void compute_stage_starts(struct trcache *cache, int *limits, int *start);
 
 #endif /* ADMIN_THREAD_H */

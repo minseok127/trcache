@@ -21,14 +21,16 @@
 /**
  * @brief   Create a new symbol_table.
  *
- * @param   max_capacity: The maximum number of symbols to support (fixed size).
+ * @param   max_capacity:       The maximum number of symbols.
+ * @param   num_candle_configs: The number of candle types.
  *
  * @return  Pointer to a newly allocated symbol_table, or NULL on error.
  *
  */
-struct symbol_table *symbol_table_init(int max_capacity)
+struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 {
 	struct symbol_table *table = calloc(1, sizeof(struct symbol_table));
+	size_t num_tasks, in_mem_size, flush_size;
 
 	if (table == NULL) {
 		errmsg(stderr, "#symbol_table allocation failed\n");
@@ -63,6 +65,41 @@ struct symbol_table *symbol_table_init(int max_capacity)
 		free(table);
 		return NULL;
 	}
+
+	/*
+	 * Allocate and initialize the new global ownership flag arrays.
+	 * All flags are initialized to -1 (free).
+	 */
+	num_tasks = (size_t)num_candle_configs * (size_t)max_capacity;
+	in_mem_size = num_tasks * sizeof(struct in_memory_owner);
+	flush_size = num_tasks * sizeof(_Atomic int);
+
+	table->in_memory_ownership_flags = aligned_alloc(
+		CACHE_LINE_SIZE, in_mem_size);
+	if (table->in_memory_ownership_flags == NULL) {
+		errmsg(stderr, "in_memory_ownership_flags allocation failed\n");
+		free(table->symbol_entries);
+		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
+		free(table);
+		return NULL;
+	}
+	/* Initialize all flags to -1 (free) */
+	memset(table->in_memory_ownership_flags, -1, in_mem_size);
+
+	table->flush_ownership_flags = aligned_alloc(
+		CACHE_LINE_SIZE, flush_size);
+	if (table->flush_ownership_flags == NULL) {
+		errmsg(stderr, "flush_ownership_flags allocation failed\n");
+		free(table->in_memory_ownership_flags);
+		free(table->symbol_entries);
+		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
+		free(table);
+		return NULL;
+	}
+	/* Initialize all flags to -1 (free) */
+	memset(table->flush_ownership_flags, -1, flush_size);
 
 	table->capacity = max_capacity;
 	table->num_symbols = 0;
@@ -100,6 +137,9 @@ void symbol_table_destroy(struct symbol_table *table)
 		trade_data_buffer_destroy(entry->trd_buf);
 		free(entry->symbol_str);
 	}
+
+	free(table->in_memory_ownership_flags);
+	free(table->flush_ownership_flags);
 
 	free(table->symbol_entries);
 	free(table);
@@ -185,12 +225,6 @@ static int init_symbol_entry(struct trcache *tc,
 		free(entry->symbol_str);
 		entry->symbol_str = NULL;
 		return -1;
-	}
-
-	for (int s = 0; s < WORKER_STAT_STAGE_NUM; s++) {
-		for (int i = 0; i < tc->num_candle_configs; i++) {
-			atomic_init(&entry->in_progress[s][i], -1);
-		}
 	}
 
 	for (int i = 0; i < tc->num_candle_configs; i++) {

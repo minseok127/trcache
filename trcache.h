@@ -471,16 +471,6 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
 /**
- * Identifiers for pipeline stages executed by workers.
- */
-typedef enum worker_stat_stage_type {
-	WORKER_STAT_STAGE_APPLY = 0,
-	WORKER_STAT_STAGE_CONVERT,
-	WORKER_STAT_STAGE_FLUSH,
-	WORKER_STAT_STAGE_NUM
-} worker_stat_stage_type;
-
-/**
  * Identifiers for memory usage categories tracked by memstat.
  */
 typedef enum memstat_category {
@@ -488,34 +478,8 @@ typedef enum memstat_category {
 	MEMSTAT_CANDLE_CHUNK_LIST,
 	MEMSTAT_CANDLE_CHUNK_INDEX,
 	MEMSTAT_SCQ_NODE,
-	MEMSTAT_SCHED_MSG,
 	MEMSTAT_CATEGORY_NUM
 } memstat_category;
-
-/**
- * trcache_worker_distribution_stats - Statistics on worker distribution
- *                                     and performance.
- *
- * @stage_speeds:     Measured average processing *efficiency per worker*
- *                    for each stage (items/sec/worker). Indicates how many
- *                    items a single worker processes per second on average.
- * @pipeline_demand:  Estimated *total required throughput* for each pipeline
- *                    stage across the entire system (items/sec).
- * @stage_capacity    Estimated *total processing capacity* for each stage
- *                    (items/sec). Represents the theoretical maximum throughput
- *                    if all allocated workers operate at peak efficiency.
- * @stage_limits:     Number of workers allocated to each stage,
- *                    indexed by 'worker_stat_stage_type'.
- * @stage_starts:     Starting worker index for each stage,
- *                    indexed by 'worker_stat_stage_type'.
- */
-typedef struct trcache_worker_distribution_stats {
-	double stage_speeds[WORKER_STAT_STAGE_NUM];
-	double stage_capacity[WORKER_STAT_STAGE_NUM];
-	double pipeline_demand[WORKER_STAT_STAGE_NUM];
-	int stage_limits[WORKER_STAT_STAGE_NUM];
-	int stage_starts[WORKER_STAT_STAGE_NUM];
-} trcache_worker_distribution_stats;
 
 /**
  * trcache_memory_stats - A snapshot of memory usage by category.
@@ -526,16 +490,6 @@ typedef struct trcache_worker_distribution_stats {
 typedef struct trcache_memory_stats {
 	size_t usage_bytes[MEMSTAT_CATEGORY_NUM];
 } trcache_memory_stats;
-
-/**
- * @brief   Print current worker distribution per pipeline stage.
- *
- * Updates pipeline statistics and computes the number of workers allocated
- * to each pipeline stage according to the admin scheduler.
- *
- * @param   cache:  Handle from trcache_init().
- */
-void trcache_print_worker_distribution(struct trcache *cache);
 
 /**
  * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
@@ -550,17 +504,6 @@ void trcache_print_aux_memory_breakdown(struct trcache *cache);
  * @param   cache: Pointer to a trcache instance as returned from trcache_init().
  */
 void trcache_print_total_memory_breakdown(struct trcache *cache);
-
-/**
- * @brief   Get the current worker distribution and scheduler statistics.
- *
- * @param   cache:  Handle from trcache_init().
- * @param   stats:  Pointer to a user-allocated struct to be filled.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_worker_distribution(struct trcache *cache,
-	trcache_worker_distribution_stats *stats);
 
 /**
  * @brief   Get a snapshot of the auxiliary memory usage.

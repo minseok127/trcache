@@ -1,60 +1,45 @@
 #ifndef WORKER_THREAD_H
 #define WORKER_THREAD_H
 
+#include <stdatomic.h>
+#include <stdint.h>
+
 #include "trcache.h"
-#include "sched/worker_stat_board.h"
-#include "sched/sched_work_msg.h"
-#include "utils/list_head.h"
-#include "utils/hash_table.h"
 
-/*
- * worker_work_key - Hashable identifier for a work item.
+/**
+ * @brief Defines the operational group a worker belongs to.
  *
- * @symbol_id:  ID of the symbol associated with the work.
- * @candle_idx: Candle type index for the stage.
- * @stage:      Worker pipeline stage.
+ * The admin thread sets this identifier to inform the worker which
+ * bitmap (in-memory or flush) it should scan for work.
  */
-struct worker_work_key {
-	int symbol_id;
-	int candle_idx;
-	uint8_t stage;
-};
-
-/*
- * worker_work_item - Node stored in a worker's work list.
- *
- * @node: List linkage for iteration.
- * @key:  Work identifier used in the hash table.
- */
-struct worker_work_item {
-	struct list_head node;
-	struct worker_work_key key;
+enum worker_group_type {
+	GROUP_IN_MEMORY,
+	GROUP_FLUSH
 };
 
 /**
  * worker_state - Per-worker runtime data.
  *
- * @worker_id:           Numeric ID assigned to the worker thread.
- * @stat:                Performance counters split per pipeline stage.
- * @sched_msg_queue:     Queue for scheduler messages destined to this worker.
- * @done:                Flag signalled during shutdown.
- * @work_map:            Hash table tracking work owned by this worker.
- * @work_list:           List of work items for iteration order.
+ * @worker_id:         Numeric ID assigned to the worker thread.
+ * @done:              Flag signalled during shutdown.
+ * @group_id:          Identifier for the worker's current assigned group.
+ * @in_memory_bitmap:  Pointer to the cacheline-aligned bitmap for
+ *                     Apply/Convert tasks.
+ * @flush_bitmap:      Pointer to the cacheline-aligned bitmap for
+ *                     Flush tasks.
  */
 struct worker_state {
 	int worker_id;
-	struct worker_stat_board stat;
-	sched_work_msg_queue *sched_msg_queue;
 	bool done;
-	struct ht_hash_table *work_map;
-	struct list_head work_list;
+	_Atomic int group_id;
+	uint64_t *in_memory_bitmap;
+	uint64_t *flush_bitmap;
 };
 
 /**
  * @brief   Initialise the worker thread state.
  *
- * @param   state:     Target state structure.
- * @param   tc: Owner of the admin state.
+ * @param   tc:        Owner of the admin state.
  * @param   worker_id: Numeric identifier for the worker.
  *
  * @return  0 on success, -1 on failure.

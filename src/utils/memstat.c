@@ -11,7 +11,6 @@ static const char *cat_name[MEMSTAT_CATEGORY_NUM] = {
 	[MEMSTAT_CANDLE_CHUNK_LIST] = "candle_chunk_list",
 	[MEMSTAT_CANDLE_CHUNK_INDEX] = "candle_chunk_index",
 	[MEMSTAT_SCQ_NODE] = "scq_node",
-	[MEMSTAT_SCHED_MSG] = "sched_msg",
 };
 
 void memstat_errmsg_status(struct memstat *ms, bool only_aux)
