@@ -1,6 +1,7 @@
 #ifndef SCQ_H
 #define SCQ_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -57,22 +58,23 @@ struct scq_tls_data {
 	struct scq_free_node_list free_node_list;
 	struct scq_node *shared_tail;
 	struct scq_node shared_sentinel;
+	struct scalable_queue *owner_scq;
 	int last_dequeued_thread_idx;
+	int scq_id;
+	_Atomic bool is_active;
 };
 
 /*
  * scalable_queue - Main data structure to manage queue
  * @tls_data_ptr_list: Each thread's scq_tls_data pointer.
- * @spinlock:          Spinlock to manage thread-local data structures.
  * @scq_id:            Global ID of the scalable_queue.
  * @thread_num:        Number of threads.
  * @mem_acc:           Memory accounting information for this queue.
  */
 struct scalable_queue {
 	struct scq_tls_data *tls_data_ptr_list[MAX_THREAD_NUM];
-	pthread_spinlock_t spinlock;
 	int scq_id;
-	int thread_num;
+	_Atomic int thread_num;
 	struct trcache *owner_tc;
 	struct memory_accounting *mem_acc;
 };
@@ -113,5 +115,19 @@ void scq_enqueue(struct scalable_queue *scq, void *datum);
  * @return  true if an element was dequeued.
  */
 bool scq_dequeue(struct scalable_queue *scq, void **datum);
+
+/**
+ * @brief   Explicitly unregister a thread from an scq ("pause").
+ *
+ * This function signals that the current thread is temporarily pausing its
+ * use of the queue. It dumps all local caches (free nodes, pending data)
+ * to the shared lists so other threads can access them.
+ *
+ * The thread retains its "registration" and can re-register (re-activate)
+ * instantly (O(1)) on its next call to scq_enqueue/scq_dequeue.
+ *
+ * @param   scq: Queue instance to pause.
+ */
+void scq_thread_unregister(struct scalable_queue *scq);
 
 #endif /* SCQ_H */

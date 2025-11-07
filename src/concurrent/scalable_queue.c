@@ -19,8 +19,26 @@
 _Atomic int global_scq_id_flag;
 static int global_scq_id_arr[MAX_SCQ_NUM];
 
-_Thread_local static struct scq_tls_data *tls_data_ptr_arr[MAX_SCQ_NUM];
-_Thread_local static struct scalable_queue *tls_scq_ptr_arr[MAX_SCQ_NUM];
+/*
+ * Global pthread key for scq Thread-Local Storage (TLS).
+ * This key points to a thread-local "registration list", which is an
+ * array of (struct scq_tls_data *) indexed by scq_id. This allows
+ * a single thread to be registered with multiple scq instances.
+ */
+static pthread_key_t g_scq_key;
+static pthread_once_t g_scq_key_once = PTHREAD_ONCE_INIT;
+static void scq_tls_destructor(void *arg);
+
+/**
+ * @brief   One-time initialization for the global pthread key.
+ */
+static void scq_key_init(void)
+{
+	if (pthread_key_create(&g_scq_key, scq_tls_destructor) != 0) {
+		errmsg(stderr, "Failed to create pthread key for scq\n");
+		return;
+	}
+}
 
 /**
  * @brief   Initialise a scalble_queue that will account memory limit.
@@ -39,14 +57,10 @@ struct scalable_queue *scq_init(struct memory_accounting *mem_acc)
 	}
 
 	scq->mem_acc = mem_acc;
+	atomic_init(&scq->thread_num, 0);
 
-	scq->thread_num = 0;
-
-	if (pthread_spin_init(&scq->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
-		errmsg(stderr, "Initialization of spinlock failed\n");
-		free(scq);
-		return NULL;
-	}
+	/* Initialize the global pthread key exactly once */
+	pthread_once(&g_scq_key_once, scq_key_init);
 
 	/* Get the spinlock to assign scq id */
 	while (atomic_exchange(&global_scq_id_flag, 1) == 1) {
@@ -85,6 +99,7 @@ void scq_destroy(struct scalable_queue *scq)
 	struct scq_dequeued_node_list *dequeued_node_list;
 	struct scq_free_node_list *free_node_list;
 	struct scq_node *node, *prev_node;
+	int num_threads;
 
 	if (scq == NULL) {
 		return;
@@ -101,8 +116,10 @@ void scq_destroy(struct scalable_queue *scq)
 
 	atomic_store(&global_scq_id_flag, 0);
 
+	num_threads = atomic_load(&scq->thread_num);
+
 	/* Free thread-local linked lists */
-	for (int i = 0; i < scq->thread_num; i++) {
+	for (int i = 0; i < num_threads; i++) {
 		tls_data_ptr = scq->tls_data_ptr_list[i];
 		dequeued_node_list = &tls_data_ptr->dequeued_node_list;
 		free_node_list = &tls_data_ptr->free_node_list;
@@ -144,128 +161,7 @@ void scq_destroy(struct scalable_queue *scq)
 		free(tls_data_ptr);
 	}
 
-	pthread_spin_destroy(&scq->spinlock);
-
 	free(scq);
-}
-
-/**
- * @brief   Ensure thread-local data exists for the calling thread.
- */
-static void check_and_init_scq_tls_data(struct scalable_queue *scq)
-{
-	struct scq_tls_data *tls_data = NULL;
-
-	if (tls_scq_ptr_arr[scq->scq_id] == scq) {
-		return;
-	}
-
-	tls_data = (struct scq_tls_data *)calloc(1, sizeof(struct scq_tls_data));
-	tls_data_ptr_arr[scq->scq_id] = tls_data;
-
-	tls_data->dequeued_node_list.local_head = NULL;
-	tls_data->dequeued_node_list.local_tail = NULL;
-	tls_data->dequeued_node_list.local_initial_head = NULL;
-
-	tls_data->free_node_list.local_head = NULL;
-	tls_data->free_node_list.local_tail = NULL;
-
-	tls_data->free_node_list.shared_sentinel.next = NULL;
-	tls_data->free_node_list.shared_tail
-		= &tls_data->free_node_list.shared_sentinel;
-
-	tls_data->shared_sentinel.next = NULL;
-	tls_data->shared_tail = &tls_data->shared_sentinel;
-
-	tls_data->last_dequeued_thread_idx = 0;
-
-	pthread_spin_lock(&scq->spinlock);
-	scq->tls_data_ptr_list[scq->thread_num] = tls_data;
-	scq->thread_num++;
-	pthread_spin_unlock(&scq->spinlock);
-
-	tls_scq_ptr_arr[scq->scq_id] = scq;
-}
-
-/**
- * If there is a free node available, return it; otherwise allocate one.
- */
-static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
-	struct scq_tls_data *tls_data)
-{
-	struct scq_node *node = NULL;
-	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
-
-	if (free_node_list->local_head == NULL) {
-		if (free_node_list->shared_sentinel.next == NULL) {
-			node = (struct scq_node *)malloc(sizeof(struct scq_node));
-			if (node != NULL && scq->mem_acc != NULL) {
-				memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
-					sizeof(struct scq_node));
-			}
-
-			return node;
-		}
-
-		free_node_list->local_head
-			= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
-
-		if (free_node_list->local_head == NULL) {
-			node = (struct scq_node *)malloc(sizeof(struct scq_node));
-			if (node != NULL && scq->mem_acc != NULL) {
-				memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
-					sizeof(struct scq_node));
-			}
-
-			return node;
-		}
-
-		free_node_list->local_tail
-			= atomic_exchange(&free_node_list->shared_tail,
-				&free_node_list->shared_sentinel);
-	}
-
-	node = free_node_list->local_head;
-
-	if (free_node_list->local_head == free_node_list->local_tail) {
-		free_node_list->local_head = NULL;
-		free_node_list->local_tail = NULL;
-	} else {
-		while (node->next == NULL) {
-			__asm__ __volatile__("pause");
-		}
-
-		free_node_list->local_head = node->next;
-	}
-
-	return node;
-}
-
-/**
- * @brief   Enqueue the given datum into the queue.
- *
- * @param   scq:   Queue instance.
- * @param   datum: Pointer or scalar to enqueue.
- */
-void scq_enqueue(struct scalable_queue *scq, void *datum)
-{
-	struct scq_tls_data *tls_data = NULL;
-	struct scq_node *node = NULL;
-	struct scq_node *prev_tail = NULL;
-
-	check_and_init_scq_tls_data(scq);
-	tls_data = tls_data_ptr_arr[scq->scq_id];
-
-	node = scq_allocate_node(scq, tls_data);
-
-	node->datum = datum;
-	node->next = NULL;
-	__sync_synchronize();
-
-	prev_tail = atomic_exchange(&tls_data->shared_tail, node);
-	assert(prev_tail != NULL);
-
-	prev_tail->next = node;
 }
 
 /**
@@ -302,6 +198,408 @@ static void scq_free_nodes(struct scalable_queue *scq,
 	assert(prev_tail != NULL);
 
 	prev_tail->next = initial_head_node;
+}
+
+/**
+ * @brief   Cleans up local caches for a tls_data structure.
+ *
+ * This function moves all nodes from the local free list and local
+ * dequeued list (re-publishing data) to their respective shared lists,
+ * making them accessible to other threads.
+ *
+ * @param   tls_data: The tls_data struct to clean up.
+ */
+static void scq_tls_data_cleanup(struct scq_tls_data *tls_data)
+{
+	struct scq_free_node_list *free_list = &tls_data->free_node_list;
+	struct scq_dequeued_node_list *deq_list = &tls_data->dequeued_node_list;
+	struct scq_node *prev_tail;
+	struct scq_node *last_used_node = NULL;
+
+	/* 1. Dump local free list to shared free list */
+	if (free_list->local_head != NULL) {
+		free_list->local_tail->next = NULL;
+		__sync_synchronize();
+
+		prev_tail = atomic_exchange(&free_list->shared_tail,
+			free_list->local_tail);
+		prev_tail->next = free_list->local_head;
+
+		free_list->local_head = NULL;
+		free_list->local_tail = NULL;
+	}
+
+	/* 2. Process partially consumed dequeued list */
+	if (deq_list->local_initial_head != NULL) {
+		/*
+		 * We must have a valid owner index if we have a list.
+		 * This index was set when we stole the batch.
+		 */
+		assert(tls_data->last_dequeued_thread_idx >= 0);
+
+		/* 
+		 * 2a. (Used Nodes) Return [initial_head...head-1] to owner's free list.
+		 */
+		if (deq_list->local_initial_head != deq_list->local_head) {
+			/* Find the node just before local_head */
+			last_used_node = deq_list->local_initial_head;
+			while (last_used_node != NULL &&
+				last_used_node->next != deq_list->local_head) {
+				last_used_node = last_used_node->next;
+			}
+
+			if (last_used_node != NULL) {
+				scq_free_nodes(tls_data->owner_scq,
+					deq_list->local_initial_head, last_used_node,
+					tls_data->last_dequeued_thread_idx);
+			}
+		}
+
+		/* 
+		 * 2b. (Unused Nodes) Re-publish [head...tail] to *this* thread's
+		 *     enqueue list.
+		 */
+		if (deq_list->local_head != NULL) {
+			deq_list->local_tail->next = NULL;
+			__sync_synchronize();
+
+			prev_tail = atomic_exchange(&tls_data->shared_tail,
+				deq_list->local_tail);
+			prev_tail->next = deq_list->local_head;
+		}
+
+		/* 2c. Clear the deq_list state */
+		deq_list->local_head = NULL;
+		deq_list->local_tail = NULL;
+		deq_list->local_initial_head = NULL;
+		tls_data->last_dequeued_thread_idx = 0; /* Reset index */
+	}
+}
+
+/**
+ * @brief   Internal unregister logic for "permanent" thread termination.
+ *
+ * Cleans up local lists and marks the slot as inactive (reusable).
+ * This is called by the pthread_key_t destructor.
+ *
+ * @param   tls_data: The tls_data struct to terminate.
+ */
+static void scq_thread_terminate_internal(struct scq_tls_data *tls_data)
+{
+    /*
+	 * This function is only called from the destructor, which is the
+     * sole owner of the registration list. is_active must be true.
+     */
+    assert(atomic_load_explicit(&tls_data->is_active,
+		memory_order_acquire) == true);
+
+    /* 1. Clean up all local lists first. */
+    scq_tls_data_cleanup(tls_data);
+
+    /*
+	 * 2. Now that cleanup is done, mark as inactive (terminated).
+     *    This makes the slot available for reuse by other threads.
+     *    Use release semantics to ensure cleanup is visible before this store.
+     */
+    atomic_store_explicit(&tls_data->is_active, false,
+        memory_order_release);
+}
+
+/**
+ * @brief   Destructor for pthread_key_t.
+ *
+ * Called automatically on thread exit. Iterates the thread-local
+ * "registration list" and permanently terminates all scq registrations
+ * associated with the exiting thread.
+ *
+ * @param   arg: Pointer to the thread-local "registration list"
+ * (struct scq_tls_data **).
+ */
+static void scq_tls_destructor(void *arg)
+{
+	struct scq_tls_data **registrations = (struct scq_tls_data **)arg;
+
+	if (registrations == NULL) {
+		return;
+	}
+
+	for (int i = 0; i < MAX_SCQ_NUM; i++) {
+		if (registrations[i] != NULL) {
+			scq_thread_terminate_internal(registrations[i]);
+			registrations[i] = NULL;
+		}
+	}
+
+	free(registrations);
+}
+
+/**
+ * @brief   Gets or initializes the scq_tls_data for the current thread.
+ *
+ * This function handles all registration scenarios:
+ * 1. Fast O(1) re-registration (for paused threads).
+ * 2. Lock-free O(N) slot reuse (for new threads recycling old slots).
+ * 3. Lock-free O(1) new slot allocation (for new threads).
+ *
+ * @param   scq: The scalable_queue instance.
+ *
+ * @return  Pointer to the thread's scq_tls_data, or NULL on failure.
+ */
+static struct scq_tls_data *scq_get_or_init_tls_data(
+	struct scalable_queue *scq)
+{
+	struct scq_tls_data *ptr_to_use = NULL;
+	struct scq_tls_data **registrations;
+	struct scq_tls_data *tls_data;
+	int num_threads, my_idx;
+
+	/* 1. Get thread-local "registration list" */
+	registrations = (struct scq_tls_data **)pthread_getspecific(g_scq_key);
+	if (registrations == NULL) {
+		registrations = calloc(MAX_SCQ_NUM, sizeof(struct scq_tls_data *));
+		if (registrations == NULL) {
+			errmsg(stderr, "Failed to alloc scq registration list\n");
+			return NULL;
+		}
+		if (pthread_setspecific(g_scq_key, registrations) != 0) {
+			errmsg(stderr, "Failed to set scq registration list\n");
+			free(registrations);
+			return NULL;
+		}
+	}
+
+	tls_data = registrations[scq->scq_id];
+
+	/* 2. Case 1: Fast O(1) Path (Already registered) */
+	if (tls_data != NULL) {
+		if (atomic_load_explicit(&tls_data->is_active,
+				memory_order_acquire) == true) {
+			/*
+			 * This thread is the owner and the slot is active
+			 * (either in use or "paused"). This is the hot path.
+			 */
+			return tls_data;
+		} else {
+			/*
+			 * Error: This thread remembers a slot that was terminated.
+			 * This implies scq_tls_destructor ran. This thread's
+			 * registration list is stale.
+			 */
+			errmsg(stderr, "Thread accessing a terminated scq slot\n");
+			registrations[scq->scq_id] = NULL; /* Clear stale entry */
+			return NULL;
+		}
+	}
+
+	/* 3. Case 2: Slow Path (New Thread) */
+	num_threads = atomic_load_explicit(&scq->thread_num,
+		memory_order_acquire);
+	
+	/* 3a. [Lock-Free O(N) Slot Reuse] */
+	for (int i = 0; i < num_threads; i++) {
+		struct scq_tls_data *ptr = atomic_load_explicit(
+			&scq->tls_data_ptr_list[i], memory_order_acquire);
+		
+		if (ptr == NULL) {
+			continue; /* Slot is being allocated by another thread */
+		}
+
+		bool expected = false;
+		if (atomic_load(&ptr->is_active) == false &&
+			atomic_compare_exchange_strong(&ptr->is_active,
+				&expected, true)) {
+			/* --- Slot Reuse Success --- */
+			ptr_to_use = ptr;
+			goto slot_acquired;
+		}
+	}
+
+	/* 3b. [Lock-Free O(1) New Slot Allocation] */
+	my_idx = atomic_fetch_add(&scq->thread_num, 1);
+	if (my_idx >= MAX_THREAD_NUM) {
+		atomic_fetch_sub(&scq->thread_num, 1); /* Rollback */
+		errmsg(stderr, "scq_init: MAX_THREAD_NUM reached\n");
+		return NULL;
+	}
+
+	ptr_to_use = calloc(1, sizeof(struct scq_tls_data));
+	if (ptr_to_use == NULL) {
+		errmsg(stderr, "Failed to alloc scq_tls_data\n");
+		/* Note: this leaks a slot in thread_num, but is a fatal error */
+		return NULL;
+	}
+
+	/*
+	 * is_active is set before storing in the list, so other threads
+	 * see a fully initialized state.
+	 */
+	atomic_store_explicit(&ptr_to_use->is_active, true, memory_order_release);
+	
+	/*
+	 * Initialize shared lists (only for new allocation).
+	 */
+	ptr_to_use->free_node_list.shared_sentinel.next = NULL;
+	ptr_to_use->free_node_list.shared_tail =
+		&ptr_to_use->free_node_list.shared_sentinel;
+
+	ptr_to_use->shared_sentinel.next = NULL;
+	ptr_to_use->shared_tail = &ptr_to_use->shared_sentinel;
+	
+	atomic_store_explicit(&scq->tls_data_ptr_list[my_idx], ptr_to_use,
+		memory_order_release);
+
+slot_acquired:
+	/*
+	 * Common initialization for reused or new slots.
+	 * We must zero out all *local* state.
+	 * Shared lists are preserved if reused.
+	 */
+	ptr_to_use->dequeued_node_list.local_head = NULL;
+	ptr_to_use->dequeued_node_list.local_tail = NULL;
+	ptr_to_use->dequeued_node_list.local_initial_head = NULL;
+
+	ptr_to_use->free_node_list.local_head = NULL;
+	ptr_to_use->free_node_list.local_tail = NULL;
+	
+	ptr_to_use->last_dequeued_thread_idx = 0;
+	ptr_to_use->owner_scq = scq;
+	ptr_to_use->scq_id = scq->scq_id;
+
+	registrations[scq->scq_id] = ptr_to_use; /* Register in thread-local list */
+
+	return ptr_to_use;
+}
+
+/**
+ * If there is a free node available, return it; otherwise allocate one.
+ */
+static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
+	struct scq_tls_data *tls_data)
+{
+	struct scq_node *node = NULL;
+	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
+	int num_threads, start_idx;
+
+	/* 1. Try local cache */
+	if (free_node_list->local_head != NULL) {
+		node = free_node_list->local_head;
+		if (free_node_list->local_head == free_node_list->local_tail) {
+			free_node_list->local_head = NULL;
+			free_node_list->local_tail = NULL;
+		} else {
+			while (node->next == NULL) {
+				__asm__ __volatile__("pause");
+			}
+			free_node_list->local_head = node->next;
+		}
+		return node;
+	}
+
+	/* 2. Try own shared list */
+	free_node_list->local_head
+		= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
+
+	if (free_node_list->local_head != NULL) {
+		free_node_list->local_tail
+			= atomic_exchange(&free_node_list->shared_tail,
+				&free_node_list->shared_sentinel);
+
+		/* Pop one node from the newly acquired local list */
+		node = free_node_list->local_head;
+		if (free_node_list->local_head == free_node_list->local_tail) {
+			free_node_list->local_head = NULL;
+			free_node_list->local_tail = NULL;
+		} else {
+			while (node->next == NULL) {
+				__asm__ __volatile__("pause");
+			}
+			free_node_list->local_head = node->next;
+		}
+		return node;
+	}
+
+	/* 3. Try stealing from other threads' shared lists (is_active ignored) */
+	num_threads = atomic_load_explicit(&scq->thread_num,
+		memory_order_acquire);
+	start_idx = tls_data->last_dequeued_thread_idx;
+
+	for (int i = 0; i < num_threads; i++) {
+		int idx = (start_idx + i) % num_threads;
+		struct scq_tls_data *other_tls = atomic_load_explicit(
+			&scq->tls_data_ptr_list[idx], memory_order_acquire);
+
+		/* Skip self, empty, or unallocated slots */
+		if (other_tls == NULL || other_tls == tls_data ||
+			other_tls->free_node_list.shared_sentinel.next == NULL) {
+			continue;
+		}
+
+		/* Try to steal */
+		free_node_list->local_head = atomic_exchange(
+			&other_tls->free_node_list.shared_sentinel.next, NULL);
+
+		if (free_node_list->local_head != NULL) {
+			free_node_list->local_tail = atomic_exchange(
+				&other_tls->free_node_list.shared_tail,
+				&other_tls->free_node_list.shared_sentinel);
+
+			/* Pop one node from the stolen list */
+			node = free_node_list->local_head;
+			if (free_node_list->local_head == free_node_list->local_tail) {
+				free_node_list->local_head = NULL;
+				free_node_list->local_tail = NULL;
+			} else {
+				while (node->next == NULL) {
+					__asm__ __volatile__("pause");
+				}
+				free_node_list->local_head = node->next;
+			}
+			return node;
+		}
+	}
+
+	/* 4. Malloc as last resort */
+	node = (struct scq_node *)malloc(sizeof(struct scq_node));
+	if (node != NULL && scq->mem_acc != NULL) {
+		memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+			sizeof(struct scq_node));
+	}
+
+	return node;
+}
+
+/**
+ * @brief   Enqueue the given datum into the queue.
+ *
+ * @param   scq:   Queue instance.
+ * @param   datum: Pointer or scalar to enqueue.
+ */
+void scq_enqueue(struct scalable_queue *scq, void *datum)
+{
+	struct scq_tls_data *tls_data = NULL;
+	struct scq_node *node = NULL;
+	struct scq_node *prev_tail = NULL;
+
+	tls_data = scq_get_or_init_tls_data(scq);
+	if (tls_data == NULL) {
+		errmsg(stderr, "Failed to get/init TLS for enqueue\n");
+		return; /* Drop data */
+	}
+
+	node = scq_allocate_node(scq, tls_data);
+	if (node == NULL) {
+		errmsg(stderr, "Failed to allocate scq_node for enqueue\n");
+		return; /* Drop data */
+	}
+
+	node->datum = datum;
+	node->next = NULL;
+	__sync_synchronize();
+
+	prev_tail = atomic_exchange(&tls_data->shared_tail, node);
+	assert(prev_tail != NULL);
+
+	prev_tail->next = node;
 }
 
 /**
@@ -351,9 +649,13 @@ bool scq_dequeue(struct scalable_queue *scq, void **datum)
 	struct scq_tls_data *tls_data = NULL, *tls_data_enq_thread = NULL;
 	int thread_idx = 0;
 
-	check_and_init_scq_tls_data(scq);
+	tls_data = scq_get_or_init_tls_data(scq);
 
-	tls_data = tls_data_ptr_arr[scq->scq_id];
+	if (tls_data == NULL) {
+		errmsg(stderr, "Failed to get/init TLS for dequeue\n");
+		return false;
+	}
+
 	dequeued_node_list = &tls_data->dequeued_node_list;
 
 	if (pop_from_dequeued_list(scq, dequeued_node_list, datum,
@@ -390,4 +692,36 @@ bool scq_dequeue(struct scalable_queue *scq, void **datum)
 	}
 
 	return false;
+}
+
+/**
+ * @brief   Explicitly unregister a thread from an scq ("pause").
+ *
+ * @param   scq: Queue instance to pause.
+ */
+void scq_thread_unregister(struct scalable_queue *scq)
+{
+	struct scq_tls_data **registrations;
+	struct scq_tls_data *tls_data;
+
+	if (scq == NULL) {
+		return;
+	}
+
+	registrations = (struct scq_tls_data **)pthread_getspecific(g_scq_key);
+	if (registrations == NULL) {
+		return; /* Not registered with any scq */
+	}
+
+	tls_data = registrations[scq->scq_id];
+	if (tls_data == NULL ||
+		atomic_load(&tls_data->is_active) == false) {
+		return; /* Not registered with this scq, or already terminated */
+	}
+
+	/*
+	 * Clean up local lists.
+	 * is_active remains true, and registration remains.
+	 */
+	scq_tls_data_cleanup(tls_data);
 }
