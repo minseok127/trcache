@@ -248,25 +248,20 @@ static void scq_tls_data_cleanup(struct scq_tls_data *tls_data)
 				last_used_node = last_used_node->next;
 			}
 
-			if (last_used_node != NULL) {
-				scq_free_nodes(tls_data->owner_scq,
-					deq_list->local_initial_head, last_used_node,
-					tls_data->last_dequeued_thread_idx);
-			}
+			scq_free_nodes(tls_data->owner_scq, deq_list->local_initial_head,
+				last_used_node, tls_data->last_dequeued_thread_idx);
 		}
 
 		/* 
 		 * 2b. (Unused Nodes) Re-publish [head...tail] to *this* thread's
 		 *     enqueue list.
 		 */
-		if (deq_list->local_head != NULL) {
-			deq_list->local_tail->next = NULL;
-			__sync_synchronize();
+		deq_list->local_tail->next = NULL;
+		__sync_synchronize();
 
-			prev_tail = atomic_exchange(&tls_data->shared_tail,
-				deq_list->local_tail);
-			prev_tail->next = deq_list->local_head;
-		}
+		prev_tail = atomic_exchange(&tls_data->shared_tail,
+			deq_list->local_tail);
+		prev_tail->next = deq_list->local_head;
 
 		/* 2c. Clear the deq_list state */
 		deq_list->local_head = NULL;
