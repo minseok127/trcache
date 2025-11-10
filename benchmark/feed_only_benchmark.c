@@ -329,26 +329,12 @@ static void write_csv_header(void)
 		"FeedThreads,"       /* Config: Number of feed threads (N) */
 		"WorkerThreads,"     /* Config: Number of worker threads (M) */
 		"ZipfS,"             /* Config: Zipf exponent s */
-		"ApplyDemand,"       /* Stat: Estimated items/sec input to Apply */
-		"ApplyCapacity,"     /* Stat: Estimated items/sec output from Apply */
-		"ApplySpeed,"        /* Stat: Average items/sec processed by workers*/
-		"ApplyLimit,"        /* Stat: Workers assigned to Apply */
-		"ApplyStart,"        /* Stat: Start worker index for Apply */
-		"ConvertDemand,"     /* Stat: Estimated items/sec input to Convert */
-		"ConvertCapacity,"   /* Stat: Estimated items/sec output from Convert */
-		"ConvertSpeed,"      /* Stat: Average items/sec processed by workers*/
-		"ConvertLimit,"      /* Stat: Workers assigned to Convert */
-		"ConvertStart,"      /* Stat: Start worker index for Convert */
-		"FlushDemand,"       /* Stat: Estimated items/sec input to Flush */
-		"FlushCapacity,"     /* Stat: Estimated items/sec output from Flush */
-		"FlushSpeed,"        /* Stat: Average items/sec processed by workers*/
-		"FlushLimit,"        /* Stat: Workers assigned to Flush */
-		"FlushStart,"        /* Stat: Start worker index for Flush */
+		/* Apply/Convert/Flush stats removed */
 		"MemTradeBuf,"       /* Mem: Bytes used by trade_data_buffer */
 		"MemCandleList,"     /* Mem: Bytes used by candle_chunk_list */
 		"MemCandleIndex,"    /* Mem: Bytes used by candle_chunk_index */
 		"MemScqNode,"        /* Mem: Bytes used by scalable_queue nodes */
-		"MemSchedMsg,"       /* Mem: Bytes used by scheduler messages */
+		/* MemSchedMsg removed */
 		"MemTotal\n"         /* Mem: Total bytes used by trcache */
 	);
 	fflush(g_csv_file);
@@ -372,7 +358,7 @@ static void* monitor_thread_main(void *arg)
 	write_csv_header();
 	pthread_mutex_unlock(&g_csv_mutex);
 
-	struct trcache_worker_distribution_stats dist_stats;
+	/* trcache_worker_distribution_stats removed */
 	struct trcache_memory_stats mem_stats;
 	time_t start_time = time(NULL);
 	time_t last_log_time = start_time;
@@ -396,16 +382,15 @@ static void* monitor_thread_main(void *arg)
 			continue;
 		}
 
-		if (trcache_get_worker_distribution(g_cache, &dist_stats) != 0) {
-			errmsg(stderr, "Monitor failed to get distribution stats\n");
-			continue;
-		}
+		/* trcache_get_worker_distribution call removed */
+
 		if (trcache_get_total_memory_breakdown(g_cache, &mem_stats) != 0) {
 			errmsg(stderr, "Monitor failed to get memory stats\n");
 			continue;
 		}
 
 		size_t mem_total = 0;
+		/* This loop now correctly sums 4 categories based on trcache.h */
 		for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
 			mem_total += mem_stats.usage_bytes[i];
 		}
@@ -413,33 +398,17 @@ static void* monitor_thread_main(void *arg)
 		pthread_mutex_lock(&g_csv_mutex);
 		fprintf(g_csv_file,
 			"%ld,%d,%d,%d,%.2f," /* Time, Elapsed, Threads, ZipfS */
-			"%.2f,%.2f,%.2f,%d,%d,"   /* Apply D,C,S,L,St */
-			"%.2f,%.2f,%.2f,%d,%d,"   /* Convert D,C,S,L,St */
-			"%.2f,%.2f,%.2f,%d,%d,"   /* Flush D,C,S,L,St */
-			"%zu,%zu,%zu,%zu,%zu," /* Mem parts */
+			/* Apply/Convert/Flush stats removed */
+			"%zu,%zu,%zu,%zu," /* Mem parts */
 			"%zu\n",             /* Mem Total */
 			now, elapsed_sec, g_config.num_feed_threads,
 			g_config.num_worker_threads, g_config.zipf_s,
-			dist_stats.pipeline_demand[WORKER_STAT_STAGE_APPLY],
-			dist_stats.stage_capacity[WORKER_STAT_STAGE_APPLY],
-			dist_stats.stage_speeds[WORKER_STAT_STAGE_APPLY],
-			dist_stats.stage_limits[WORKER_STAT_STAGE_APPLY],
-			dist_stats.stage_starts[WORKER_STAT_STAGE_APPLY],
-			dist_stats.pipeline_demand[WORKER_STAT_STAGE_CONVERT],
-			dist_stats.stage_capacity[WORKER_STAT_STAGE_CONVERT],
-			dist_stats.stage_speeds[WORKER_STAT_STAGE_CONVERT],
-			dist_stats.stage_limits[WORKER_STAT_STAGE_CONVERT],
-			dist_stats.stage_starts[WORKER_STAT_STAGE_CONVERT],
-			dist_stats.pipeline_demand[WORKER_STAT_STAGE_FLUSH],
-			dist_stats.stage_capacity[WORKER_STAT_STAGE_FLUSH],
-			dist_stats.stage_speeds[WORKER_STAT_STAGE_FLUSH],
-			dist_stats.stage_limits[WORKER_STAT_STAGE_FLUSH],
-			dist_stats.stage_starts[WORKER_STAT_STAGE_FLUSH],
+			/* dist_stats arguments removed */
 			mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER],
 			mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST],
 			mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX],
 			mem_stats.usage_bytes[MEMSTAT_SCQ_NODE],
-			mem_stats.usage_bytes[MEMSTAT_SCHED_MSG],
+			/* MEMSTAT_SCHED_MSG removed */
 			mem_total
 		);
 		fflush(g_csv_file);
@@ -495,6 +464,7 @@ static int initialize_trcache(void)
 		.cached_batch_count_pow2 = 1,
 		.aux_memory_limit = 128ULL * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
+		.max_symbols = NUM_SYMBOLS /* <-- ADDED THIS FIELD */
 	};
 	g_cache = trcache_init(&ctx);
 	if (g_cache == NULL) {
