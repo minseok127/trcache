@@ -31,7 +31,7 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS 2048
+#define NUM_SYMBOLS 4096
 #define NUM_CANDLE_TYPES 1
 #define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
 
