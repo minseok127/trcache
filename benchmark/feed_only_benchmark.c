@@ -32,11 +32,12 @@
 
 /* Constants */
 #define NUM_SYMBOLS 4096
-#define NUM_CANDLE_TYPES 1
+#define NUM_CANDLE_TYPES 2   /* 1 (Tick) + 1 (Time) */
 #define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
+#define ONE_MINUTE_MS 60000   /* 1 minute = 60000 ms */
 
 /* Candle Structure */
-struct my_tick_candle {
+struct my_candle {
 	struct trcache_candle_base base;
 	double open;
 	double high;
@@ -48,18 +49,18 @@ struct my_tick_candle {
 };
 
 /* Field Definitions (excluding trade_count) */
-const struct trcache_field_def g_tick_fields[] = {
-	{offsetof(struct my_tick_candle, open), sizeof(double),
+const struct trcache_field_def g_candle_fields[] = {
+	{offsetof(struct my_candle, open), sizeof(double),
 		FIELD_TYPE_DOUBLE},
-	{offsetof(struct my_tick_candle, high), sizeof(double),
+	{offsetof(struct my_candle, high), sizeof(double),
 		FIELD_TYPE_DOUBLE},
-	{offsetof(struct my_tick_candle, low), sizeof(double),
+	{offsetof(struct my_candle, low), sizeof(double),
 		FIELD_TYPE_DOUBLE},
-	{offsetof(struct my_tick_candle, close), sizeof(double),
+	{offsetof(struct my_candle, close), sizeof(double),
 		FIELD_TYPE_DOUBLE},
-	{offsetof(struct my_tick_candle, volume), sizeof(double),
+	{offsetof(struct my_candle, volume), sizeof(double),
 		FIELD_TYPE_DOUBLE},
-	{offsetof(struct my_tick_candle, amount), sizeof(double),
+	{offsetof(struct my_candle, amount), sizeof(double),
 		FIELD_TYPE_DOUBLE},
 };
 
@@ -176,11 +177,15 @@ static int get_next_partition_symbol_idx(int num_symbols,
  * ====================================================================
  */
 
-/* tick_candle_init, DEFINE_TICK_UPDATE_FUNC, sync_flush_noop remain the same */
-static void tick_candle_init(struct trcache_candle_base *c,
+/**
+ * @brief Initialize a tick-based candle.
+ *
+ * Sets the key to the trade_id of the first trade.
+ */
+static void candle_init_tick(struct trcache_candle_base *c,
 	struct trcache_trade_data *d)
 {
-	struct my_tick_candle *candle = (struct my_tick_candle *)c;
+	struct my_candle *candle = (struct my_candle *)c;
 	double price = d->price.as_double;
 	double volume = d->volume.as_double;
 	c->key.trade_id = d->trade_id;
@@ -194,11 +199,15 @@ static void tick_candle_init(struct trcache_candle_base *c,
 	candle->trade_count = 1;
 }
 
+/**
+ * @brief Macro to define a tick-based update function.
+ * @param N The number of ticks to close the candle.
+ */
 #define DEFINE_TICK_UPDATE_FUNC(N) \
-static bool tick_candle_update_##N(struct trcache_candle_base *c, \
+static bool candle_update_tick_##N(struct trcache_candle_base *c, \
 	struct trcache_trade_data *d) \
 { \
-	struct my_tick_candle *candle = (struct my_tick_candle *)c; \
+	struct my_candle *candle = (struct my_candle *)c; \
 	double price = d->price.as_double; \
 	double volume = d->volume.as_double; \
 	if (price > candle->high) candle->high = price; \
@@ -214,8 +223,71 @@ static bool tick_candle_update_##N(struct trcache_candle_base *c, \
 	return true; \
 }
 
+/* Define the 3-tick update function */
 DEFINE_TICK_UPDATE_FUNC(3)
 
+/**
+ * @brief Initialize a time-based candle (e.g., 1-minute).
+ *
+ * Sets the key to the start of the time interval based on
+ * the trade's timestamp.
+ */
+static void candle_init_time(struct trcache_candle_base *c,
+	struct trcache_trade_data *d)
+{
+	struct my_candle *candle = (struct my_candle *)c;
+	double price = d->price.as_double;
+	double volume = d->volume.as_double;
+
+	/* Set key to the start of the 1-minute interval */
+	c->key.timestamp = d->timestamp - (d->timestamp % ONE_MINUTE_MS);
+	
+	c->is_closed = false;
+	candle->open = price;
+	candle->high = price;
+	candle->low = price;
+	candle->close = price;
+	candle->volume = volume;
+	candle->amount = price * volume;
+	candle->trade_count = 1;
+}
+
+/**
+ * @brief Macro to define a time-based update function.
+ * @param SUFFIX The function name suffix (e.g., 1min).
+ * @param DURATION_MS The duration in milliseconds to close the candle.
+ */
+#define DEFINE_TIME_UPDATE_FUNC(SUFFIX, DURATION_MS) \
+static bool candle_update_time_##SUFFIX(struct trcache_candle_base *c, \
+	struct trcache_trade_data *d) \
+{ \
+	/* Check if trade is outside the [key, key + DURATION_MS) window */ \
+	if (d->timestamp >= c->key.timestamp + (DURATION_MS)) { \
+		c->is_closed = true; \
+		return false; /* This trade starts a new candle */ \
+	} \
+	\
+	/* Trade is within the window, aggregate it */ \
+	struct my_candle *candle = (struct my_candle *)c; \
+	double price = d->price.as_double; \
+	double volume = d->volume.as_double; \
+	if (price > candle->high) candle->high = price; \
+	if (price < candle->low) candle->low = price; \
+	candle->close = price; \
+	candle->volume += volume; \
+	candle->amount += price * volume; \
+	candle->trade_count++; \
+	\
+	return true; /* Trade was consumed */ \
+}
+
+/* Define the 1-minute update function */
+DEFINE_TIME_UPDATE_FUNC(1min, ONE_MINUTE_MS)
+
+
+/**
+ * @brief No-op flush function for the benchmark.
+ */
 static void* sync_flush_noop(struct trcache *cache,
 	struct trcache_candle_batch *batch, void *ctx)
 {
@@ -416,9 +488,10 @@ static void* monitor_thread_main(void *arg)
 /* initialize_trcache remains the same */
 static int initialize_trcache(void)
 {
-	/* Define the 7 update_ops structs */
+	/* Define the update_ops structs for all candle types */
 	const struct trcache_candle_update_ops g_update_ops[NUM_CANDLE_TYPES] = {
-		[0] = { .init = tick_candle_init, .update = tick_candle_update_3 }
+		[0] = { .init = candle_init_tick, .update = candle_update_tick_3 },
+		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
 	/* Define the shared no-op flush_ops */
 	const struct trcache_batch_flush_ops g_flush_ops = {
@@ -426,17 +499,24 @@ static int initialize_trcache(void)
 	};
 
 	/* Define NUM_FIELDS here for clarity */
-	const int num_fields = sizeof(g_tick_fields)
+	const int num_fields = sizeof(g_candle_fields)
 		/ sizeof(struct trcache_field_def);
-	const size_t candle_size = sizeof(struct my_tick_candle);
+	const size_t candle_size = sizeof(struct my_candle);
 
 	/* Initialize the candle configuration array at declaration time */
 	struct trcache_candle_config configs[NUM_CANDLE_TYPES] = {
 		{ /* [0] - 3 Tick */
 			.user_candle_size = candle_size,
-			.field_definitions = g_tick_fields,
+			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[0],
+			.flush_ops = g_flush_ops,
+		},
+		{ /* [1] - 1 Minute */
+			.user_candle_size = candle_size,
+			.field_definitions = g_candle_fields,
+			.num_fields = num_fields,
+			.update_ops = g_update_ops[1],
 			.flush_ops = g_flush_ops,
 		}
 	};
@@ -444,7 +524,7 @@ static int initialize_trcache(void)
 	struct trcache_init_ctx ctx = {
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
-		.batch_candle_count_pow2 = 12,
+		.batch_candle_count_pow2 = 10,
 		.cached_batch_count_pow2 = 0,
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
@@ -605,8 +685,11 @@ int main(int argc, char **argv)
 				strerror(errno));
 			atomic_store(&g_running, false);
 			feed_thread_error = true;
-			for (int j = 0; j < i; j++) pthread_join(feed_threads[j], NULL);
-			pthread_join(monitor_thread, NULL);
+			/* Join threads that were successfully created before the error */
+			for (int j = 0; j < i; j++) {
+				pthread_join(feed_threads[j], NULL);
+			}
+			pthread_join(monitor_thread, NULL); /* Join monitor thread */
 			ret_code = EXIT_FAILURE;
 			goto cleanup;
 		}
@@ -620,6 +703,7 @@ int main(int argc, char **argv)
 	printf("Benchmark time elapsed. Signaling threads to stop...\n");
 	atomic_store(&g_running, false);
 
+	/* Join threads only if they were all successfully created */
 	if (!feed_thread_error) {
 		for (int i = 0; i < g_config.num_feed_threads; i++) {
 			pthread_join(feed_threads[i], NULL);
