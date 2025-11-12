@@ -88,9 +88,9 @@ struct trade_data_buffer_cursor {
  * @produced_count:      Number of data items supplied to this buffer.
  * @next_tail_write_idx: Next write_idx of the tail chunk.
  * @num_cursor:          Number of valid cursors.
- * @mem_acc:             Memory accounting information for this buffer.
  * @trc:                 Back-pointer to the main trcache instance.
  * @symbol_id:           Integer symbol ID resolved via symbol table.
+ * @memory_usage:        Memory (bytes) of this struct + all *active* chunks.
  * @cursor_arr:          Cursor array (only valid types are initialized).
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
@@ -114,12 +114,19 @@ struct trade_data_buffer {
 	 */
 	____cacheline_aligned
 	int num_cursor;
-	struct memory_accounting *mem_acc;
 	struct trcache *trc;
 	int symbol_id;
 
 	/*
-	 * Group 3: Consumer (Apply Thread) hot data area.
+	 * Group 3: Memory Counter
+	 * Written by producer thread, read by admin thread.
+	 * Padded to prevent false sharing with cursors.
+	 */
+	____cacheline_aligned
+	struct mem_padded_atomic_size memory_usage;
+
+	/*
+	 * Group 4: Consumer (Apply Thread) hot data area.
 	 * This is an array of aligned cursors. Each cursor is written by
 	 * a different Apply thread.
 	 */
@@ -196,12 +203,13 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf);
  * @param   buf:       Buffer to push into.
  * @param   data:      Pointer to trcache_trade_data to copy.
  * @param   free_list: Linked list pointer holding recycled chunks.
+ * @param   thread_id: The feed thread's unique ID.
  *
  * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const struct trcache_trade_data *data,
-	struct list_head *free_list);
+	const struct trcache_trade_data *data, struct list_head *free_list,
+	int thread_id);
 
 /**
  * @brief	Peek at next entries for a given cursor.
@@ -236,9 +244,9 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
  *
  * @param   buf:                 Buffer to reap the free chunks.
  * @param   free_list:           Linked list pointer holding recycled chunks.
- * @param   is_memory_pressure:  Whether or not to free the chunks directly.
+ * @param   thread_id:           The feed thread's unique ID.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
-	struct list_head *free_list, bool is_memory_pressure);
+	struct list_head *free_list, int thread_id);
 
 #endif /* TRADE_DATA_BUFFER_H */

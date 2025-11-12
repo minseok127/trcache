@@ -42,7 +42,8 @@ struct candle_chunk_index_version {
  * @tail:                    Logical position one past the newest live entry.
  * @batch_candle_count:      Number of candles per chunk.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
- * @mem_acc:                 Memory accounting information.
+ * @trc:                     Back-pointer to the main trcache instance.
+ * @memory_usage:            Memory (bytes) of all internal index arrays
  *
  * The index is a *single-producer / single-consumer* ring with many concurrent
  * readers. A writer (producer) appends one #candle_chunk_index_entry per newly
@@ -86,20 +87,21 @@ struct candle_chunk_index {
 	_Atomic uint64_t tail;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
-	struct memory_accounting *mem_acc;
+	struct trcache *trc;
+	struct mem_padded_atomic_size memory_usage;
 };
 
 /**
  * @brief   Allocate and initialise an empty index.
  *
+ * @param   trc:                     Pointer to the main trcache instance.
  * @param   init_cap_pow2:           Equals to log2(array_capacity).
  * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
- * @param   mem_acc:                 Memory accounting information.
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
-	int batch_candle_count_pow2, struct memory_accounting *mem_acc);
+struct candle_chunk_index *candle_chunk_index_create(struct trcache *trc,
+	int init_cap_pow2, int batch_candle_count_pow2);
 
 /**
  * @brief   Gracefully destroy the index and all internal arrays.

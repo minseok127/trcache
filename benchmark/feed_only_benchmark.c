@@ -31,7 +31,7 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS 3000
+#define NUM_SYMBOLS 2048
 #define NUM_CANDLE_TYPES 1
 #define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
 
@@ -329,13 +329,7 @@ static void write_csv_header(void)
 		"FeedThreads,"       /* Config: Number of feed threads (N) */
 		"WorkerThreads,"     /* Config: Number of worker threads (M) */
 		"ZipfS,"             /* Config: Zipf exponent s */
-		/* Apply/Convert/Flush stats removed */
-		"MemTradeBuf,"       /* Mem: Bytes used by trade_data_buffer */
-		"MemCandleList,"     /* Mem: Bytes used by candle_chunk_list */
-		"MemCandleIndex,"    /* Mem: Bytes used by candle_chunk_index */
-		"MemScqNode,"        /* Mem: Bytes used by scalable_queue nodes */
-		/* MemSchedMsg removed */
-		"MemTotal\n"         /* Mem: Total bytes used by trcache */
+		"FeedCountPerSec\n"  /* Throughput */
 	);
 	fflush(g_csv_file);
 }
@@ -358,8 +352,6 @@ static void* monitor_thread_main(void *arg)
 	write_csv_header();
 	pthread_mutex_unlock(&g_csv_mutex);
 
-	/* trcache_worker_distribution_stats removed */
-	struct trcache_memory_stats mem_stats;
 	time_t start_time = time(NULL);
 	time_t last_log_time = start_time;
 	int elapsed_sec = 0;
@@ -374,49 +366,41 @@ static void* monitor_thread_main(void *arg)
 		last_log_time = now;
 		elapsed_sec = (int)(now - start_time);
 
+		/* Get the current total feed count */
+		current_feed_counter = atomic_load(&g_feed_counter);
+		uint64_t feed_count_this_sec = current_feed_counter - prev_feed_counter;
+
 		if (elapsed_sec <= g_config.warmup_time_sec) {
 			if (elapsed_sec > 0 && elapsed_sec % 5 == 0) {
-				printf("  [Monitor Thread] Warming up... %d/%d sec\n",
-					elapsed_sec, g_config.warmup_time_sec);
+				printf("  [Monitor Thread] Warming up... %d/%d sec "
+					"(Feed/sec: %lu)\n",
+					elapsed_sec, g_config.warmup_time_sec,
+					feed_count_this_sec);
 			}
+			/* Update baseline counter *during* warmup */
+			prev_feed_counter = current_feed_counter;
 			continue;
 		}
 
-		/* trcache_get_worker_distribution call removed */
-
-		if (trcache_get_total_memory_breakdown(g_cache, &mem_stats) != 0) {
-			errmsg(stderr, "Monitor failed to get memory stats\n");
-			continue;
-		}
-
-		size_t mem_total = 0;
-		/* This loop now correctly sums 4 categories based on trcache.h */
-		for (int i = 0; i < MEMSTAT_CATEGORY_NUM; i++) {
-			mem_total += mem_stats.usage_bytes[i];
-		}
+		/*
+		 * WARMUP IS OVER - START LOGGING
+		 */
 
 		pthread_mutex_lock(&g_csv_mutex);
 		fprintf(g_csv_file,
 			"%ld,%d,%d,%d,%.2f," /* Time, Elapsed, Threads, ZipfS */
-			/* Apply/Convert/Flush stats removed */
-			"%zu,%zu,%zu,%zu," /* Mem parts */
-			"%zu\n",             /* Mem Total */
+			"%lu\n",             /* FeedCountPerSec */
 			now, elapsed_sec, g_config.num_feed_threads,
 			g_config.num_worker_threads, g_config.zipf_s,
-			/* dist_stats arguments removed */
-			mem_stats.usage_bytes[MEMSTAT_TRADE_DATA_BUFFER],
-			mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_LIST],
-			mem_stats.usage_bytes[MEMSTAT_CANDLE_CHUNK_INDEX],
-			mem_stats.usage_bytes[MEMSTAT_SCQ_NODE],
-			/* MEMSTAT_SCHED_MSG removed */
-			mem_total
+			feed_count_this_sec
 		);
 		fflush(g_csv_file);
 		pthread_mutex_unlock(&g_csv_mutex);
 
-		current_feed_counter = atomic_load(&g_feed_counter);
-		printf("  [Monitor Thread] %d second, feed count: %lu\n",
-				elapsed_sec, current_feed_counter - prev_feed_counter);
+		printf("  [Monitor Thread] %d second, Feed/sec: %lu\n",
+				elapsed_sec, feed_count_this_sec);
+		
+		/* Update baseline for next second's measurement */
 		prev_feed_counter = current_feed_counter;
 	}
 
@@ -461,10 +445,10 @@ static int initialize_trcache(void)
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
 		.batch_candle_count_pow2 = 12,
-		.cached_batch_count_pow2 = 1,
-		.aux_memory_limit = 128ULL * 1024 * 1024,
+		.cached_batch_count_pow2 = 0,
+		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
-		.max_symbols = NUM_SYMBOLS /* <-- ADDED THIS FIELD */
+		.max_symbols = NUM_SYMBOLS
 	};
 	g_cache = trcache_init(&ctx);
 	if (g_cache == NULL) {
@@ -583,9 +567,6 @@ int main(int argc, char **argv)
 	printf("  Zipf Exponent (s): %.2f %s\n", g_config.zipf_s,
 		(g_config.zipf_s == 0.0) ? "(Even Distribution)" : "");
 	printf("-------------------------------\n");
-
-	/* Removed global init_zipf_generator call */
-
 	printf("Initializing trcache...\n");
 	if (initialize_trcache() != 0) {
 		errmsg(stderr, "Benchmark failed during trcache initialization\n");
@@ -659,7 +640,6 @@ cleanup:
 	}
 	free(feed_threads);
 	free(feed_args);
-	/* Core list cleanup removed */
 
 	if (g_csv_file) {
 		fclose(g_csv_file);

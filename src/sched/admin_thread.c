@@ -10,13 +10,18 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "concurrent/scalable_queue.h"
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
+#include "pipeline/trade_data_buffer.h"
+#include "pipeline/candle_chunk_list.h"
+#include "pipeline/candle_chunk_index.h"
 #include "sched/sched_pipeline_stats.h"
 #include "sched/worker_thread.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
+#include "utils/memstat.h"
 
 /*
  * Bit manipulation helpers for 64-bit bitmaps.
@@ -699,6 +704,78 @@ static void balance_workers(struct trcache *cache)
 }
 
 /**
+ * @brief   Aggregates all distributed memory counters and updates
+ * the global memory_pressure flag.
+ *
+ * @param   cache:  Global cache instance.
+ */
+static void update_global_memory_stats(struct trcache *cache)
+{
+	size_t total_mem = 0;
+	struct symbol_table *table = cache->symbol_table;
+	int num_symbols = atomic_load_explicit((int*)&table->num_symbols,
+		memory_order_acquire);
+	bool pressure;
+
+	/* 1. Sum feed thread free lists */
+	for (int i = 0; i < MAX_NUM_THREADS; i++) {
+		total_mem += mem_get_atomic(
+			&cache->mem_acc.feed_thread_free_list_mem[i].value);
+	}
+
+	/* 2. Sum all SCQ pools (nodes + objects) */
+	total_mem += mem_get_atomic(
+		&cache->head_version_pool->node_memory_usage.value);
+	total_mem += mem_get_atomic(
+		&cache->head_version_pool->object_memory_usage.value);
+	
+	for (int i = 0; i < cache->num_candle_configs; i++) {
+		total_mem += mem_get_atomic(
+			&cache->chunk_pools[i]->node_memory_usage.value);
+		total_mem += mem_get_atomic(
+			&cache->chunk_pools[i]->object_memory_usage.value);
+		total_mem += mem_get_atomic(
+			&cache->row_page_pools[i]->node_memory_usage.value);
+		total_mem += mem_get_atomic(
+			&cache->row_page_pools[i]->object_memory_usage.value);
+	}
+
+	/* 3. Sum all active symbol-related components */
+	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+		struct symbol_entry *entry = &table->symbol_entries[sym_idx];
+
+		/* Sum TDB memory (struct + active chunks) */
+		if (entry->trd_buf) {
+			total_mem += mem_get_atomic(&entry->trd_buf->memory_usage.value);
+		}
+
+		/* Sum CKL and CKI memory */
+		for (int type_idx = 0; type_idx < cache->num_candle_configs;
+				type_idx++) {
+			struct candle_chunk_list *list
+				= entry->candle_chunk_list_ptrs[type_idx];
+			if (list) {
+				if (list->chunk_index) {
+					total_mem += mem_get_atomic(
+						&list->chunk_index->memory_usage.value);
+				}
+			}
+		}
+	}
+
+	/* 4. Update global total */
+	atomic_store_explicit(&cache->mem_acc.total_usage.value,
+		total_mem, memory_order_relaxed);
+
+	/* 5. Update pressure flag (e.g., set at 95% of limit) */
+	pressure = (total_mem > (cache->total_memory_limit * 0.95));
+	if (pressure != atomic_load(&cache->mem_acc.memory_pressure)) {
+		atomic_store_explicit(&cache->mem_acc.memory_pressure,
+			pressure, memory_order_release);
+	}
+}
+
+/**
  * @brief   Entry point for the admin thread.
  *
  * Expects a ::trcache pointer as its argument.
@@ -720,6 +797,9 @@ void *admin_thread_main(void *arg)
 
 		/* 3. Re-balance worker assignments */
 		balance_workers(cache);
+
+		/* 4. Update global memory usage and pressure flag */
+		update_global_memory_stats(cache);
 		
 		sched_yield();
 	}

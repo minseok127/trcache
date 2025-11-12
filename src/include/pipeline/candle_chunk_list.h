@@ -6,9 +6,11 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
+#include "concurrent/scalable_queue.h"
 #include "pipeline/candle_chunk.h"
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /*
  * candle_chunk_list_head_version - Covers the lifetime of the chunks.
@@ -71,6 +73,8 @@ struct candle_chunk_list_init_ctx {
  * @row_page_count:          Number of row pages per chunk.
  * @candle_idx:              Candle type index.
  * @symbol_id:               Integer symbol ID resolved via symbol table.
+ * @chunk_pool:              SCQ pool for recycling candle_chunk structs.
+ * @row_page_pool:           SCQ pool for recycling candle_row_page structs.
  */
 struct candle_chunk_list {
 	/*
@@ -117,6 +121,8 @@ struct candle_chunk_list {
 	int row_page_count;
 	int candle_idx;
 	int symbol_id;
+	struct scalable_queue *chunk_pool;
+	struct scalable_queue *row_page_pool;
 
 } ____cacheline_aligned;
 

@@ -19,12 +19,13 @@
 #include <assert.h>
 #include <inttypes.h>
 
+#include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
 
 struct idx_ver_alloc_arg {
 	uint64_t newcap;
-	struct memory_accounting *mem_acc;
+	struct candle_chunk_index *idx; /* Back-pointer to index */
 };
 
 /**
@@ -39,9 +40,9 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *arg)
 	struct idx_ver_alloc_arg *alloc_arg = (struct idx_ver_alloc_arg *)arg;
 	struct atomsnap_version *snap_ver = malloc(sizeof(struct atomsnap_version));
 	struct candle_chunk_index_version *idx_ver = NULL;
+	struct candle_chunk_index *idx = alloc_arg->idx;
 	uint64_t newcap = alloc_arg->newcap;
-	struct memory_accounting *mem_acc = alloc_arg->mem_acc;
-	size_t sz;
+	size_t array_size, total_size;
 
 	if (snap_ver == NULL) {
 		errmsg(stderr,
@@ -62,11 +63,11 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *arg)
 	}
 
 	idx_ver->array = NULL;
-	sz = newcap * sizeof(struct candle_chunk_index_entry);
-	sz = (sz + TRCACHE_SIMD_ALIGN - 1) & ~(TRCACHE_SIMD_ALIGN - 1);
+	array_size = newcap * sizeof(struct candle_chunk_index_entry);
+	array_size = (array_size + TRCACHE_SIMD_ALIGN - 1) &
+		~(TRCACHE_SIMD_ALIGN - 1);
 
-#if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
-	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN, sz);
+	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN, array_size);
 	if (idx_ver->array == NULL) {
 		errmsg(stderr,
 			"Failure on aligned_alloc() for array (newcap=%" PRIu64 ")\n",
@@ -75,26 +76,15 @@ static struct atomsnap_version *candle_chunk_index_version_alloc(void *arg)
 		free(idx_ver);
 		return NULL;
 	}
-#else
-	if (posix_memalign(&idx_ver->array, TRCACHE_SIMD_ALIGN, sz) != 0) {
-		errmsg(stderr,
-			"Failure on posix_memalign() for array (newcap=%" PRIu64 ")\n",
-			newcap);
-		free(snap_ver);
-		free(idx_ver);
-		return NULL;
-	}
-#endif
 
-	memset(idx_ver->array, 0, sz);
+	memset(idx_ver->array, 0, array_size);
 
-	memstat_add(&mem_acc->ms,
-		MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct atomsnap_version) +
-			sizeof(struct candle_chunk_index_version) +
-			newcap * sizeof(struct candle_chunk_index_entry));
-	snap_ver->free_context = (void *)mem_acc;
+	total_size = sizeof(struct atomsnap_version) +
+		sizeof(struct candle_chunk_index_version) + array_size;
 
+	mem_add_atomic(&idx->memory_usage.value, total_size);
+
+	snap_ver->free_context = (void *)idx; /* Pass index back to free func */
 	snap_ver->object = idx_ver;
 	idx_ver->mask = newcap - 1;
 
@@ -110,14 +100,18 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 {
 	struct candle_chunk_index_version *idx_ver
 		= (struct candle_chunk_index_version *)snap_ver->object;
-	struct memory_accounting *mem_acc
-		= (struct memory_accounting *)snap_ver->free_context;
+	struct candle_chunk_index *idx
+		= (struct candle_chunk_index *)snap_ver->free_context;
+	size_t array_size, total_size;
 
-	memstat_sub(&mem_acc->ms,
-		MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct atomsnap_version) +
-			sizeof(struct candle_chunk_index_version) +
-			((idx_ver->mask + 1) * sizeof(struct candle_chunk_index_entry)));
+	array_size = (idx_ver->mask + 1) * sizeof(struct candle_chunk_index_entry);
+	array_size = (array_size + TRCACHE_SIMD_ALIGN - 1) &
+		~(TRCACHE_SIMD_ALIGN - 1);
+	
+	total_size = sizeof(struct atomsnap_version) +
+		sizeof(struct candle_chunk_index_version) + array_size;
+
+	mem_sub_atomic(&idx->memory_usage.value, total_size);
 
 	free(idx_ver->array);
 	free(idx_ver);
@@ -127,14 +121,14 @@ static void candle_chunk_index_version_free(struct atomsnap_version *snap_ver)
 /**
  * @brief   Allocate and initialise an empty index.
  *
+ * @param   trc:                     Pointer to the main trcache instance.
  * @param   init_cap_pow2:           Equals to log2(array_capacity).
  * @param   batch_candle_count_pow2: Equals to log2(batch_candle_count).
- * @param   mem_acc:                 Memory accounting information.
  *
  * @return  Pointer to the new index, or NULL on allocation failure.
  */
-struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
-	int batch_candle_count_pow2, struct memory_accounting *mem_acc)
+struct candle_chunk_index *candle_chunk_index_create(struct trcache *trc,
+	int init_cap_pow2, int batch_candle_count_pow2)
 {
 	uint64_t cap = 1ULL << init_cap_pow2;
 	struct atomsnap_init_context ctx = {
@@ -142,10 +136,7 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 		.atomsnap_free_impl = candle_chunk_index_version_free,
 		.num_extra_control_blocks = 0
 	};
-	struct idx_ver_alloc_arg alloc_arg = {
-		.newcap = cap,
-		.mem_acc = mem_acc
-	};
+	struct idx_ver_alloc_arg alloc_arg;
 	struct atomsnap_version *initial_version = NULL;
 	struct candle_chunk_index *idx = malloc(sizeof(struct candle_chunk_index));
 
@@ -154,12 +145,19 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 		return NULL;
 	}
 
+	idx->trc = trc;
+	atomic_init(&idx->memory_usage.value, 0);
+	mem_add_atomic(&idx->memory_usage.value, sizeof(struct candle_chunk_index));
+
 	idx->gate = atomsnap_init_gate(&ctx);
 	if (idx->gate == NULL) {
 		errmsg(stderr, "Failure on atomsnap_init_gate()\n");
 		free(idx);
 		return NULL;
 	}
+
+	alloc_arg.newcap = cap;
+	alloc_arg.idx = idx;
 
 	initial_version = atomsnap_make_version(idx->gate, (void*)&alloc_arg);
 	if (initial_version == NULL) {
@@ -168,10 +166,6 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
 		free(idx);
 		return NULL;
 	}
-
-	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct candle_chunk_index));
-	idx->mem_acc = mem_acc;
 
 	atomsnap_exchange_version(idx->gate, initial_version);
 	atomic_store(&idx->head, 0);
@@ -189,17 +183,12 @@ struct candle_chunk_index *candle_chunk_index_create(int init_cap_pow2,
  */
 void candle_chunk_index_destroy(struct candle_chunk_index *idx)
 {
-	struct memory_accounting *mem_acc;
-
 	if (idx == NULL) {
 		return;
 	}
 
-	mem_acc = idx->mem_acc;
-	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_INDEX,
-		sizeof(struct candle_chunk_index));
-
 	atomsnap_destroy_gate(idx->gate);
+
 	free(idx);
 }
 
@@ -223,7 +212,7 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	uint64_t new_cap = old_cap << 1;
 	struct idx_ver_alloc_arg alloc_arg = {
 		.newcap = new_cap,
-		.mem_acc = idx->mem_acc
+		.idx = idx
 	};
 	struct atomsnap_version *new_snap
 		= atomsnap_make_version(idx->gate, (void *)&alloc_arg);

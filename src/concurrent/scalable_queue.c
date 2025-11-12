@@ -10,7 +10,9 @@
 #include <pthread.h>
 
 #include "concurrent/scalable_queue.h"
+#include "meta/trcache_internal.h"
 #include "utils/log.h"
+#include "utils/memstat.h"
 
 /*
  * During initialization, the scalable_queue is assigned a unique ID.
@@ -43,11 +45,11 @@ static void scq_key_init(void)
 /**
  * @brief   Initialise a scalble_queue that will account memory limit.
  *
- * @param   mem_acc: Pointer to #memory_accounting data (may be NULL).
+ * @param   tc: Pointer to the parent #trcache instance.
  *
  * @return  New queue on success, NULL on failure.
  */
-struct scalable_queue *scq_init(struct memory_accounting *mem_acc)
+struct scalable_queue *scq_init(struct trcache *tc)
 {
 	struct scalable_queue *scq = calloc(1, sizeof(struct scalable_queue));
 
@@ -56,8 +58,16 @@ struct scalable_queue *scq_init(struct memory_accounting *mem_acc)
 		return NULL;
 	}
 
-	scq->mem_acc = mem_acc;
-	atomic_init(&scq->thread_num, 0);
+	if (pthread_spin_init(&scq->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
+		errmsg(stderr, "Initialization of spinlock failed\n");
+		free(scq);
+		return NULL;
+	}
+
+	scq->owner_tc = tc;
+	scq->thread_num = 0;
+	atomic_init(&scq->node_memory_usage.value, 0);
+	atomic_init(&scq->object_memory_usage.value, 0);
 
 	/* Initialize the global pthread key exactly once */
 	pthread_once(&g_scq_key_once, scq_key_init);
@@ -81,6 +91,7 @@ struct scalable_queue *scq_init(struct memory_accounting *mem_acc)
 	/* Invalid id */
 	if (scq->scq_id == -1) {
 		errmsg(stderr, "Invalid scq_id\n");
+		pthread_spin_destroy(&scq->spinlock);
 		free(scq);
 		return NULL;
 	}
@@ -130,8 +141,12 @@ void scq_destroy(struct scalable_queue *scq)
 				prev_node = node;
 				node = node->next;
 				free(prev_node);
+				mem_sub_atomic(&scq->node_memory_usage.value,
+					sizeof(struct scq_node));
 			}
 			free(dequeued_node_list->local_tail);
+			mem_sub_atomic(&scq->node_memory_usage.value,
+				sizeof(struct scq_node));
 		}
 
 		if (free_node_list->local_head != NULL) {
@@ -140,8 +155,12 @@ void scq_destroy(struct scalable_queue *scq)
 				prev_node = node;
 				node = node->next;
 				free(prev_node);
+				mem_sub_atomic(&scq->node_memory_usage.value,
+					sizeof(struct scq_node));
 			}
 			free(free_node_list->local_tail);
+			mem_sub_atomic(&scq->node_memory_usage.value,
+				sizeof(struct scq_node));
 		}
 
 		node = free_node_list->shared_sentinel.next;
@@ -149,6 +168,8 @@ void scq_destroy(struct scalable_queue *scq)
 			prev_node = node;
 			node = node->next;
 			free(prev_node);
+			mem_sub_atomic(&scq->node_memory_usage.value,
+				sizeof(struct scq_node));
 		}
 
 		node = tls_data_ptr->shared_sentinel.next;
@@ -156,10 +177,14 @@ void scq_destroy(struct scalable_queue *scq)
 			prev_node = node;
 			node = node->next;
 			free(prev_node);
+			mem_sub_atomic(&scq->node_memory_usage.value,
+				sizeof(struct scq_node));
 		}
 
 		free(tls_data_ptr);
 	}
+
+	pthread_spin_destroy(&scq->spinlock);
 
 	free(scq);
 }
@@ -174,14 +199,15 @@ static void scq_free_nodes(struct scalable_queue *scq,
 	struct scq_tls_data *tls_data = scq->tls_data_ptr_list[enqueue_thread_idx];
 	struct scq_free_node_list *free_node_list = &tls_data->free_node_list;
 	struct scq_node *prev_tail = NULL, *node = NULL, *next = NULL;
+	bool memory_pressure = atomic_load_explicit(
+		&scq->owner_tc->mem_acc.memory_pressure, memory_order_acquire);
 
-	if (scq->mem_acc != NULL && scq->mem_acc->aux_limit > 0 &&
-		memstat_get_aux_total(&scq->mem_acc->ms) > scq->mem_acc->aux_limit) {
+	if (memory_pressure) {
 		node = initial_head_node;
 		while (node != NULL) {
 			next = node->next;
 			free(node);
-			memstat_sub(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+			mem_sub_atomic(&scq->node_memory_usage.value,
 				sizeof(struct scq_node));
 			if (node == tail_node) {
 				break;
@@ -386,23 +412,19 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 		}
 	}
 
+	pthread_spin_lock(&scq->spinlock);
+
 	/* 3. Case 2: Slow Path (New Thread) */
-	num_threads = atomic_load_explicit(&scq->thread_num,
-		memory_order_acquire);
+	num_threads = scq->thread_num;
 	
 	/* 3a. [Lock-Free O(N) Slot Reuse] */
 	for (int i = 0; i < num_threads; i++) {
 		struct scq_tls_data *ptr = atomic_load_explicit(
 			&scq->tls_data_ptr_list[i], memory_order_acquire);
-		
-		if (ptr == NULL) {
-			continue; /* Slot is being allocated by another thread */
-		}
 
-		bool expected = false;
-		if (atomic_load(&ptr->is_active) == false &&
-			atomic_compare_exchange_strong(&ptr->is_active,
-				&expected, true)) {
+		assert(ptr != NULL);
+
+		if (atomic_load(&ptr->is_active) == false) {
 			/* --- Slot Reuse Success --- */
 			ptr_to_use = ptr;
 			goto slot_acquired;
@@ -410,16 +432,19 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 	}
 
 	/* 3b. [Lock-Free O(1) New Slot Allocation] */
-	my_idx = atomic_fetch_add(&scq->thread_num, 1);
+	my_idx = scq->thread_num++;
 	if (my_idx >= MAX_THREAD_NUM) {
-		atomic_fetch_sub(&scq->thread_num, 1); /* Rollback */
+		scq->thread_num--; /* Rollback */
 		errmsg(stderr, "scq_init: MAX_THREAD_NUM reached\n");
+		pthread_spin_unlock(&scq->spinlock);
 		return NULL;
 	}
 
 	ptr_to_use = calloc(1, sizeof(struct scq_tls_data));
 	if (ptr_to_use == NULL) {
 		errmsg(stderr, "Failed to alloc scq_tls_data\n");
+		scq->thread_num--; 
+		pthread_spin_unlock(&scq->spinlock);
 		/* Note: this leaks a slot in thread_num, but is a fatal error */
 		return NULL;
 	}
@@ -462,6 +487,8 @@ slot_acquired:
 
 	registrations[scq->scq_id] = ptr_to_use; /* Register in thread-local list */
 
+	pthread_spin_unlock(&scq->spinlock);
+
 	return ptr_to_use;
 }
 
@@ -491,26 +518,28 @@ static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
 	}
 
 	/* 2. Try own shared list */
-	free_node_list->local_head
-		= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
+	if (free_node_list->shared_sentinel.next != NULL) {
+		free_node_list->local_head
+			= atomic_exchange(&free_node_list->shared_sentinel.next, NULL);
 
-	if (free_node_list->local_head != NULL) {
-		free_node_list->local_tail
-			= atomic_exchange(&free_node_list->shared_tail,
-				&free_node_list->shared_sentinel);
+		if (free_node_list->local_head != NULL) {
+			free_node_list->local_tail
+				= atomic_exchange(&free_node_list->shared_tail,
+					&free_node_list->shared_sentinel);
 
-		/* Pop one node from the newly acquired local list */
-		node = free_node_list->local_head;
-		if (free_node_list->local_head == free_node_list->local_tail) {
-			free_node_list->local_head = NULL;
-			free_node_list->local_tail = NULL;
-		} else {
-			while (node->next == NULL) {
-				__asm__ __volatile__("pause");
+			/* Pop one node from the newly acquired local list */
+			node = free_node_list->local_head;
+			if (free_node_list->local_head == free_node_list->local_tail) {
+				free_node_list->local_head = NULL;
+				free_node_list->local_tail = NULL;
+			} else {
+				while (node->next == NULL) {
+					__asm__ __volatile__("pause");
+				}
+				free_node_list->local_head = node->next;
 			}
-			free_node_list->local_head = node->next;
+			return node;
 		}
-		return node;
 	}
 
 	/* 3. Try stealing from other threads' shared lists (is_active ignored) */
@@ -555,8 +584,8 @@ static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
 
 	/* 4. Malloc as last resort */
 	node = (struct scq_node *)malloc(sizeof(struct scq_node));
-	if (node != NULL && scq->mem_acc != NULL) {
-		memstat_add(&scq->mem_acc->ms, MEMSTAT_SCQ_NODE,
+	if (node != NULL) {
+		mem_add_atomic(&scq->node_memory_usage.value,
 			sizeof(struct scq_node));
 	}
 

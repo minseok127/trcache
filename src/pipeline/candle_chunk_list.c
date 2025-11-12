@@ -18,6 +18,16 @@
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
 
+/*
+ * Bundle of head version structs for object pooling.
+ * This combines the atomsnap struct and the head_version struct
+ * into a single allocation unit that can be pooled.
+ */
+struct trcache_head_version_bundle {
+	struct atomsnap_version snap_version;
+	struct candle_chunk_list_head_version head_version;
+};
+
 /**
  * @brief   Allocate an candle chunk list's head version.
  *
@@ -28,29 +38,36 @@
 static struct atomsnap_version *candle_chunk_list_head_alloc(
 	void *chunk_list)
 {
-	struct atomsnap_version *version = NULL;
-	struct candle_chunk_list_head_version *head = NULL;
+	struct candle_chunk_list *list = (struct candle_chunk_list *)chunk_list;
+	struct trcache *trc = list->trc;
+	struct trcache_head_version_bundle *bundle = NULL;
+	size_t bundle_size = sizeof(struct trcache_head_version_bundle);
 
-	version = malloc(sizeof(struct atomsnap_version));
+	/* 1. Try to get from pool */
+	scq_dequeue(trc->head_version_pool, (void **)&bundle);
 
-	if (version == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
-		return NULL;
+	/* 2. Pool empty or memory pressure, allocate new one */
+	if (bundle == NULL) {
+		bundle = malloc(bundle_size);
+		if (bundle == NULL) {
+			errmsg(stderr, "#trcache_head_version_bundle alloc failed\n");
+			return NULL;
+		}
+
+		/* Track memory for the new bundle */
+		mem_add_atomic(&trc->head_version_pool->object_memory_usage.value,
+			bundle_size);
 	}
 
-	head = malloc(sizeof(struct candle_chunk_list_head_version));
+	/* 3. Initialize and return */
+	memset(&bundle->head_version, 0,
+		sizeof(struct candle_chunk_list_head_version));
+	
+	bundle->head_version.snap_version = &bundle->snap_version;
+	bundle->snap_version.object = (void *)&bundle->head_version;
+	bundle->snap_version.free_context = chunk_list;
 
-	if (head == NULL) {
-		errmsg(stderr, "#candle_chunk_list_head_version allocation failed\n");
-		free(version);
-		return NULL;
-	}
-
-	head->snap_version = version;
-	version->object = (void *)head;
-	version->free_context = chunk_list;
-
-	return version;
+	return &bundle->snap_version;
 }
 
 #define HEAD_VERSION_RELEASE_MASK (0x8000000000000000ULL)
@@ -78,12 +95,16 @@ static void candle_chunk_list_head_free(struct atomsnap_version *version)
 {
 	struct candle_chunk_list *chunk_list
 		= (struct candle_chunk_list *)version->free_context;
+	struct trcache *trc = chunk_list->trc;
 	struct candle_chunk_index *chunk_index = chunk_list->chunk_index;
 	struct candle_chunk_list_head_version *head_version
 		= (struct candle_chunk_list_head_version *)version->object;
 	struct candle_chunk_list_head_version *next_head_version = NULL;
 	struct candle_chunk_list_head_version *prev_head_version = NULL;
 	struct candle_chunk *prev_chunk = NULL, *chunk = NULL;
+	struct trcache_head_version_bundle *bundle =
+		container_of(version, struct trcache_head_version_bundle, snap_version);
+	bool memory_pressure;
 #ifdef TRCACHE_DEBUG
 	struct candle_chunk *pop_head = NULL; /* debug purpose */
 #endif /* TRCACHE_DEBUG */
@@ -141,8 +162,19 @@ free_head_version:
 
 	next_head_version = atomic_load(&head_version->head_version_next);
 
-	free(head_version->snap_version); /* #atomsnap_version */
-	free(head_version); /* #candle_chunk_list_head_version */
+	/*
+	 * Recycle or free the bundle (atomsnap_version + head_version)
+	 */
+	memory_pressure = atomic_load_explicit(
+		&trc->mem_acc.memory_pressure, memory_order_acquire);
+	
+	if (memory_pressure) {
+		mem_sub_atomic(&trc->head_version_pool->object_memory_usage.value,
+			sizeof(struct trcache_head_version_bundle));
+		free(bundle);
+	} else {
+		scq_enqueue(trc->head_version_pool, bundle);
+	}
 
 	/*
 	 * Normally not NULL, but may be NULL if the chunk list is being destroyed.
@@ -199,10 +231,15 @@ struct candle_chunk_list *create_candle_chunk_list(
 
 	list->trc = ctx->trc;
 	list->config = &ctx->trc->candle_configs[ctx->candle_idx];
+	list->candle_idx = ctx->candle_idx;
+	list->symbol_id = ctx->symbol_id;
 
-	list->chunk_index = candle_chunk_index_create(
-		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2,
-		&list->trc->mem_acc);
+	/* Get pointers to the shared, per-candle-type SCQ pools */
+	list->chunk_pool = list->trc->chunk_pools[ctx->candle_idx];
+	list->row_page_pool = list->trc->row_page_pools[ctx->candle_idx];
+
+	list->chunk_index = candle_chunk_index_create(list->trc,
+		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2);
 	if (list->chunk_index == NULL) {
 		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
 		free(list);
@@ -223,9 +260,6 @@ struct candle_chunk_list *create_candle_chunk_list(
 	atomic_store(&list->mutable_seq, UINT64_MAX);
 	atomic_store(&list->last_seq_converted, UINT64_MAX);
 	atomic_store(&list->unflushed_batch_count, 0);
-
-	list->candle_idx = ctx->candle_idx;
-	list->symbol_id = ctx->symbol_id;
 
 	list->tail = NULL;
 	list->candle_mutable_chunk = NULL;
@@ -299,7 +333,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(
 		list->trc, list->candle_idx, list->symbol_id, list->row_page_count,
-		list->trc->batch_candle_count);
+		list->trc->batch_candle_count, list->chunk_pool, list->row_page_pool);
 	struct atomsnap_version *head_snap_version = NULL;
 	struct candle_chunk_list_head_version *head = NULL;
 	const struct trcache_candle_update_ops *ops
@@ -403,7 +437,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 		= &list->config->update_ops;
 	struct candle_chunk *new_chunk = create_candle_chunk(list->trc,
 		list->candle_idx, list->symbol_id, list->row_page_count,
-		list->trc->batch_candle_count);
+		list->trc->batch_candle_count, list->chunk_pool, list->row_page_pool);
 	uint64_t first_key;
 
 	if (new_chunk == NULL) {

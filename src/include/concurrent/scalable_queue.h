@@ -65,18 +65,29 @@ struct scq_tls_data {
 };
 
 /*
- * scalable_queue - Main data structure to manage queue
- * @tls_data_ptr_list: Each thread's scq_tls_data pointer.
- * @scq_id:            Global ID of the scalable_queue.
- * @thread_num:        Number of threads.
- * @mem_acc:           Memory accounting information for this queue.
+ * scalable_queue - Main data structure to manage queue.
+ *
+ * @spinlock:            Spinlock to manage thread-local data structures.
+ * @tls_data_ptr_list:   Each thread's scq_tls_data pointer.
+ * @scq_id:              Global ID of the scalable_queue.
+ * @thread_num:          Number of threads.
+ * @owner_tc:            Back-pointer to the main trcache instance.
+ * @node_memory_usage:   Total memory (bytes) of all scq_nodes.
+ * @object_memory_usage: Total memory (bytes) of all user objects.
  */
 struct scalable_queue {
+	____cacheline_aligned
+	pthread_spinlock_t spinlock;
+
+	____cacheline_aligned
 	struct scq_tls_data *tls_data_ptr_list[MAX_THREAD_NUM];
 	int scq_id;
-	_Atomic int thread_num;
+	int thread_num;
 	struct trcache *owner_tc;
-	struct memory_accounting *mem_acc;
+
+	____cacheline_aligned
+	struct mem_padded_atomic_size node_memory_usage;
+	struct mem_padded_atomic_size object_memory_usage;
 };
 
 typedef struct scalable_queue scalable_queue;
@@ -87,11 +98,11 @@ typedef struct scalable_queue scq;
 /**
  * @brief   Initialise a scalble_queue that will account memory limit.
  *
- * @param   mem_acc: Pointer to #memory_accounting data (may be NULL).
+ * @param   tc: Pointer to the parent #trcache instance.
  *
  * @return  New queue on success, NULL on failure.
  */
-struct scalable_queue *scq_init(struct memory_accounting *mem_acc);
+struct scalable_queue *scq_init(struct trcache *tc);
 
 /**
  * @brief   Destroy a scalable_queue and free all associated memory.

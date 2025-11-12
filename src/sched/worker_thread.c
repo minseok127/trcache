@@ -517,11 +517,25 @@ void *worker_thread_main(void *arg)
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
 
 	bool work_done;
+	int old_group = -1;
 
 	while (!state->done) {
 		int group = atomic_load_explicit(&state->group_id,
 			memory_order_acquire);
 		work_done = false;
+
+		/*
+		 * If group ID changed, unregister from all SCQ pools
+		 * to flush thread-local SCQ node caches.
+		 */
+		if (old_group != -1 && old_group != group) {
+			scq_thread_unregister(cache->head_version_pool);
+			for (int i = 0; i < cache->num_candle_configs; i++) {
+				scq_thread_unregister(cache->chunk_pools[i]);
+				scq_thread_unregister(cache->row_page_pools[i]);
+			}
+		}
+		old_group = group;
 
 		if (group == GROUP_IN_MEMORY) {
 			work_done = worker_run_in_memory_tasks(cache, state);
@@ -533,6 +547,16 @@ void *worker_thread_main(void *arg)
 			/* No work was found or done in this iteration */
 			sched_yield();
 		}
+	}
+
+	/*
+	 * Thread is terminating. Unregister from all SCQ pools
+	 * one last time to flush any remaining cached nodes.
+	 */
+	scq_thread_unregister(cache->head_version_pool);
+	for (int i = 0; i < cache->num_candle_configs; i++) {
+		scq_thread_unregister(cache->chunk_pools[i]);
+		scq_thread_unregister(cache->row_page_pools[i]);
 	}
 
 	return NULL;

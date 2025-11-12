@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #include "concurrent/atomsnap.h"
+#include "concurrent/scalable_queue.h"
 #include "utils/memstat.h"
 
 #include "trcache.h"
@@ -26,10 +27,11 @@
 /*
  * candle_row_page - Array of row-oriented candles.
  *
+ * @pool: Pointer to the scq pool this page belongs to, for recycling.
  * @data: Fixed AoS storage for TRCACHE_ROWS_PER_PAGE user-defined candles.
  */
 struct candle_row_page {
-	int _dummy;
+	struct scalable_queue *pool;
 	char data[];
 };
 
@@ -52,6 +54,10 @@ struct candle_row_page {
  * @seq_first:            First sequence number of the chunk.
  * @trc:                  Back-pointer to the main trcache instance for
  *                        metadata.
+ * @chunk_pool:           Pointer to the scq pool this chunk belongs to.
+ * @row_page_pool:        Pointer to the scq pool for row pages.
+ * @chunk_mem_size:       Memory size of (this chunk + its column_batch).
+ * @row_page_mem_size:    Memory size of one candle_row_page.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -106,6 +112,10 @@ struct candle_chunk {
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
 	struct trcache *trc;
+	struct scalable_queue *chunk_pool;
+	struct scalable_queue *row_page_pool;
+	size_t chunk_mem_size;
+	size_t row_page_mem_size;
 
 } ____cacheline_aligned;
 
@@ -248,12 +258,14 @@ static inline void candle_chunk_write_key(
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
+ * @param   chunk_pool:         SCQ pool for recycling chunks.
+ * @param   row_page_pool:      SCQ pool for recycling row pages.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(struct trcache *trc,
-	int candle_idx, int symbol_id,
-	int row_page_count, int batch_candle_count);
+	int candle_idx, int symbol_id, int row_page_count, int batch_candle_count,
+	struct scalable_queue *chunk_pool, struct scalable_queue *row_page_pool);
 
 /**
  * @brief   Release all resources of a candle chunk.

@@ -22,94 +22,6 @@ static size_t align_up(size_t x, size_t a)
 	return (x + a - 1) & ~(a - 1);
 }
 
-/**
- * @brief   Allocate an atomsnap_version and its owned candle row page.
- *
- * @param   arg: A pointer to the parent #candle_chunk struct.
- *
- * The returned version already contains a zero‑initialized, 64‑byte‑aligned
- * row page in its @object field.
- *
- * @return  Pointer to version, or NULL on failure.
- */
-static struct atomsnap_version *row_page_version_alloc(void *arg)
-{
-	struct candle_chunk *chunk = (struct candle_chunk *)arg;
-	struct trcache *trc = chunk->trc;
-	int candle_idx = chunk->column_batch->candle_idx;
-	struct memory_accounting *mem_acc = &trc->mem_acc;
-	struct atomsnap_version *version  = NULL;
-	struct candle_row_page *row_page = NULL;
-	size_t page_size = sizeof(struct candle_row_page) +
-		(TRCACHE_ROWS_PER_PAGE *
-			trc->candle_configs[candle_idx].user_candle_size);
-
-#if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
-	row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, page_size);
-#else
-	if (posix_memalign((void **)&row_page, TRCACHE_SIMD_ALIGN, page_size)
-			!= 0) {
-		row_page = NULL;
-	}
-#endif
-
-	if (!row_page) {
-		errmsg(stderr, "#candle_row_page allocation failed\n");
-		return NULL;
-	} else {
-		memset(row_page, 0, sizeof(struct candle_row_page));
-	}
-
-	version = malloc(sizeof(struct atomsnap_version));
-	if (version == NULL) {
-		errmsg(stderr, "#atomsnap_version allocation failed\n");
-		free(row_page);
-		return NULL;
-	}
-
-	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		 sizeof(struct atomsnap_version) + page_size);
-
-	version->object = row_page;
-	version->free_context = arg;
-
-	return version;
-}
-
-/**
- * @brief   Final cleanup for a row page version.
- *
- * @param   version: Pointer to the atomsnap_version
- *
- * Called by the last thread to release its reference to the version.
- */
-static void row_page_version_free(struct atomsnap_version *version)
-{
-	struct candle_chunk *chunk;
-	struct trcache *trc;
-	struct memory_accounting *mem_acc;
-	size_t page_size;
-	int candle_idx;
-
-	if (version == NULL) {
-		return;
-	}
-
-	chunk = (struct candle_chunk *)version->free_context;
-	trc = chunk->trc;
-	candle_idx = chunk->column_batch->candle_idx;
-	mem_acc = &trc->mem_acc;
-	page_size = sizeof(struct candle_row_page) +
-		(TRCACHE_ROWS_PER_PAGE *
-			trc->candle_configs[candle_idx].user_candle_size);
-
-	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct atomsnap_version) + page_size);
-
-	free(version->object); /* #candle_row_page */
-	free(version);
-}
-
 /*
  * Helper function for memory accounting.
  */
@@ -148,6 +60,96 @@ static size_t calculate_batch_total_size(struct trcache *trc,
 }
 
 /**
+ * @brief   Allocate an atomsnap_version and its owned candle row page.
+ *
+ * @param   arg: A pointer to the parent #candle_chunk struct.
+ *
+ * The returned version already contains a zero‑initialized, 64‑byte‑aligned
+ * row page in its @object field.
+ *
+ * @return  Pointer to version, or NULL on failure.
+ */
+static struct atomsnap_version *row_page_version_alloc(void *arg)
+{
+	struct candle_chunk *chunk = (struct candle_chunk *)arg;
+	struct scalable_queue *row_page_pool = chunk->row_page_pool;
+	struct atomsnap_version *version  = NULL;
+	struct candle_row_page *row_page = NULL;
+
+	/* 1. Try to get from pool */
+	scq_dequeue(row_page_pool, (void **)&version);
+
+	/* 2. Pool empty or memory pressure, allocate new one */
+	if (version == NULL) {
+		version = malloc(sizeof(struct atomsnap_version));
+		if (version == NULL) {
+			errmsg(stderr, "#atomsnap_version allocation failed\n");
+			return NULL;
+		}
+
+		row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, chunk->row_page_mem_size);
+		if (row_page == NULL) {
+			errmsg(stderr, "#candle_row_page allocation failed\n");
+			free(version);
+			return NULL;
+		}
+
+		/* Track memory for the new page */
+		mem_add_atomic(&row_page_pool->object_memory_usage.value,
+			sizeof(struct atomsnap_version) + chunk->row_page_mem_size);
+
+		version->object = row_page;
+	} else {
+		row_page = (struct candle_row_page *)version->object;
+	}
+
+	memset(row_page, 0, sizeof(struct candle_row_page));
+	row_page->pool = row_page_pool;
+	version->free_context = arg;
+
+	return version;
+}
+
+/**
+ * @brief   Final cleanup for a row page version.
+ *
+ * @param   version: Pointer to the atomsnap_version
+ *
+ * Called by the last thread to release its reference to the version.
+ */
+static void row_page_version_free(struct atomsnap_version *version)
+{
+	struct candle_chunk *chunk;
+	struct trcache *trc;
+	struct scalable_queue *row_page_pool;
+	struct candle_row_page *row_page;
+	bool memory_pressure;
+
+	if (version == NULL) {
+		return;
+	}
+
+	chunk = (struct candle_chunk *)version->free_context;
+	trc = chunk->trc;
+	row_page = (struct candle_row_page *)version->object;
+	row_page_pool = row_page->pool;
+
+	memory_pressure = atomic_load_explicit(
+		&trc->mem_acc.memory_pressure, memory_order_acquire);
+
+	if (memory_pressure) {
+		/* Free the bundle and update object memory tracking */
+		mem_sub_atomic(&row_page_pool->object_memory_usage.value,
+			sizeof(struct atomsnap_version) + chunk->row_page_mem_size);
+		free(row_page);
+		free(version);
+	} else {
+		/* Return the version (which points to the page) to the pool */
+		scq_enqueue(row_page_pool, version);
+	}
+}
+
+/**
  * @brief   Allocate and initialize #candle_chunk.
  *
  * @param   trc:                Pointer to the main trcache instance.
@@ -155,14 +157,15 @@ static size_t calculate_batch_total_size(struct trcache *trc,
  * @param   symbol_id:          Symbol ID of the column-batch.
  * @param   row_page_count:     Number of row pages per chunk.
  * @param   batch_candle_count: Number of candles per chunk.
+ * @param   chunk_pool:         SCQ pool for recycling chunks.
+ * @param   row_page_pool:      SCQ pool for recycling row pages.
  *
  * @return  Pointer to the candle_chunk, or NULL on failure.
  */
 struct candle_chunk *create_candle_chunk(struct trcache *trc,
-	int candle_idx, int symbol_id,
-	int row_page_count, int batch_candle_count)
+	int candle_idx, int symbol_id, int row_page_count, int batch_candle_count,
+	struct scalable_queue *chunk_pool, struct scalable_queue *row_page_pool)
 {
-	struct memory_accounting *mem_acc = &trc->mem_acc;
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context ctx = {
 		.atomsnap_alloc_impl = row_page_version_alloc,
@@ -170,49 +173,77 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 		.num_extra_control_blocks = row_page_count - 1
 	};
 	size_t batch_total_size = 0;
+	size_t chunk_total_size = 0;
+	bool allocated_new = false;
 
-	chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk));
+	/* 1. Try to get from pool */
+	scq_dequeue(chunk_pool, (void **)&chunk);
+
+	/* 2. Pool empty or memory pressure, allocate new one */
 	if (chunk == NULL) {
-		errmsg(stderr, "#candle_chunk allocation failed\n");
-		return NULL;
+		allocated_new = true;
+		chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk));
+		if (chunk == NULL) {
+			errmsg(stderr, "#candle_chunk allocation failed\n");
+			return NULL;
+		}
+
+		if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
+			errmsg(stderr, "Initialization of spinlock failed\n");
+			free(chunk);
+			return NULL;
+		}
+
+		chunk->row_gate = atomsnap_init_gate(&ctx);
+		if (chunk->row_gate == NULL) {
+			errmsg(stderr, "Failure on atomsnap_init_gate\n");
+			pthread_spin_destroy(&chunk->spinlock);
+			free(chunk);
+			return NULL;
+		}
+
+		chunk->column_batch = trcache_batch_alloc_on_heap(trc, candle_idx,
+			batch_candle_count, NULL);
+		if (chunk->column_batch == NULL) {
+			errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
+			pthread_spin_destroy(&chunk->spinlock);
+			atomsnap_destroy_gate(chunk->row_gate);
+			free(chunk);
+			return NULL;
+		}
+	} else {
+		/*
+		 * RECYCLED CHUNK: Reset only what's necessary.
+		 * - spinlock is already initialized.
+		 * - column_batch is already allocated.
+		 * - row_gate is already initialized and is clean.
+		 *
+		 * Just reset the batch counter.
+		 */
+		chunk->column_batch->num_candles = 0;
 	}
 
-	memset(chunk, 0, sizeof(struct candle_chunk));
-
-	if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
-		errmsg(stderr, "Initialization of spinlock failed\n");
-		free(chunk);
-		return NULL;
-	}
-
-	chunk->row_gate = atomsnap_init_gate(&ctx);
-	if (chunk->row_gate == NULL) {
-		errmsg(stderr, "Failure on atomsnap_init_gate\n");
-		pthread_spin_destroy(&chunk->spinlock);
-		free(chunk);
-		return NULL;
-	}
-
-	chunk->column_batch = trcache_batch_alloc_on_heap(trc, candle_idx,
-		batch_candle_count, NULL);
-	if (chunk->column_batch == NULL) {
-		errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
-		pthread_spin_destroy(&chunk->spinlock);
-		atomsnap_destroy_gate(chunk->row_gate);
-		free(chunk);
-		return NULL;
-	}
-
+	/* 3. Common initialization (for both new and recycled) */
 	chunk->trc = trc;
+	chunk->chunk_pool = chunk_pool;
+	chunk->row_page_pool = row_page_pool;
 	chunk->column_batch->symbol_id = symbol_id;
 	chunk->column_batch->candle_idx = candle_idx;
 
-	/* Calculate batch size for memstat */
+	/* Calculate and store memory sizes */
 	batch_total_size = calculate_batch_total_size(trc,
 		candle_idx, chunk->column_batch);
+	chunk_total_size = sizeof(struct candle_chunk) + batch_total_size;
+	
+	chunk->chunk_mem_size = chunk_total_size;
+	chunk->row_page_mem_size = sizeof(struct candle_row_page) +
+		(TRCACHE_ROWS_PER_PAGE *
+			trc->candle_configs[candle_idx].user_candle_size);
 
-	memstat_add(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct candle_chunk) + batch_total_size);
+	if (allocated_new) {
+		mem_add_atomic(&chunk_pool->object_memory_usage.value,
+			chunk_total_size);
+	}
 
 	chunk->mutable_page_idx = -1;
 	chunk->mutable_row_idx = -1;
@@ -238,25 +269,27 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
  */
 void candle_chunk_destroy(struct candle_chunk *chunk)
 {
-	struct trcache *trc = chunk->trc;
-	struct memory_accounting *mem_acc = &trc->mem_acc;
-	size_t batch_total_size = 0;
+	struct trcache *trc;
+	bool memory_pressure;
 
 	if (chunk == NULL) {
 		return;
 	}
 
-	batch_total_size = calculate_batch_total_size(chunk->trc,
-		chunk->column_batch->candle_idx, chunk->column_batch);
+	trc = chunk->trc;
+	memory_pressure = atomic_load_explicit(
+		&trc->mem_acc.memory_pressure, memory_order_acquire);
 
-	memstat_sub(&mem_acc->ms, MEMSTAT_CANDLE_CHUNK_LIST,
-		sizeof(struct candle_chunk) + batch_total_size);
-
-	pthread_spin_destroy(&chunk->spinlock);
-	atomsnap_destroy_gate(chunk->row_gate);
-	trcache_batch_free(chunk->column_batch);
-
-	free(chunk);
+	if (memory_pressure) {
+		mem_sub_atomic(&chunk->chunk_pool->object_memory_usage.value,
+			chunk->chunk_mem_size);
+		pthread_spin_destroy(&chunk->spinlock);
+		atomsnap_destroy_gate(chunk->row_gate);
+		trcache_batch_free(chunk->column_batch);
+		free(chunk);
+	} else {
+		scq_enqueue(chunk->chunk_pool, chunk);
+	}
 }
 
 /**

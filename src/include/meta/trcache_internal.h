@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <pthread.h>
 
+#include "concurrent/scalable_queue.h"
 #include "meta/symbol_table.h"
 #include "pipeline/trade_data_buffer.h"
 #include "utils/hash_table.h"
@@ -53,6 +54,10 @@ struct trcache_tls_data {
  * @worker_threads:          Array of handles for worker threads.
  * @worker_args:             Per-worker argument array used at start.
  * @max_symbols:             Maximum number of symbols.
+ * @total_memory_limit:      Total memory limit for the instance.
+ * @head_version_pool:       SCQ pool for candle_chunk_list's heads.
+ * @chunk_pools:             Per-candle-type SCQ pools for candle_chunks.
+ * @row_page_pools:          Per-candle-type SCQ pools for candle_row_pages.
 */
 struct trcache {
 	/*
@@ -97,6 +102,10 @@ struct trcache {
 	pthread_t *worker_threads;
 	struct worker_thread_args *worker_args;
 	int max_symbols;
+	size_t total_memory_limit;
+	struct scalable_queue *head_version_pool;
+	struct scalable_queue *chunk_pools[MAX_CANDLE_TYPES];
+	struct scalable_queue *row_page_pools[MAX_CANDLE_TYPES];
 
 } ____cacheline_aligned;
 

@@ -48,10 +48,9 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 
 	memset(buf, 0, sizeof(struct trade_data_buffer));
 
-	buf->mem_acc = &tc->mem_acc;
-
-	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
-		sizeof(struct trade_data_buffer));
+	buf->trc = tc;
+	atomic_init(&buf->memory_usage.value, 0);
+	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
 
 	chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trade_data_chunk));
 
@@ -63,8 +62,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 
 	memset(chunk, 0, sizeof(struct trade_data_chunk));
 
-	memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
-		sizeof(struct trade_data_chunk));
+	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_chunk));
 
 	INIT_LIST_HEAD(&buf->chunk_list);
 
@@ -102,6 +100,7 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 {
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
+	size_t chunk_size = sizeof(struct trade_data_chunk);
 
 	if (buf == NULL) {
 		return;
@@ -114,12 +113,12 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
 			free(chunk);
-			memstat_sub(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
-				sizeof(struct trade_data_buffer));
+			mem_sub_atomic(&buf->memory_usage.value, chunk_size);
 			c = n;
 		}
 	}
 
+	mem_sub_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
 	free(buf);
 }
 
@@ -129,14 +128,18 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
  * @param   buf:       Buffer to push into.
  * @param   data:      Trade record to copy.
  * @param   free_list: Linked list pointer holding recycled chunks.
+ * @param   thread_id: The feed thread's unique ID.
  *
  * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const trcache_trade_data *data,
-	struct list_head *free_list)
+	const trcache_trade_data *data, struct list_head *free_list,
+	int thread_id)
 {
 	struct trade_data_chunk *tail = NULL, *new_chunk = NULL;
+	size_t chunk_size = sizeof(struct trade_data_chunk);
+	_Atomic size_t *free_list_mem_counter =
+		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
 
 	if (!buf || !data) {
 		return -1;
@@ -160,6 +163,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		if (free_list != NULL && !list_empty(free_list)) {
 			list_move_tail(free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+
+			/* Transfer memory ownership from free list to this buffer */
+			mem_sub_atomic(free_list_mem_counter, chunk_size);
+			mem_add_atomic(&buf->memory_usage.value, chunk_size);
 		} else {
 			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
 				sizeof(struct trade_data_chunk));
@@ -171,8 +178,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 
 			memset(new_chunk, 0, sizeof(struct trade_data_chunk));
 
-			memstat_add(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
-				sizeof(struct trade_data_chunk));
+			/* Add new memory to this buffer's tracking */
+			mem_add_atomic(&buf->memory_usage.value, chunk_size);
 
 			INIT_LIST_HEAD(&new_chunk->list_node);
 			list_add_tail(&new_chunk->list_node, &buf->chunk_list);
@@ -309,13 +316,19 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
  *
  * @param   buf:                 Buffer to reap the free chunks.
  * @param   free_list:           Linked list pointer holding recycled chunks.
- * @param   is_memory_pressure:  Whether or not to free the chunks directly.
+ * @param   thread_id:           The feed thread's unique ID.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
-	struct list_head *free_list, bool is_memory_pressure)
+	struct list_head *free_list, int thread_id)
 {
 	struct trade_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
+	bool memory_pressure = atomic_load_explicit(
+		&buf->trc->mem_acc.memory_pressure, memory_order_acquire);
+	_Atomic size_t *free_list_mem_counter =
+		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
+	size_t chunk_size = sizeof(struct trade_data_chunk);
+	size_t total_reaped_size = 0;
 
 	if (free_list == NULL || list_empty(&buf->chunk_list)) {
 		return;
@@ -338,17 +351,21 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		}
 
 		last = (struct list_head *) &chunk->list_node;
+		total_reaped_size += chunk_size;
 		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
 	}
 
 	if (last != NULL) {
-		if (is_memory_pressure) {
+		/*
+		 * Always subtract the memory from the buffer's active count.
+		 */
+		mem_sub_atomic(&buf->memory_usage.value, total_reaped_size);
+
+		if (memory_pressure) {
 			node = first;
 			while (node != NULL) {
 				c = __get_trd_chunk_ptr(node);
 				next = (node == last) ? NULL : node->next;
-				memstat_sub(&buf->mem_acc->ms, MEMSTAT_TRADE_DATA_BUFFER,
-					sizeof(struct trade_data_chunk));
 				free(c);
 				if (node == last) {
 					break;
@@ -359,6 +376,8 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 			buf->chunk_list.next = &chunk->list_node;
 			chunk->list_node.prev = &buf->chunk_list;
 		} else {
+			/* Transfer memory ownership to the free list */
+			mem_add_atomic(free_list_mem_counter, total_reaped_size);
 			list_bulk_move_tail(free_list, first, last);
 		}
 	}

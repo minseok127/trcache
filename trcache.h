@@ -271,9 +271,7 @@ typedef struct trcache_field_request {
  * @num_candle_configs:        Number of candle configurations provided.
  * @batch_candle_count_pow2:   Number of candles per column batch(log2(cap)).
  * @cached_batch_count_pow2:   Number of batches to cache (log2(cap)).
- * @aux_memory_limit:          Maximum number of bytes this trcache may use
- *                             for auxiliary data structures (i.e. everything
- *                             other than candle chunk list/index).
+ * @total_memory_limit:        The total memory limit in bytes.
  * @num_worker_threads:        Number of worker threads.
  * @max_symbols:               Maximum number of symbols that can be registered.
  *
@@ -286,7 +284,7 @@ typedef struct trcache_init_ctx {
 	int num_candle_configs;
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
-	size_t aux_memory_limit;
+	size_t total_memory_limit;
 	int num_worker_threads;
 	int max_symbols;
 } trcache_init_ctx;
@@ -469,63 +467,6 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
  * Safe to pass 'NULL'; the function becomes a no-op.
  */
 void trcache_batch_free(struct trcache_candle_batch *batch);
-
-/**
- * Identifiers for memory usage categories tracked by memstat.
- */
-typedef enum memstat_category {
-	MEMSTAT_TRADE_DATA_BUFFER = 0,
-	MEMSTAT_CANDLE_CHUNK_LIST,
-	MEMSTAT_CANDLE_CHUNK_INDEX,
-	MEMSTAT_SCQ_NODE,
-	MEMSTAT_CATEGORY_NUM
-} memstat_category;
-
-/**
- * trcache_memory_stats - A snapshot of memory usage by category.
- *
- * @usage_bytes: An array holding the memory usage in bytes for each category,
- *               indexed by 'memstat_category'.
- */
-typedef struct trcache_memory_stats {
-	size_t usage_bytes[MEMSTAT_CATEGORY_NUM];
-} trcache_memory_stats;
-
-/**
- * @brief   Print a breakdown of the auxiliary memory usage of a trcache.
- *
- * @param   cache: Pointer to a trcache instance as returned from trcache_init().
- */
-void trcache_print_aux_memory_breakdown(struct trcache *cache);
-
-/**
- * @brief   Print a breakdown of the total memory usage of a trcache.
- *
- * @param   cache: Pointer to a trcache instance as returned from trcache_init().
- */
-void trcache_print_total_memory_breakdown(struct trcache *cache);
-
-/**
- * @brief   Get a snapshot of the auxiliary memory usage.
- *
- * @param   cache:  Handle from trcache_init().
- * @param   stats:  Pointer to a user-allocated struct to be filled.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_aux_memory_breakdown(struct trcache *cache,
-	trcache_memory_stats *stats);
-
-/**
- * @brief   Get a snapshot of the total memory usage.
- *
- * @param   cache:  Handle from trcache_init().
- * @param   stats:  Pointer to a user-allocated struct to be filled.
- *
- * @return  0 on success, -1 on failure.
- */
-int trcache_get_total_memory_breakdown(struct trcache *cache,
-	trcache_memory_stats *stats);
 
 #ifdef __cplusplus
 }
