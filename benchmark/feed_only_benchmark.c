@@ -74,6 +74,16 @@ struct benchmark_config {
 	double zipf_s;
 };
 
+/**
+ * @brief A cacheline-padded counter to prevent false sharing between
+ * feed threads.
+ */
+struct padded_counter {
+	uint64_t count;
+	char padding[CACHE_LINE_SIZE - sizeof(uint64_t)];
+} ____cacheline_aligned;
+
+
 /* Global State */
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
@@ -81,13 +91,17 @@ static _Atomic bool g_running = true;
 static int g_symbol_ids[NUM_SYMBOLS];
 static FILE *g_csv_file = NULL;
 static pthread_mutex_t g_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
-static _Atomic uint64_t g_feed_counter = 0;
+
+/* Array of per-thread counters, padded to prevent false sharing */
+static struct padded_counter *g_thread_feed_counters = NULL;
+
 
 /* Function Prototypes */
 static void init_partition_zipf_generator(int start_rank, int num_symbols,
 	double s, double *cdf_array);
 static int get_next_partition_symbol_idx(int num_symbols,
 	const double *cdf_array, unsigned int *rand_state);
+static uint64_t get_total_feed_count(void);
 
 /*
  * ====================================================================
@@ -313,6 +327,9 @@ struct feed_thread_args {
 static void* feed_thread_main(void *arg)
 {
 	struct feed_thread_args *args = (struct feed_thread_args *)arg;
+	/* Get this thread's dedicated, padded counter */
+	struct padded_counter *my_counter =
+		&g_thread_feed_counters[args->thread_idx];
 
 	printf("  [Feed Thread %d] started.\n", args->thread_idx);
 
@@ -383,12 +400,38 @@ static void* feed_thread_main(void *arg)
 				args->thread_idx, symbol_id);
 		}
 
-		atomic_fetch_add(&g_feed_counter, 1);
+		/* Increment this thread's local, non-atomic counter */
+		my_counter->count++;
 	}
 
 	printf("  [Feed Thread %d] stopping.\n", args->thread_idx);
 	free(local_zipf_cdf); /* Clean up thread-local CDF */
 	return NULL;
+}
+
+
+/**
+ * @brief Sums all per-thread feed counters.
+ * This is non-atomic and assumes counters are only written by their
+ * owning thread. The monitor thread reads them, so some reads might
+ * be slightly stale, which is acceptable for this benchmark.
+ * @return The total sum of all feed counters.
+ */
+static uint64_t get_total_feed_count(void)
+{
+	uint64_t total = 0;
+	if (g_thread_feed_counters == NULL) {
+		return 0;
+	}
+
+	for (int i = 0; i < g_config.num_feed_threads; i++) {
+		/*
+		 * Non-atomic read. Might be slightly stale, but
+		 * good enough for monitoring.
+		 */
+		total += g_thread_feed_counters[i].count;
+	}
+	return total;
 }
 
 
@@ -427,7 +470,13 @@ static void* monitor_thread_main(void *arg)
 	time_t start_time = time(NULL);
 	time_t last_log_time = start_time;
 	int elapsed_sec = 0;
-	uint64_t prev_feed_counter = 0, current_feed_counter = g_feed_counter;
+
+	/*
+	 * prev_feed_counter tracks the total count at the *previous*
+	 * second. We initialize it to the count *now* (which should be 0).
+	 */
+	uint64_t prev_feed_counter = get_total_feed_count();
+	uint64_t current_feed_counter = prev_feed_counter;
 
 	while (atomic_load_explicit(&g_running, memory_order_relaxed)) {
 		time_t now = time(NULL);
@@ -438,8 +487,8 @@ static void* monitor_thread_main(void *arg)
 		last_log_time = now;
 		elapsed_sec = (int)(now - start_time);
 
-		/* Get the current total feed count */
-		current_feed_counter = atomic_load(&g_feed_counter);
+		/* Get the current total feed count by summing all thread counters */
+		current_feed_counter = get_total_feed_count();
 		uint64_t feed_count_this_sec = current_feed_counter - prev_feed_counter;
 
 		if (elapsed_sec <= g_config.warmup_time_sec) {
@@ -638,6 +687,15 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
+	/* Allocate memory for per-thread feed counters */
+	g_thread_feed_counters = calloc(g_config.num_feed_threads,
+		sizeof(struct padded_counter));
+	if (g_thread_feed_counters == NULL) {
+		errmsg(stderr, "Failed to allocate memory for feed counters\n");
+		ret_code = EXIT_FAILURE;
+		goto cleanup;
+	}
+
 	printf("Configuration:\n");
 	printf("  Feed Threads:   %d\n", g_config.num_feed_threads);
 	printf("  Worker Threads: %d\n", g_config.num_worker_threads);
@@ -722,6 +780,7 @@ cleanup:
 	} else {
 		printf("trcache was not initialized or already destroyed.\n");
 	}
+	free(g_thread_feed_counters);
 	free(feed_threads);
 	free(feed_args);
 
