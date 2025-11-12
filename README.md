@@ -360,7 +360,7 @@ typedef struct trcache_init_ctx {
 - `candle_configs`: A pointer to your array of `trcache_candle_config` structs.
 - `num_candle_configs`: The total number of configurations in your array.
 - `batch_candle_count_pow2`: The number of candles per columnar batch, expressed as a power of two (e.g., 10 for 1024).
-- `cached_batch_count_pow2`: The number of full batches to keep in memory before triggering a flush on the oldest one, as a power of two (e.g., 3 for 8 batches).
+- `cached_batch_count_pow2`: The number of full batches per symbol per candle type to keep in memory before triggering a flush on the oldest one, as a power of two (e.g., 3 for 8 batches).
 - `total_memory_limit`: The total memory limit in bytes for the entire `trcache` instance.
 - `num_worker_threads`: The number of worker threads for the pipeline.
 
@@ -371,7 +371,7 @@ struct trcache *cache = trcache_init(&ctx);
 
 Upon a successful return from `trcache_init()`, the library is fully active. One admin thread and a pool of worker threads (the number specified by `num_worker_threads`) are created and running in the background.
 
-The admin thread continuously monitors the system's workload. Based on the rate of incoming data and the processing speed of each pipeline stage, it dynamically assigns tasks to the worker threads to ensure the pipeline (Apply, Convert, Flush) remains balanced and operates at maximum efficiency.
+The admin thread continuously monitors the system's workload. Based on the rate of incoming data and the processing speed of each pipeline stage, it dynamically assigns tasks to the worker threads to ensure the pipeline (`APPLY`, `CONVERT`, `FLUSH`) remains balanced and operates at maximum efficiency.
 
 ### Step 9: Register Symbols and Feed Data
 
