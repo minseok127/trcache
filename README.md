@@ -352,7 +352,7 @@ typedef struct trcache_init_ctx {
 	int num_candle_configs;
 	int batch_candle_count_pow2;
 	int cached_batch_count_pow2;
-	size_t aux_memory_limit;
+	size_t total_memory_limit;
 	int num_worker_threads;
 } trcache_init_ctx;
 ```
@@ -361,7 +361,7 @@ typedef struct trcache_init_ctx {
 - `num_candle_configs`: The total number of configurations in your array.
 - `batch_candle_count_pow2`: The number of candles per columnar batch, expressed as a power of two (e.g., 10 for 1024).
 - `cached_batch_count_pow2`: The number of full batches to keep in memory before triggering a flush on the oldest one, as a power of two (e.g., 3 for 8 batches).
-- `aux_memory_limit`: A memory limit in bytes for auxiliary data structures (e.g., scheduler messages). 0 means no limit.
+- `total_memory_limit`: The total memory limit in bytes for the entire `trcache` instance.
 - `num_worker_threads`: The number of worker threads for the pipeline.
 
 ```c
@@ -454,8 +454,8 @@ trcache_destroy(cache);
 
 ### Core Lock-Free Primitives
 
-- [**`atomsnap`**](https://github.com/minseok127/atomsnap): A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `symbol_table`'s main array or the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
-- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention between threads. Its default version is used for dispatching scheduling commands from the admin thread to the workers. A linearizable version is employed within the `candle_chunk_list` to enable lock-free memory reclamation of flushed `candle_chunk`s.
+- [**`atomsnap`**](https://github.com/minseok127/atomsnap): A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
+- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention. It is used as the underlying engine for all internal object pools (memory free-lists).
 
 ### Data Flow and Pipeline
 
@@ -484,15 +484,29 @@ The journey of a single trade begins when `trcache_feed_trade_data` is called.
 
 4. **Callback-Driven Freeing**: The actual memory deallocation is performed inside `candle_chunk_list_head_free`, a callback function that is invoked by `atomsnap` when a retired version's reference count drops to zero. This callback iterates through the list of flushed chunks covered by that version and safely calls `candle_chunk_destroy` on each one, releasing its memory.
 
+### Memory Pooling with scalable_queue
+
+Instead of calling `malloc` and `free` repeatedly, the system uses `scalable_queue` to implement thread-safe, scalable object pools.
+
+- **Pooled Objects**: This pooling strategy is used for:
+	- `candle_chunk`
+	- `candle_row_page` (managed via `atomsnap_version` bundles)
+	- `candle_chunk_list_head_version` (also bundled with `atomsnap_version`)
+- **Memory Pressure Integration**: These pools are integrated with the global memory accounting system. When the admin thread detects that total memory usage is high (exceeding a threshold), it signals all pools. The pools then dynamically switch from recycling objects (enqueueing them back to the free-list) to actively freeing them (`free()`), providing graceful degradation under high memory load.
+
 ### Concurrency and Scheduling
 
-- **Admin Thread**: This thread acts as the central scheduler. It periodically:
-    - Calculates the throughput (rate) of each pipeline stage for every symbol using Exponential Moving Averages (EMAs).
-    - Estimates the demand for each stage based on these rates.
-    - Computes the optimal number of worker threads to allocate to each stage (`APPLY`, `CONVERT`, `FLUSH`) to prevent bottlenecks.
-    - Dispatches `ADD_WORK` and `REMOVE_WORK` messages to worker threads to dynamically rebalance assignments.
-- **Worker Threads**: Workers are the execution units. Each worker maintains a list of assigned work items (a combination of symbol, candle type, and pipeline stage). They continuously iterate through their work list, executing the corresponding tasks (`worker_do_apply`, `worker_do_convert`, etc.).
-- **Communication**: The admin and worker threads communicate via lock-free queues (`scalable_queue`). This ensures that scheduling messages can be sent and received with minimal contention.
+- **Admin Thread**: This thread acts as the central scheduler. It continously:
+    - Calculates the throughput (rate) and EMA cycle cost of each pipeline stage (`APPLY`, `CONVERT`, `FLUSH`) for every symbol.
+    - Estimates the total cycle demand for the In-Memory group (`APPLY` + `CONVERT`) versus the `FLUSH` group.
+    - Partitions the total worker pool into two groups (`GROUP_IN_MEMORY`, `GROUP_FLUSH`), assigning a number of workers to each group proportional to its cycle demand.
+    - Calculates a cycle "budget" for each worker.
+	- Assigns all active tasks (e.g., "Apply for AAPL, 1-min") to a specific worker by setting a bit in that worker's local work bitmap, filling their budget.
+- **Worker Threads**: Workers are the execution units. Each worker is assigned to a single group (`GROUP_IN_MEMORY` or `GROUP_FLUSH`) by the admin thread. They continuously:
+	- Scan their local, private work bitmap for assigned tasks.
+	- If a bit is set, they execute the corresponding task (e.g., `worker_do_apply` for a specific symbol/type).
+	- This bitmap-based approach eliminates the need for a shared work queue and minimizes scheduling contention.
+- **Communication**: The admin thread publishes the new bitmaps and group assignments directly to the worker-local state. Workers read these updates atomically, allowing for dynamic re-balancing without locks or message passing.
 
 ### SIMD Optimization and Verification
 
