@@ -39,7 +39,7 @@
 #define NUM_SYMBOLS (1)
 #define NUM_CANDLE_TYPES (2)
 #define WARMUP_TRADES_PER_SYMBOL (100000)
-#define QUERIES_PER_CONFIG (10000)
+#define QUERIES_PER_CONFIG (100000)
 #define ONE_MINUTE_MS (60000)
 
 /* Candle Structure */
