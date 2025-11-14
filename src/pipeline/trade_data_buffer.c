@@ -168,6 +168,15 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			mem_sub_atomic(free_list_mem_counter, chunk_size);
 			mem_add_atomic(&buf->memory_usage.value, chunk_size);
 		} else {
+			/*
+			 * The feed fails because there are no chunks to recycle and there
+			 * is not enough memory.
+			 */
+			if (atomic_load_explicit(&buf->trc->mem_acc.memory_pressure,
+					memory_order_acquire)) {
+				return -1;
+			}
+
 			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
 				sizeof(struct trade_data_chunk));
 
