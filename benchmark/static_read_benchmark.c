@@ -696,7 +696,7 @@ int main(int argc, char **argv)
 
 	/* Test matrix: query sizes × field selections × access patterns */
 	int all_fields[] = {0, 1, 2, 3, 4, 5};
-	int subset_fields[] = {1, 2, 3}; /* high, low, close */
+	int subset_fields[] = {0}; /* open */
 
 	for (int size_idx = 0; size_idx < g_config.num_query_sizes; size_idx++) {
 		/* Test 1: All fields */
@@ -715,7 +715,7 @@ int main(int argc, char **argv)
 		/* Test 2: Subset fields */
 		struct test_config cfg2 = {
 			.query_size = g_config.query_sizes[size_idx],
-			.num_fields = 3,
+			.num_fields = 1,
 			.field_indices = subset_fields,
 			.sequential = g_config.sequential_access
 		};
