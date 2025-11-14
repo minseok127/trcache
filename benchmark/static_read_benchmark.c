@@ -623,7 +623,7 @@ static int initialize_trcache(void)
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
 		.batch_candle_count_pow2 = 10,
-		.cached_batch_count_pow2 = 0,
+		.cached_batch_count_pow2 = 2,
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
 		.max_symbols = NUM_SYMBOLS
