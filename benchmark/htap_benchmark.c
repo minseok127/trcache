@@ -647,7 +647,7 @@ static int parse_arguments(int argc, char **argv)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "f:w:o:s:h", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "f:w:o:s:d:h", long_options, NULL)) != -1) {
 		switch (c) {
 			case 'f': g_config.num_feed_threads = atoi(optarg); break;
 			case 'w': g_config.num_worker_threads = atoi(optarg); break;
