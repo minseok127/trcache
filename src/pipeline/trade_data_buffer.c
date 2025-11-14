@@ -169,11 +169,25 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			mem_add_atomic(&buf->memory_usage.value, chunk_size);
 		} else {
 			/*
-			 * The feed fails because there are no chunks to recycle and there
-			 * is not enough memory.
+			 * The local free list is empty, so we must allocate a new
+			 * chunk. Before allocating, check if the global memory
+			 * usage has exceeded the hard limit.
+			 *
+			 * This check acts as the final back-pressure mechanism,
+			 * distinct from the 'memory_pressure' flag (which only
+			 * controls the object pool recycling policy, not
+			 * new allocations).
 			 */
-			if (atomic_load_explicit(&buf->trc->mem_acc.memory_pressure,
-					memory_order_acquire)) {
+			const size_t limit = buf->trc->total_memory_limit;
+			size_t current_usage = atomic_load_explicit(
+				&buf->trc->mem_acc.total_usage.value,
+				memory_order_acquire);
+
+			if (current_usage >= limit) {
+				/*
+				 * Memory limit reached. Fail the push immediately.
+				 * The feed thread is expected to retry this feed.
+				 */
 				return -1;
 			}
 
