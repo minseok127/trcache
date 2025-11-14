@@ -508,6 +508,4 @@ Instead of calling `malloc` and `free` repeatedly, the system uses `scalable_que
 	- This bitmap-based approach eliminates the need for a shared work queue and minimizes scheduling contention.
 - **Communication**: The admin thread publishes the new bitmaps and group assignments directly to the worker-local state. Workers read these updates atomically, allowing for dynamic re-balancing without locks or message passing.
 
-### SIMD Optimization and Verification
-
 # Evaluation
