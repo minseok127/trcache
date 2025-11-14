@@ -94,6 +94,7 @@ struct benchmark_config {
 	int num_worker_threads;
 	const char *output_csv_path;
 	double zipf_s;
+	int read_delay_us;
 };
 
 /* Per-thread padded counter */
@@ -280,6 +281,11 @@ static void* reader_thread_main(void *arg)
 	};
 	struct trcache_candle_batch *batch = NULL;
 	struct timespec start_ts, end_ts;
+	struct timespec read_delay = {
+		.tv_sec = g_config.read_delay_us / 1000000,
+		.tv_nsec = (g_config.read_delay_us % 1000000) * 1000
+	};
+	bool has_delay = (read_delay.tv_sec > 0 || read_delay.tv_nsec > 0);
 
 	batch = trcache_batch_alloc_on_heap(g_cache, candle_idx,
 		query_size, &request);
@@ -314,6 +320,10 @@ static void* reader_thread_main(void *arg)
 			state->query_count.count++;
 		} else {
 			state->failed_count.count++;
+		}
+
+		if (has_delay) {
+			nanosleep(&read_delay, NULL);
 		}
 	}
 
@@ -395,7 +405,7 @@ static void write_csv_header(void)
 {
 	fprintf(g_csv_file,
 		"Timestamp,ElapsedSec,Phase,PhaseName,"
-		"FeedThreads,ActiveReaders,WorkerThreads,ZipfS,"
+		"FeedThreads,ActiveReaders,WorkerThreads,ZipfS,ReadDelay_us,"
 		"FeedCountPerSec,QueryCountPerSec,FailedQueriesPerSec,"
 		"QueryLatency_Mean_us,QueryLatency_P50_us,QueryLatency_P99_us\n");
 	fflush(g_csv_file);
@@ -492,11 +502,12 @@ static void* monitor_thread_main(void *arg)
 		uint64_t failed_per_sec = curr_failed_count - prev_failed_count;
 
 		pthread_mutex_lock(&g_csv_mutex);
-		fprintf(g_csv_file, "%ld,%d,%d,\"%s\",%d,%d,%d,%.2f,%lu,%lu,%lu",
+		fprintf(g_csv_file, "%ld,%d,%d,\"%s\",%d,%d,%d,%.2f,%d,%lu,%lu,%lu",
 			now, elapsed_sec,
 			current_phase_idx, g_phases[current_phase_idx].name,
 			g_config.num_feed_threads, active_readers,
 			g_config.num_worker_threads, g_config.zipf_s,
+			g_config.read_delay_us,
 			feed_per_sec, query_per_sec, failed_per_sec);
 
 		if (merged_hist && merged_hist->total_count > 0) {
@@ -596,6 +607,8 @@ static void print_usage(const char *prog_name)
 		"\n"
 		"Optional Options:\n"
 		"  -s, --zipf-s <value>       Zipf exponent (default: %.2f)\n"
+		"  -d, --read-delay <us>      Delay (think time) in μs between read queries\n"
+		"                             (default: 0, i.e., max speed)\n"
 		"  -h, --help                 Print this help\n",
 		prog_name, DEFAULT_ZIPF_S);
 }
@@ -610,6 +623,7 @@ static int parse_arguments(int argc, char **argv)
 		{"worker-threads", required_argument, 0, 'w'},
 		{"output-csv", required_argument, 0, 'o'},
 		{"zipf-s", required_argument, 0, 's'},
+		{"read-delay", required_argument, 0, 'd'},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
@@ -624,6 +638,13 @@ static int parse_arguments(int argc, char **argv)
 				g_config.zipf_s = atof(optarg);
 				if (g_config.zipf_s < 0.0) {
 					errmsg(stderr, "Zipf s must be >= 0\n");
+					return -1;
+				}
+				break;
+			case 'd':
+				g_config.read_delay_us = atoi(optarg);
+				if (g_config.read_delay_us < 0) {
+					errmsg(stderr, "Read delay must be >= 0\n");
 					return -1;
 				}
 				break;
@@ -679,6 +700,7 @@ int main(int argc, char **argv)
 	printf("  Max Readers:    %d\n", g_max_readers);
 	printf("  Output CSV:     %s\n", g_config.output_csv_path);
 	printf("  Zipf Exponent:  %.2f\n", g_config.zipf_s);
+	printf("  Read Delay (us): %d\n", g_config.read_delay_us);
 	printf("======================\n");
 
 	if (initialize_trcache() != 0) {
