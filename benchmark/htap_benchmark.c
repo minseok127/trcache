@@ -504,6 +504,8 @@ static void* monitor_thread_main(void *arg)
 				p99_lat_ns = (double)hdr_histogram_value_at_percentile(
 					merged_hist, 99.0);
 			}
+		} else {
+			curr_query_count = prev_query_count;
 		}
 
 		uint64_t query_per_sec = curr_query_count - prev_query_count;

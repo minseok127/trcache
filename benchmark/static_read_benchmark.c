@@ -492,7 +492,7 @@ static int run_test(struct test_config *cfg, FILE *csv_file)
 
 	fflush(csv_file);
 
-	printf("  Results: mean=%.2f μs, p50=%.2f, p99=%.2f, max=%.2f\n",
+	printf("  Results: mean=%.2f ns, p50=%.2f, p99=%.2f, max=%.2f\n",
 		hdr_histogram_mean(merged_hist),
 		(double)hdr_histogram_value_at_percentile(merged_hist, 50.0),
 		(double)hdr_histogram_value_at_percentile(merged_hist, 99.0),
@@ -566,7 +566,7 @@ static int parse_arguments(int argc, char **argv)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "r:w:o:sh", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "r:w:o:s:h", long_options, NULL)) != -1) {
 		switch (c) {
 			case 'r': g_config.num_reader_threads = atoi(optarg); break;
 			case 'w': g_config.num_worker_threads = atoi(optarg); break;
