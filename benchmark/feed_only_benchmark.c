@@ -31,10 +31,10 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS 4096
-#define NUM_CANDLE_TYPES 2   /* 1 (Tick) + 1 (Time) */
-#define DEFAULT_ZIPF_S 0.99 /* Default Zipf skewness */
-#define ONE_MINUTE_MS 60000   /* 1 minute = 60000 ms */
+#define NUM_SYMBOLS (4096)
+#define NUM_CANDLE_TYPES (2)   /* 1 (Tick) + 1 (Time) */
+#define DEFAULT_ZIPF_S (0.99) /* Default Zipf skewness */
+#define ONE_MINUTE_MS (60000)   /* 1 minute = 60000 ms */
 
 /* Candle Structure */
 struct my_candle {

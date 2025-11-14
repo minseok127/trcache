@@ -36,10 +36,10 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS 1024
-#define NUM_CANDLE_TYPES 2
-#define DEFAULT_ZIPF_S 0.99
-#define ONE_MINUTE_MS 60000
+#define NUM_SYMBOLS (4096)
+#define NUM_CANDLE_TYPES (2)
+#define DEFAULT_ZIPF_S (0.99)
+#define ONE_MINUTE_MS (60000)
 
 /* Benchmark Phases */
 enum benchmark_phase {
@@ -279,6 +279,7 @@ static void* reader_thread_main(void *arg)
 		.num_fields = 3
 	};
 	struct trcache_candle_batch *batch = NULL;
+	struct timespec start_ts, end_ts;
 
 	batch = trcache_batch_alloc_on_heap(g_cache, candle_idx,
 		query_size, &request);
@@ -299,16 +300,16 @@ static void* reader_thread_main(void *arg)
 		int symbol_id = g_symbol_ids[rand_r(&rand_state) % NUM_SYMBOLS];
 		int offset = rand_r(&rand_state) % 500;
 		
-		uint64_t start = __builtin_ia32_rdtsc();
+		clock_gettime(CLOCK_MONOTONIC, &start_ts);
 		int ret = trcache_get_candles_by_symbol_id_and_offset(
 			g_cache, symbol_id, candle_idx, &request,
 			offset, query_size, batch);
-		uint64_t end = __builtin_ia32_rdtsc();
+		clock_gettime(CLOCK_MONOTONIC, &end_ts);
 
 		if (ret == 0) {
-			uint64_t cycles = end - start;
-			/* Approximate cycles to μs (assume 3GHz) */
-			int64_t latency_us = (int64_t)(cycles / 3000);
+			uint64_t latency_ns = (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
+				(end_ts.tv_nsec - start_ts.tv_nsec);
+			int64_t latency_us = (int64_t)(latency_ns / 1000);
 			hdr_histogram_record_value(state->latency_hist, latency_us);
 			state->query_count.count++;
 		} else {

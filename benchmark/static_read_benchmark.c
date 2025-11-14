@@ -36,11 +36,11 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS 1024
-#define NUM_CANDLE_TYPES 2
-#define WARMUP_TRADES_PER_SYMBOL 100000
-#define QUERIES_PER_CONFIG 10000
-#define ONE_MINUTE_MS 60000
+#define NUM_SYMBOLS (1)
+#define NUM_CANDLE_TYPES (2)
+#define WARMUP_TRADES_PER_SYMBOL (100000)
+#define QUERIES_PER_CONFIG (10000)
+#define ONE_MINUTE_MS (60000)
 
 /* Candle Structure */
 struct my_candle {
@@ -96,10 +96,18 @@ struct reader_thread_args {
 	struct reader_result *result;
 };
 
+/* Key tracking for key-based queries */
+struct symbol_keys {
+	uint64_t *keys;
+	int count;
+	int capacity;
+};
+
 /* Global State */
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
 static int g_symbol_ids[NUM_SYMBOLS];
+static struct symbol_keys g_symbol_keys[NUM_SYMBOLS]; /* Track valid keys per symbol */
 static _Atomic bool g_readers_start = false;
 static _Atomic bool g_readers_stop = false;
 static _Atomic int g_readers_ready = 0;
@@ -191,20 +199,35 @@ static void* sync_flush_noop(struct trcache *cache,
 }
 
 /**
- * @brief   Warmup phase: feed trades to populate candles.
+ * @brief   Warmup phase: feed trades to populate candles and track keys.
  */
 static int warmup_phase(void)
 {
 	struct trcache_trade_data trade;
 	unsigned int rand_state = (unsigned int)time(NULL);
-	uint64_t trade_id = 0;
+	int candle_idx = 0; /* Use 3-tick candle for key tracking */
 
 	printf("==> Warmup: Feeding %d trades per symbol...\n",
 		WARMUP_TRADES_PER_SYMBOL);
 
+	/* Initialize key tracking arrays */
+	for (int sym_idx = 0; sym_idx < NUM_SYMBOLS; sym_idx++) {
+		g_symbol_keys[sym_idx].capacity = 10000;
+		g_symbol_keys[sym_idx].keys = malloc(
+			g_symbol_keys[sym_idx].capacity * sizeof(uint64_t));
+		g_symbol_keys[sym_idx].count = 0;
+		
+		if (g_symbol_keys[sym_idx].keys == NULL) {
+			errmsg(stderr, "Failed to allocate key tracking array\n");
+			return -1;
+		}
+	}
+
+	/* Feed trades with unique trade_id per symbol */
 	for (int sym_idx = 0; sym_idx < NUM_SYMBOLS; sym_idx++) {
 		int symbol_id = g_symbol_ids[sym_idx];
 		uint64_t base_ts = 1609459200000ULL; /* 2021-01-01 00:00:00 UTC */
+		uint64_t trade_id = (uint64_t)sym_idx * 1000000; /* Unique range per symbol */
 
 		for (int i = 0; i < WARMUP_TRADES_PER_SYMBOL; i++) {
 			trade.timestamp = base_ts + (i / 10) * 1000; /* ~10 trades/sec */
@@ -227,6 +250,43 @@ static int warmup_phase(void)
 	printf("==> Warmup: Waiting for conversion to complete...\n");
 	sleep(3); /* Allow pipeline to drain */
 
+	/* Now collect actual candle keys for each symbol */
+	printf("==> Warmup: Collecting candle keys...\n");
+	int field_indices[] = {0}; /* Just open field for key collection */
+	struct trcache_field_request request = {
+		.field_indices = field_indices,
+		.num_fields = 1
+	};
+
+	for (int sym_idx = 0; sym_idx < NUM_SYMBOLS; sym_idx++) {
+		int symbol_id = g_symbol_ids[sym_idx];
+		
+		/* Query up to 10000 candles to get their keys */
+		struct trcache_candle_batch *batch = trcache_batch_alloc_on_heap(
+			g_cache, candle_idx, 10000, &request);
+		
+		if (batch == NULL) {
+			errmsg(stderr, "Failed to allocate batch for key collection\n");
+			return -1;
+		}
+
+		int ret = trcache_get_candles_by_symbol_id_and_offset(
+			g_cache, symbol_id, candle_idx, &request, 0, 10000, batch);
+
+		if (ret == 0 && batch->num_candles > 0) {
+			g_symbol_keys[sym_idx].count = batch->num_candles;
+			for (int i = 0; i < batch->num_candles; i++) {
+				g_symbol_keys[sym_idx].keys[i] = batch->key_array[i];
+			}
+		}
+
+		trcache_batch_free(batch);
+
+		if ((sym_idx + 1) % 100 == 0) {
+			printf("  Collected keys for %d/%d symbols\n", sym_idx + 1, NUM_SYMBOLS);
+		}
+	}
+
 	printf("==> Warmup complete.\n");
 	return 0;
 }
@@ -246,7 +306,8 @@ static void* reader_thread_main(void *arg)
 	};
 	struct trcache_candle_batch *batch = NULL;
 	int candle_idx = 0; /* Use 3-tick candle for queries */
-	uint64_t start_ns, end_ns, latency_ns;
+	struct timespec start_ts, end_ts;
+	uint64_t latency_ns;
 
 	/* Allocate batch for queries */
 	batch = trcache_batch_alloc_on_heap(g_cache, candle_idx,
@@ -266,10 +327,11 @@ static void* reader_thread_main(void *arg)
 
 	/* Main query loop */
 	while (!atomic_load(&g_readers_stop)) {
-		int symbol_id = g_symbol_ids[rand_r(&rand_state) % NUM_SYMBOLS];
+		int sym_idx = rand_r(&rand_state) % NUM_SYMBOLS;
+		int symbol_id = g_symbol_ids[sym_idx];
 		int ret;
 
-		start_ns = (uint64_t)time(NULL) * 1000000000ULL; /* Simplified */
+		clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
 		if (cfg->sequential) {
 			/* Offset-based sequential access */
@@ -278,15 +340,25 @@ static void* reader_thread_main(void *arg)
 				g_cache, symbol_id, candle_idx, &request,
 				offset, cfg->query_size, batch);
 		} else {
-			/* Key-based random access */
-			uint64_t base_key = 1000 + (rand_r(&rand_state) % 10000);
+			/* Key-based random access - use actual existing keys */
+			if (g_symbol_keys[sym_idx].count == 0) {
+				/* No keys available for this symbol, skip */
+				continue;
+			}
+			
+			/* Pick a random valid key */
+			int key_idx = rand_r(&rand_state) % g_symbol_keys[sym_idx].count;
+			uint64_t target_key = g_symbol_keys[sym_idx].keys[key_idx];
+			
 			ret = trcache_get_candles_by_symbol_id_and_key(
 				g_cache, symbol_id, candle_idx, &request,
-				base_key, cfg->query_size, batch);
+				target_key, cfg->query_size, batch);
 		}
 
-		end_ns = (uint64_t)time(NULL) * 1000000000ULL;
-		latency_ns = end_ns - start_ns;
+		clock_gettime(CLOCK_MONOTONIC, &end_ts);
+		
+		latency_ns = (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
+			(end_ts.tv_nsec - start_ts.tv_nsec);
 
 		if (ret == 0) {
 			hdr_histogram_record_value(result->latency_hist,
@@ -442,6 +514,18 @@ cleanup:
 	free(threads);
 
 	return ret;
+}
+
+/**
+ * @brief   Cleanup key tracking arrays.
+ */
+static void cleanup_key_tracking(void)
+{
+	for (int i = 0; i < NUM_SYMBOLS; i++) {
+		free(g_symbol_keys[i].keys);
+		g_symbol_keys[i].keys = NULL;
+		g_symbol_keys[i].count = 0;
+	}
 }
 
 static void print_usage(const char *prog_name)
@@ -649,6 +733,7 @@ int main(int argc, char **argv)
 cleanup:
 	if (csv_file) fclose(csv_file);
 	if (g_cache) trcache_destroy(g_cache);
+	cleanup_key_tracking();
 
 	return ret_code;
 }
