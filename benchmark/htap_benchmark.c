@@ -59,10 +59,10 @@ struct phase_config {
 };
 
 static struct phase_config g_phases[] = {
-	{PHASE_OLTP_ONLY_BASELINE, 30, 0, "OLTP-Only (Baseline)"},
-	{PHASE_OLTP_LIGHT_OLAP, 60, 2, "OLTP + Light OLAP"},
-	{PHASE_OLTP_HEAVY_OLAP, 60, 8, "OLTP + Heavy OLAP"},
-	{PHASE_OLTP_ONLY_RECOVERY, 30, 0, "OLTP-Only (Recovery)"}
+	{PHASE_OLTP_ONLY_BASELINE, 10, 0, "OLTP-Only (Baseline)"},
+	{PHASE_OLTP_LIGHT_OLAP, 10, 2, "OLTP + Light OLAP"},
+	{PHASE_OLTP_HEAVY_OLAP, 10, 8, "OLTP + Heavy OLAP"},
+	{PHASE_OLTP_ONLY_RECOVERY, 10, 0, "OLTP-Only (Recovery)"}
 };
 
 #define NUM_PHASES (sizeof(g_phases) / sizeof(g_phases[0]))
@@ -315,8 +315,7 @@ static void* reader_thread_main(void *arg)
 		if (ret == 0) {
 			uint64_t latency_ns = (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
 				(end_ts.tv_nsec - start_ts.tv_nsec);
-			int64_t latency_us = (int64_t)(latency_ns / 1000);
-			hdr_histogram_record_value(state->latency_hist, latency_us);
+			hdr_histogram_record_value(state->latency_hist, (int64_t)latency_ns);
 			state->query_count.count++;
 		} else {
 			state->failed_count.count++;
@@ -407,7 +406,7 @@ static void write_csv_header(void)
 		"Timestamp,ElapsedSec,Phase,PhaseName,"
 		"FeedThreads,ActiveReaders,WorkerThreads,ZipfS,ReadDelay_us,"
 		"FeedCountPerSec,QueryCountPerSec,FailedQueriesPerSec,"
-		"QueryLatency_Mean_us,QueryLatency_P50_us,QueryLatency_P99_us\n");
+		"QueryLatency_Mean_ns,QueryLatency_P50_ns,QueryLatency_P99_ns\n");
 	fflush(g_csv_file);
 }
 
@@ -481,7 +480,7 @@ static void* monitor_thread_main(void *arg)
 		uint64_t curr_query_count = 0;
 		uint64_t curr_failed_count = 0;
 		struct hdr_histogram *merged_hist = NULL;
-		double mean_lat_us = 0.0, p50_lat_us = 0.0, p99_lat_us = 0.0;
+		double mean_lat_ns = 0.0, p50_lat_ns = 0.0, p99_lat_ns = 0.0;
 
 		int active_readers = g_phases[current_phase_idx].num_readers;
 		if (active_readers > 0) {
@@ -499,10 +498,10 @@ static void* monitor_thread_main(void *arg)
 			}
 
 			if (merged_hist && merged_hist->total_count > 0) {
-				mean_lat_us = hdr_histogram_mean(merged_hist);
-				p50_lat_us = (double)hdr_histogram_value_at_percentile(
+				mean_lat_ns = hdr_histogram_mean(merged_hist);
+				p50_lat_ns = (double)hdr_histogram_value_at_percentile(
 					merged_hist, 50.0);
-				p99_lat_us = (double)hdr_histogram_value_at_percentile(
+				p99_lat_ns = (double)hdr_histogram_value_at_percentile(
 					merged_hist, 99.0);
 			}
 		}
@@ -521,7 +520,7 @@ static void* monitor_thread_main(void *arg)
 
 		if (merged_hist && merged_hist->total_count > 0) {
 			fprintf(g_csv_file, ",%.2f,%.2f,%.2f\n",
-				mean_lat_us, p50_lat_us, p99_lat_us);
+				mean_lat_ns, p50_lat_ns, p99_lat_ns);
 		} else {
 			fprintf(g_csv_file, ",0,0,0\n");
 		}
@@ -529,15 +528,15 @@ static void* monitor_thread_main(void *arg)
 		pthread_mutex_unlock(&g_csv_mutex);
 
 		printf("  [Monitor] %3d sec | Phase: %-22s | Feed/s: %-9lu "
-			   "| Query/s: %-8lu | Lat(mean): %-7.0f μs "
-			   "| Lat(p50): %-7.0f μs, | Lat(p99) %-7.0f μs\n",
+			   "| Query/s: %-8lu | Lat(mean): %-7.0f ns "
+			   "| Lat(p50): %-7.0f ns, | Lat(p99) %-7.0f ns\n",
 			elapsed_sec,
 			g_phases[current_phase_idx].name,
 			feed_per_sec,
 			query_per_sec,
-			mean_lat_us,
-			p50_lat_us,
-			p99_lat_us);
+			mean_lat_ns,
+			p50_lat_ns,
+			p99_lat_ns);
 
 		if (merged_hist) hdr_histogram_close(merged_hist);
 

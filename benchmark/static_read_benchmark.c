@@ -362,7 +362,7 @@ static void* reader_thread_main(void *arg)
 
 		if (ret == 0) {
 			hdr_histogram_record_value(result->latency_hist,
-				(int64_t)(latency_ns / 1000)); /* Convert to μs */
+				(int64_t)(latency_ns));
 			result->total_queries++;
 		} else {
 			result->failed_queries++;
@@ -691,7 +691,7 @@ int main(int argc, char **argv)
 
 	fprintf(csv_file,
 		"QuerySize,NumFields,AccessPattern,ReaderThreads,"
-		"TotalQueries,FailedQueries,MeanLatency_us,P50_us,P95_us,P99_us,Max_us\n");
+		"TotalQueries,FailedQueries,MeanLatency_ns,P50_ns,P95_ns,P99_ns,Max_ns\n");
 	fflush(csv_file);
 
 	/* Test matrix: query sizes × field selections × access patterns */
