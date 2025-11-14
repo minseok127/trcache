@@ -59,4 +59,11 @@ tags
 !/tests/test_*.c
 /tests/*.o
 
+# Ignore result csv files
 *.csv
+
+# Ignore executables
+feed_only_benchmark
+static_read_benchmark
+htap_benchmark
+
