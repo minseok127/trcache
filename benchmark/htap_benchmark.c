@@ -481,6 +481,7 @@ static void* monitor_thread_main(void *arg)
 		uint64_t curr_query_count = 0;
 		uint64_t curr_failed_count = 0;
 		struct hdr_histogram *merged_hist = NULL;
+		double mean_lat_us = 0.0, p50_lat_us = 0.0, p99_lat_us = 0.0;
 
 		int active_readers = g_phases[current_phase_idx].num_readers;
 		if (active_readers > 0) {
@@ -495,6 +496,14 @@ static void* monitor_thread_main(void *arg)
 				}
 				merged_hist->total_count +=
 					g_reader_states[i].latency_hist->total_count;
+			}
+
+			if (merged_hist && merged_hist->total_count > 0) {
+				mean_lat_us = hdr_histogram_mean(merged_hist);
+				p50_lat_us = (double)hdr_histogram_value_at_percentile(
+					merged_hist, 50.0);
+				p99_lat_us = (double)hdr_histogram_value_at_percentile(
+					merged_hist, 99.0);
 			}
 		}
 
@@ -512,14 +521,23 @@ static void* monitor_thread_main(void *arg)
 
 		if (merged_hist && merged_hist->total_count > 0) {
 			fprintf(g_csv_file, ",%.2f,%.2f,%.2f\n",
-				hdr_histogram_mean(merged_hist),
-				(double)hdr_histogram_value_at_percentile(merged_hist, 50.0),
-				(double)hdr_histogram_value_at_percentile(merged_hist, 99.0));
+				mean_lat_us, p50_lat_us, p99_lat_us);
 		} else {
 			fprintf(g_csv_file, ",0,0,0\n");
 		}
 		fflush(g_csv_file);
 		pthread_mutex_unlock(&g_csv_mutex);
+
+		printf("  [Monitor] %3d sec | Phase: %-22s | Feed/s: %-9lu "
+			   "| Query/s: %-8lu | Lat(mean): %-7.0f μs "
+			   "| Lat(p50): %-7.0f μs, | Lat(p99) %-7.0f μs\n",
+			elapsed_sec,
+			g_phases[current_phase_idx].name,
+			feed_per_sec,
+			query_per_sec,
+			mean_lat_us,
+			p50_lat_us,
+			p99_lat_us);
 
 		if (merged_hist) hdr_histogram_close(merged_hist);
 
