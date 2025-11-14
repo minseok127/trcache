@@ -394,16 +394,19 @@ static void* feed_thread_main(void *arg)
 			+ ((double)rand_r(&rand_state) / RAND_MAX * 100.0);
 
 		/* Feed the trade to trcache */
-		if (trcache_feed_trade_data(g_cache, &trade, symbol_id) != 0) {
-			errmsg(stderr,
-				"Feed thread %d failed to feed data for symbol %d\n",
-				args->thread_idx, symbol_id);
+		while (trcache_feed_trade_data(g_cache, &trade, symbol_id) != 0) {
+			if (!atomic_load_explicit(&g_running, memory_order_relaxed)) {
+				goto feed_loop_exit;
+			}
+
+			sched_yield();
 		}
 
 		/* Increment this thread's local, non-atomic counter */
 		my_counter->count++;
 	}
 
+feed_loop_exit:
 	printf("  [Feed Thread %d] stopping.\n", args->thread_idx);
 	free(local_zipf_cdf); /* Clean up thread-local CDF */
 	return NULL;
