@@ -427,6 +427,8 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 		if (atomic_load(&ptr->is_active) == false) {
 			/* --- Slot Reuse Success --- */
 			ptr_to_use = ptr;
+			atomic_store_explicit(&ptr_to_use->is_active, true, 
+				memory_order_release);
 			goto slot_acquired;
 		}
 	}
