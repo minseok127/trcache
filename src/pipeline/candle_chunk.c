@@ -376,30 +376,24 @@ static inline void copy_row_to_batch_selective(
 {
 	const struct trcache_candle_config *config
 		= &trc->candle_configs[candle_type_idx];
-	void *dst_col, *src_field, *dst_field;
 	const struct trcache_field_def *field;
+	void *src_field, *dst_field;
 	int field_idx;
-
-	assert(request != NULL && request->field_indices != NULL);
 
 	/* Always copy base fields */
 	dst->key_array[dst_idx] = candle->key.value;
 	dst->is_closed_array[dst_idx] = candle->is_closed;
 
-	/* Copy requested user fields */
 	for (int i = 0; i < request->num_fields; i++) {
 		field_idx = request->field_indices[i];
-		if (field_idx < 0 || field_idx >= config->num_fields) {
-			continue;
-		}
-
-		dst_col = dst->column_arrays[field_idx];
-		if (dst_col) {
-			field = &config->field_definitions[field_idx];
-			src_field = (char *)candle + field->offset;
-			dst_field = (char *)dst_col + (dst_idx * field->size);
-			memcpy(dst_field, src_field, field->size);
-		}
+		field = &config->field_definitions[field_idx];
+		
+		src_field
+			= (char *)candle + field->offset;
+		dst_field
+			= (char *)dst->column_arrays[field_idx] + (dst_idx * field->size);
+		
+		memcpy(dst_field, src_field, field->size);
 	}
 }
 
@@ -680,12 +674,14 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx, int dst_idx, struct trcache_candle_batch *dst,
 	const struct trcache_field_request *request)
 {
-	int n = end_idx - start_idx + 1, dst_first = dst_idx + 1 - n, field_idx;
+	int n = end_idx - start_idx + 1;
+	int dst_first = dst_idx + 1 - n;
 	int candle_type_idx = chunk->column_batch->candle_idx;
 	const struct trcache_candle_config *config
 		= &chunk->trc->candle_configs[candle_type_idx];
+	const struct trcache_field_def *field;
 	void *dst_col, *src_col;
-	size_t field_size;
+	int field_idx;
 
 	if (n <= 0) {
 		return 0;
@@ -701,20 +697,14 @@ int candle_chunk_copy_from_column_batch(struct candle_chunk *chunk,
 
 	for (int i = 0; i < request->num_fields; i++) {
 		field_idx = request->field_indices[i];
-
-		if (field_idx < 0 || field_idx >= config->num_fields) {
-			continue;
-		}
-
+		field = &config->field_definitions[field_idx];
+		
 		dst_col = dst->column_arrays[field_idx];
 		src_col = chunk->column_batch->column_arrays[field_idx];
-
-		if (dst_col != NULL && src_col != NULL) {
-			field_size = config->field_definitions[field_idx].size;
-			memcpy((char *)dst_col + (dst_first * field_size),
-				(char *)src_col + (start_idx * field_size),
-				n * field_size);
-		}
+		
+		memcpy((char *)dst_col + (dst_first * field->size),
+		       (char *)src_col + (start_idx * field->size),
+		       n * field->size);
 	}
 
 	return n;
