@@ -71,7 +71,7 @@ struct benchmark_config {
 	const char *output_csv_path;
 	int query_sizes[8];
 	int num_query_sizes;
-	bool sequential_access;
+	bool key_based;
 };
 
 /* Test Configuration */
@@ -79,7 +79,7 @@ struct test_config {
 	int query_size;
 	int num_fields;
 	const int *field_indices;
-	bool sequential;
+	bool key_based;
 };
 
 /* Reader Thread Result */
@@ -333,14 +333,14 @@ static void* reader_thread_main(void *arg)
 
 		clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
-		if (cfg->sequential) {
+		if (!cfg->key_based) {
 			/* Offset-based sequential access */
 			int offset = rand_r(&rand_state) % 10000;
 			ret = trcache_get_candles_by_symbol_id_and_offset(
 				g_cache, symbol_id, candle_idx, &request,
 				offset, cfg->query_size, batch);
 		} else {
-			/* Key-based random access - use actual existing keys */
+			/* Key-based sequential access - use actual existing keys */
 			if (g_symbol_keys[sym_idx].count == 0) {
 				/* No keys available for this symbol, skip */
 				continue;
@@ -386,7 +386,7 @@ static int run_test(struct test_config *cfg, FILE *csv_file)
 
 	printf("\n==> Running test: size=%d, fields=%d, %s\n",
 		cfg->query_size, cfg->num_fields,
-		cfg->sequential ? "sequential" : "random");
+		cfg->key_based ? "key-based" : "offset-based");
 
 	/* Allocate resources */
 	threads = calloc(g_config.num_reader_threads, sizeof(pthread_t));
@@ -480,7 +480,7 @@ static int run_test(struct test_config *cfg, FILE *csv_file)
 	fprintf(csv_file, "%d,%d,%s,%d,%lu,%lu,%.2f,%.2f,%.2f,%.2f,%.2f\n",
 		cfg->query_size,
 		cfg->num_fields,
-		cfg->sequential ? "sequential" : "random",
+		cfg->key_based ? "key-based" : "offset-based",
 		g_config.num_reader_threads,
 		total,
 		failed,
@@ -538,7 +538,7 @@ static void print_usage(const char *prog_name)
 		"  -o, --output-csv <path>    Path to output CSV file\n"
 		"\n"
 		"Optional Options:\n"
-		"  -s, --sequential           Use sequential access pattern (default: random)\n"
+		"  -k, --key-based            Use key-based sequential access pattern (default: offset)\n"
 		"  -h, --help                 Print this help message\n",
 		prog_name);
 }
@@ -546,7 +546,7 @@ static void print_usage(const char *prog_name)
 static int parse_arguments(int argc, char **argv)
 {
 	memset(&g_config, 0, sizeof(g_config));
-	g_config.sequential_access = false;
+	g_config.key_based = false;
 	
 	/* Default query sizes */
 	g_config.query_sizes[0] = 10;
@@ -560,18 +560,18 @@ static int parse_arguments(int argc, char **argv)
 		{"reader-threads", required_argument, 0, 'r'},
 		{"worker-threads", required_argument, 0, 'w'},
 		{"output-csv", required_argument, 0, 'o'},
-		{"sequential", no_argument, 0, 's'},
+		{"key-based", no_argument, 0, 'k'},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "r:w:o:s:h", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "r:w:o:k:h", long_options, NULL)) != -1) {
 		switch (c) {
 			case 'r': g_config.num_reader_threads = atoi(optarg); break;
 			case 'w': g_config.num_worker_threads = atoi(optarg); break;
 			case 'o': g_config.output_csv_path = optarg; break;
-			case 's': g_config.sequential_access = true; break;
+			case 'k': g_config.key_based = true; break;
 			case 'h': print_usage(argv[0]); return -1;
 			case '?': default: return -1;
 		}
@@ -667,7 +667,7 @@ int main(int argc, char **argv)
 	printf("  Worker Threads: %d\n", g_config.num_worker_threads);
 	printf("  Output CSV:     %s\n", g_config.output_csv_path);
 	printf("  Access Pattern: %s\n",
-		g_config.sequential_access ? "Sequential" : "Random");
+		g_config.key_based ? "Key-based" : "Offset-based");
 	printf("======================================\n");
 
 	if (initialize_trcache() != 0) {
@@ -704,7 +704,7 @@ int main(int argc, char **argv)
 			.query_size = g_config.query_sizes[size_idx],
 			.num_fields = 6,
 			.field_indices = all_fields,
-			.sequential = g_config.sequential_access
+			.key_based = g_config.key_based
 		};
 		if (run_test(&cfg1, csv_file) != 0) {
 			errmsg(stderr, "Test failed\n");
@@ -717,7 +717,7 @@ int main(int argc, char **argv)
 			.query_size = g_config.query_sizes[size_idx],
 			.num_fields = 1,
 			.field_indices = subset_fields,
-			.sequential = g_config.sequential_access
+			.key_based = g_config.key_based
 		};
 		if (run_test(&cfg2, csv_file) != 0) {
 			errmsg(stderr, "Test failed\n");
