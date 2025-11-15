@@ -335,7 +335,7 @@ static void* reader_thread_main(void *arg)
 
 		if (cfg->sequential) {
 			/* Offset-based sequential access */
-			int offset = 1024;
+			int offset = rand_r(&rand_state) % 10000;
 			ret = trcache_get_candles_by_symbol_id_and_offset(
 				g_cache, symbol_id, candle_idx, &request,
 				offset, cfg->query_size, batch);
