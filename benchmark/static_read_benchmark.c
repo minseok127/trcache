@@ -38,8 +38,8 @@
 /* Constants */
 #define NUM_SYMBOLS (1)
 #define NUM_CANDLE_TYPES (2)
-#define WARMUP_TRADES_PER_SYMBOL (100000)
-#define QUERIES_PER_CONFIG (100000)
+#define WARMUP_TRADES_PER_SYMBOL (1000000)
+#define QUERIES_PER_CONFIG (10000)
 #define ONE_MINUTE_MS (60000)
 
 /* Candle Structure */
@@ -335,7 +335,7 @@ static void* reader_thread_main(void *arg)
 
 		if (cfg->sequential) {
 			/* Offset-based sequential access */
-			int offset = rand_r(&rand_state) % 1000;
+			int offset = 1024;
 			ret = trcache_get_candles_by_symbol_id_and_offset(
 				g_cache, symbol_id, candle_idx, &request,
 				offset, cfg->query_size, batch);
@@ -550,10 +550,10 @@ static int parse_arguments(int argc, char **argv)
 	
 	/* Default query sizes */
 	g_config.query_sizes[0] = 10;
-	g_config.query_sizes[1] = 50;
-	g_config.query_sizes[2] = 100;
-	g_config.query_sizes[3] = 500;
-	g_config.query_sizes[4] = 1000;
+	g_config.query_sizes[1] = 100;
+	g_config.query_sizes[2] = 1000;
+	g_config.query_sizes[3] = 10000;
+	g_config.query_sizes[4] = 100000;
 	g_config.num_query_sizes = 5;
 
 	const struct option long_options[] = {
@@ -622,8 +622,8 @@ static int initialize_trcache(void)
 	struct trcache_init_ctx ctx = {
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
-		.batch_candle_count_pow2 = 10,
-		.cached_batch_count_pow2 = 2,
+		.batch_candle_count_pow2 = 12,
+		.cached_batch_count_pow2 = 5,
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
 		.max_symbols = NUM_SYMBOLS
