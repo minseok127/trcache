@@ -314,14 +314,14 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	min_required_memory = calculate_minimum_memory(ctx);
 
 	/*
-	 * Require at least 2x the minimum memory to provide buffer space
+	 * Require at least the minimum memory to provide buffer space
 	 * for auxiliary structures and operational headroom.
 	 */
-	if (tc->total_memory_limit < min_required_memory * 2) {
+	if (tc->total_memory_limit < min_required_memory) {
 		errmsg(stderr, "[trcache_init] Failed: total_memory_limit (%.1f MB) "
-			"is less than 2x the minimum required memory (%.1f MB).\n",
+			"is less than the minimum required memory (%.1f MB).\n",
 			(double)tc->total_memory_limit / (1024.0 * 1024.0),
-			(double)(min_required_memory * 2) / (1024.0 * 1024.0));
+			(double)(min_required_memory) / (1024.0 * 1024.0));
 		
 		errmsg(stderr, "[trcache_init] Global settings:\n"
 			" - max_symbols: %d\n"

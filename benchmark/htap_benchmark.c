@@ -36,7 +36,7 @@
 	} while (0)
 
 /* Constants */
-#define NUM_SYMBOLS (4096)
+#define NUM_SYMBOLS (1024)
 #define NUM_CANDLE_TYPES (2)
 #define DEFAULT_ZIPF_S (0.99)
 #define ONE_MINUTE_MS (60000)
@@ -273,7 +273,7 @@ static void* reader_thread_main(void *arg)
 	struct reader_state *state = (struct reader_state *)arg;
 	unsigned int rand_state = (unsigned int)(time(NULL) ^ pthread_self());
 	int candle_idx = 0;
-	int query_size = 100;
+	int query_size = 8192;
 	int field_indices[] = {1, 2, 3}; /* high, low, close */
 	struct trcache_field_request request = {
 		.field_indices = field_indices,
@@ -588,7 +588,7 @@ static int initialize_trcache(void)
 	struct trcache_init_ctx ctx = {
 		.candle_configs = configs,
 		.num_candle_configs = NUM_CANDLE_TYPES,
-		.batch_candle_count_pow2 = 10,
+		.batch_candle_count_pow2 = 14,
 		.cached_batch_count_pow2 = 0,
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
