@@ -20,14 +20,27 @@
 
 ### Throughput
 
+- **Feed Rate**: `15,000,000` trades/sec (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99)
+
+### Query Latency (10,000 candles, offset-based, 1 reader):
+
+- **Static Read** (OLAP-only, no concurrent writes):
+  - P50: `6.2` μs
+  - P99: `9.18` μs
+  - Mean: `6.4` μs
+
+- **Concurrent Read** (HTAP, concurrent feed rate: `15,000,000` trades/sec):
+  - P50: `27` μs
+  - P99: `58` μs
+  - Mean: `28` μs
+
+*See `benchmark/static_read_benchmark` and `benchmark/htap_benchmark` for details.*
 
 ### Scalability
 
 
 ### Limitations
 
-
-*Benchmark results available in `benchmark/` directory.*
 
 ---
 
