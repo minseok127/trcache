@@ -480,6 +480,12 @@ int candle_chunk_flush(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops)
 {
 	struct trcache *trc = chunk->trc;
+
+	/* Flush operation is not defined, do nothing */
+	if (flush_ops->flush == NULL) {
+		return 1;
+	}
+	
 	chunk->flush_handle = flush_ops->flush(
 		trc, chunk->column_batch, flush_ops->flush_ctx);
 
