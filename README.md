@@ -564,6 +564,6 @@ For detailed architecture documentation, see inline comments in `src/`.
 
 See `benchmark/` directory for source code and detailed documentation.
 
-### Performance Analysis 
+### In-depth Analysis 
 
 ---
