@@ -45,7 +45,7 @@
 
 ## Limitations
 
-- Single feed thread per symbol (concurrent feeds to same symbol not supported).
+- Concurrent feeds to same symbol not supported (single thread can feed multiple symbols).
 - The `max_symbols` capacity is pre-allocated at initialization and cannot be changed at runtime.
 - The `total_memory_limit` is a hard cap; `trcache_feed_trade_data` will return -1 if this limit is exceeded.
 - Initialization will fail if `total_memory_limit` is set lower than the minimum memory required by the configuration.
