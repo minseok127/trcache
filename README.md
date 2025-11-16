@@ -18,6 +18,8 @@
 
 ## Performance Characteristics
 
+*For detailed benchmark results and in-depth analysis, please see the Benchmark & Analysis section below.*
+
 ### Throughput
 
 - **Feed Rate**: `15,000,000` trades/sec (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99)
@@ -34,9 +36,10 @@
   - P99: `58` μs
   - Mean: `28` μs
 
-*See `benchmark/static_read_benchmark` and `benchmark/htap_benchmark` for details.*
-
 ### Scalability
+| # of Feed / Worker Threads | Feed Rate (trades / sec) |  # of Readers  | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) |
+|:--------------------------:|:------------------------:|:--------------:|:------------------------:|:-----------------------:|:-----------------------:|
+|||
 
 ---
 
@@ -460,48 +463,6 @@ trcache_destroy(cache);  // Flushes remaining data and frees all resources
 
 ---
 
-## Examples & Benchmarks
-
-### Running Benchmarks
-
-```bash
-# Build benchmarks
-make benchmark
-
-# 1. Feed-only (write throughput)
-./benchmark/feed_only_benchmark \
-  -f 4            `# 4 feed threads` \
-  -w 8            `# 8 worker threads` \
-  -o feed.csv     `# output file` \
-  -t 60           `# 60 sec total` \
-  -W 10           `# 10 sec warmup` \
-  -s 0.99         `# Zipf skew (0=uniform, 1=extreme)`
-
-# 2. Static read (OLAP query latency)
-./benchmark/static_read_benchmark \
-  -r 8            `# 8 reader threads` \
-  -w 8            `# 8 worker threads` \
-  -o read.csv \
-  -k              `# key-based access (default: offset-based)`
-
-# 3. HTAP (mixed read/write with phases)
-./benchmark/htap_benchmark \
-  -f 4            `# 4 feed threads` \
-  -w 8            `# 8 worker threads` \
-  -o htap.csv \
-  -d 100          `# 100μs delay between queries`
-```
-
-**HTAP Benchmark Phases**:
-- Phase 1 (0-30s): OLTP only (baseline)
-- Phase 2 (30-60s): OLTP + Light OLAP (2 readers)
-- Phase 3 (60-90s): OLTP + Heavy OLAP (8 readers)
-- Phase 4 (90-120s): OLTP only (recovery)
-
-See `benchmark/` directory for source code and detailed documentation.
-
----
-
 ## Troubleshooting
 
 ### "Memory limit reached" during initialization
@@ -563,5 +524,46 @@ double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
   - Base fields (key, is_closed) always present for fast filtering
 
 For detailed architecture documentation, see inline comments in `src/`.
+
+---
+
+## Benchmark & Analysis
+
+### Running Benchmarks
+
+```bash
+# 1. Feed-only (write throughput)
+./benchmark/feed_only_benchmark \
+  -f 4            `# 4 feed threads` \
+  -w 8            `# 8 worker threads` \
+  -o feed.csv     `# output file` \
+  -t 60           `# 60 sec total` \
+  -W 10           `# 10 sec warmup` \
+  -s 0.99         `# Zipf skew (0=uniform, 1=extreme)`
+
+# 2. Static read (OLAP query latency)
+./benchmark/static_read_benchmark \
+  -r 8            `# 8 reader threads` \
+  -w 8            `# 8 worker threads` \
+  -o read.csv \
+  -k              `# key-based access (default: offset-based)`
+
+# 3. HTAP (mixed read/write with phases)
+./benchmark/htap_benchmark \
+  -f 4            `# 4 feed threads` \
+  -w 8            `# 8 worker threads` \
+  -o htap.csv \
+  -d 100          `# 100μs delay between queries`
+```
+
+**HTAP Benchmark Phases**:
+- Phase 1 (0-30s): OLTP only (baseline)
+- Phase 2 (30-60s): OLTP + Light OLAP (2 readers)
+- Phase 3 (60-90s): OLTP + Heavy OLAP (8 readers)
+- Phase 4 (90-120s): OLTP only (recovery)
+
+See `benchmark/` directory for source code and detailed documentation.
+
+### Performance Analysis 
 
 ---
