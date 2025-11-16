@@ -58,14 +58,8 @@
 ## Build
 
 ```bash
-make              # build static (libtrcache.a) and shared (libtrcache.so) libraries
+make                    # build release mode (O2), same with BUILD_MODE=release
 make BUILD_MODE=debug   # build with debug symbols and assertions
-```
-
-### Building Benchmarks
-
-```bash
-make benchmark    # builds all benchmark executables in benchmark/
 ```
 
 ---
