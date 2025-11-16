@@ -1,179 +1,220 @@
 # TRCACHE
 
-`trcache` is a C library for ingesting real-time trade data and converting it into **column-oriented user-defined candle arrays** optimized for analysis. The library targets multicore machines and relies on lock-free data structures together with dedicated worker threads to scale with available CPU cores.
+`trcache` is a C library for ingesting real-time trade data and transforming it into **column-oriented, user-defined candle arrays** optimized for analytics. Designed for multicore systems, it leverages lock-free data structures and dedicated worker threads to scale with available CPU resources.
 
-# Features
+---
 
-- **Lock-Free Pipeline**: Apply, Convert, and Flush stages run concurrently on dedicated threads without locks.
-  - **Apply**: Aggregates raw trades into row-oriented candles.
-  - **Convert**: Reshapes row-oriented candle pages into SIMD-friendly column batches.
-  - **Flush**: Hands off completed batches to user-defined callbacks for persistence.
-- **Fully Customizable Candles**: Define any candle structure you need. `trcache` is not limited to specific candle type and can handle any number and type of fields.
-- **Lock-Free Queries**: Read candle data without locks, even as it's being transformed by the concurrent pipeline.
-- **Adaptive Worker Scheduling**: An admin thread monitors pipeline throughput and dynamically schedules worker threads to balance the load.
+## Features
 
-# Build
+- **Fully Customizable Candles**: Define any candle structure you need—time-based, tick-based, or custom aggregations. Not limited to OHLCV.
+- **Lock-Free 3-Stage Pipeline**: 
+  - **Apply**: Aggregates raw trades into row-oriented candles
+  - **Convert**: Reshapes rows into SIMD-friendly column batches
+  - **Flush**: Hands off completed batches to user callbacks for persistence
+- **Lock-Free Queries**: Read candle data without locks, even during concurrent updates
+- **Adaptive Scheduling**: Admin thread monitors pipeline throughput and dynamically balances worker threads across stages
+
+---
+
+## Performance Characteristics
+
+### Throughput
+
+
+### Scalability
+
+
+### Limitations
+
+
+*Benchmark results available in `benchmark/` directory.*
+
+---
+
+## Build
 
 ```bash
-make            # build static and shared libraries
+make              # build static (libtrcache.a) and shared (libtrcache.so) libraries
+make BUILD_MODE=debug   # build with debug symbols and assertions
 ```
 
-To generate debug binaries, set `BUILD_MODE=debug`:
+### Building Benchmarks
 
 ```bash
-make BUILD_MODE=debug
+make benchmark    # builds all benchmark executables in benchmark/
 ```
 
-# Core Concepts and Usage
+---
 
-`trcache` gives you full control over your candle data structure. The following steps guide you through defining, configuring, and using a custom candle type.
+## Quick Start
 
-### Step 1: Define Your Custom Candle Structure
-
-First, define the C struct for your candle. The only requirement is that its very first member must be of type `trcache_candle_base`. This base structure allows `trcache` to access the candle's unique key and its closed status in a type-agnostic way.
+Here's a minimal example to get `trcache` running in under 5 minutes:
 
 ```c
-// From trcache.h
-typedef struct trcache_candle_base {
-    union {
-        uint64_t timestamp;
-        uint64_t trade_id;
-        uint64_t value;
-    } key;
-    bool is_closed;
-} trcache_candle_base;
+#include "trcache.h"
 
-// Example: A custom OHLCV candle with trade count
+// 1. Define your candle structure (must start with trcache_candle_base)
 typedef struct {
-    trcache_candle_base base; // MUST be the first member
+    trcache_candle_base base;  // REQUIRED as first member
+    double open, high, low, close, volume;
+} MyCandle;
+
+// 2. Define field layout
+const trcache_field_def fields[] = {
+    {offsetof(MyCandle, open),   sizeof(double), FIELD_TYPE_DOUBLE},
+    {offsetof(MyCandle, high),   sizeof(double), FIELD_TYPE_DOUBLE},
+    {offsetof(MyCandle, low),    sizeof(double), FIELD_TYPE_DOUBLE},
+    {offsetof(MyCandle, close),  sizeof(double), FIELD_TYPE_DOUBLE},
+    {offsetof(MyCandle, volume), sizeof(double), FIELD_TYPE_DOUBLE},
+};
+
+// 3. Implement update callbacks
+void init_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
+    MyCandle *candle = (MyCandle *)c;
+    c->key.timestamp = d->timestamp - (d->timestamp % 60000);  // 1-min window
+    c->is_closed = false;
+    candle->open = candle->high = candle->low = candle->close = d->price.as_double;
+    candle->volume = d->volume.as_double;
+}
+
+bool update_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
+    if (d->timestamp >= c->key.timestamp + 60000) {
+        c->is_closed = true;
+        return false;  // Start new candle
+    }
+    MyCandle *candle = (MyCandle *)c;
+    double price = d->price.as_double;
+    if (price > candle->high) candle->high = price;
+    if (price < candle->low) candle->low = price;
+    candle->close = price;
+    candle->volume += d->volume.as_double;
+    return true;
+}
+
+// 4. Initialize trcache
+trcache_candle_config config = {
+    .user_candle_size = sizeof(MyCandle),
+    .field_definitions = fields,
+    .num_fields = 5,
+    .update_ops = {.init = init_1min_candle, .update = update_1min_candle},
+    .flush_ops = {.flush = NULL}  // No-op flush for this example
+};
+
+trcache_init_ctx ctx = {
+    .candle_configs = &config,
+    .num_candle_configs = 1,
+    .batch_candle_count_pow2 = 10,      // 1024 candles per batch
+    .cached_batch_count_pow2 = 3,       // Cache 8 batches before flush
+    .total_memory_limit = 5ULL << 30,   // 5GB
+    .num_worker_threads = 4,
+    .max_symbols = 1024
+};
+
+trcache *cache = trcache_init(&ctx);
+
+// 5. Register symbol and feed data
+int btc_id = trcache_register_symbol(cache, "BTC-USD");
+trcache_trade_data trade = {
+    .timestamp = 1609459200000,  // 2021-01-01 00:00:00 UTC
+    .trade_id = 1,
+    .price = {.as_double = 29000.0},
+    .volume = {.as_double = 1.5}
+};
+trcache_feed_trade_data(cache, &trade, btc_id);
+
+// 6. Query candles
+int field_indices[] = {1, 2, 3};  // high, low, close
+trcache_field_request request = {.field_indices = field_indices, .num_fields = 3};
+trcache_candle_batch *batch = trcache_batch_alloc_on_heap(cache, 0, 100, &request);
+
+trcache_get_candles_by_symbol_id_and_offset(cache, btc_id, 0, &request, 0, 10, batch);
+
+double *highs = (double *)batch->column_arrays[1];   // Use original field index!
+printf("Latest high: %.2f\n", highs[batch->num_candles - 1]);
+
+trcache_batch_free(batch);
+trcache_destroy(cache);
+```
+
+---
+
+## Architecture
+
+### Pipeline Overview
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│    APPLY     │─────▶│   CONVERT    │─────▶│    FLUSH     │
+│  (Row AoS)   │      │ (Column SoA) │      │  (Persist)   │
+└──────────────┘      └──────────────┘      └──────────────┘
+       │                     │                      │
+   Trade Data          Immutable Rows        Completed Batches
+   Aggregation         → SIMD Columns        → User Callbacks
+```
+
+1. **APPLY**: Worker threads consume trades from lock-free buffers and update row-oriented candles. Only the most recent candle is mutable; all prior candles are immutable.
+
+2. **CONVERT**: Once a candle completes, a worker transforms the immutable row (Array of Structs) into a column-oriented batch (Struct of Arrays) aligned for SIMD operations.
+
+3. **FLUSH**: When the number of unflushed batches exceeds a threshold, a worker invokes user-provided callbacks to persist data (supports both sync and async I/O).
+
+### Concurrency Model
+
+- **Lock-Free Reads**: Queries use `atomsnap` (RCU-like snapshots) to read stable data without blocking writers
+- **Memory Reclamation**: Grace-period mechanism ensures chunks are freed only after all readers finish
+- **Object Pooling**: `scalable_queue` provides per-thread memory pools with pressure-aware recycling
+- **Adaptive Scheduling**: Admin thread calculates EMA cycle costs per stage and dynamically assigns workers to balance load
+
+---
+
+## Usage Guide
+
+### Step 1: Define Your Candle Structure
+
+Your candle struct **must** have `trcache_candle_base` as its first member:
+
+```c
+typedef struct {
+    trcache_candle_base base;  // REQUIRED: provides key and is_closed
     double open;
     double high;
     double low;
     double close;
     uint64_t volume;
-    uint32_t trade_count;
+    uint32_t trade_count;      // This field won't be in column arrays
 } MyOHLCV;
 ```
 
-### Step 2: Describe the Candle's Memory Layout
+### Step 2: Describe the Memory Layout
 
-Next, you must describe the memory layout of your custom fields to `trcache`. This is done by creating an array of `trcache_field_def` structs. This schema allows the library to perform high-performance transformations from your row-oriented struct to a column-oriented batch.
-
-Use the `offsetof()` and `sizeof()` macros to ensure correctness.
+Create an array of `trcache_field_def` to map your custom fields:
 
 ```c
-// From trcache.h
-typedef struct trcache_field_def {
-    size_t offset;
-    size_t size;
-    trcache_field_type type;
-} trcache_field_def;
-
-// An array describing the fields in the 'MyOHLCV' struct
-const struct trcache_field_def my_ohlcv_fields[] = {
-    {offsetof(MyOHLCV, open), sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyOHLCV, high), sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyOHLCV, low), sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyOHLCV, close), sizeof(double), FIELD_TYPE_DOUBLE},
+const trcache_field_def my_fields[] = {
+    {offsetof(MyOHLCV, open),   sizeof(double),   FIELD_TYPE_DOUBLE},
+    {offsetof(MyOHLCV, high),   sizeof(double),   FIELD_TYPE_DOUBLE},
+    {offsetof(MyOHLCV, low),    sizeof(double),   FIELD_TYPE_DOUBLE},
+    {offsetof(MyOHLCV, close),  sizeof(double),   FIELD_TYPE_DOUBLE},
     {offsetof(MyOHLCV, volume), sizeof(uint64_t), FIELD_TYPE_UINT64},
-    {offsetof(MyOHLCV, trade_count), sizeof(uint32_t), FIELD_TYPE_UINT32},
+    // Note: trade_count is omitted - it's scratch space not stored in batches
 };
 ```
 
-- **Note on `trcache_field_type`**: This enum provides metadata about your fields. While it is not strictly required for the core operation of `trcache`, it is recommended for debugging purposes and for internal analytics.
-
-### Step 3: Understanding the Input - `trcache_trade_data`
-
-The fundamental unit of data you'll provide to `trcache` is a single trade, represented by the `trcache_trade_data` struct. This is the raw information from which all your custom candles will be built.
+### Step 3: Implement Candle Update Logic
 
 ```c
-// From trcache.h
-typedef union {
-	double as_double;
-	int64_t as_int64;
-	void *as_ptr;
-} trcache_value;
-
-typedef struct trcache_trade_data {
-	uint64_t timestamp;
-	uint64_t trade_id;
-	trcache_value price;
-	trcache_value volume;
-} trcache_trade_data;
-```
-
-When you feed data into the engine using `trcache_feed_trade_data()`, you will populate this struct for each trade. Your candle update logic in the next step will then consume this data to build your candles.
-
-### Step 4: Understanding the Output - `trcache_candle_batch`
-
-The ultimate goal of trcache is to produce `trcache_candle_batch` structures. This is a column-oriented representation of your candle data. Understanding this structure is key to both querying data and implementing your `flush` logic.
-
-```c
-// From trcache.h
-typedef struct trcache_candle_batch {
-	uint64_t *key_array;
-	bool *is_closed_array;
-	void **column_arrays;
-	int capacity;
-	int num_candles;
-	int candle_idx;
-	int symbol_id;
-} trcache_candle_batch;
-```
-
-- **Columnar Layout**: Instead of an array of your `MyOHLCV` structs (Array of Structs), a batch holds a struct of arrays (Struct of Arrays). For example, all open prices are stored contiguously in one array, all high prices in another, and so on. This layout is efficient for analytical queries and vectorized computations (SIMD).
-- `key_array` & `is_closed_array`: Pointers to arrays for the base candle fields, which are always present.
-- `column_arrays`: This is an array of `void*` pointers. Each element `column_arrays[i]` points to the columnar data array for the *i-th* field you defined in your `my_ohlcv_fields` array. You need to cast this pointer to the correct type (e.g., `(double *)batch->column_arrays[0]` for the `open` prices).
-- **Memory Management**: All arrays in the batch point to a single, contiguous, SIMD-aligned memory block. You can allocate a batch on the heap using `trcache_batch_alloc_on_heap()` and free it with `trcache_batch_free()`.
-
-### Step 5: Implement the Candle Update Logic
-
-Define how your candle is initialized from the first trade and updated by subsequent trades. This logic is provided via a `trcache_candle_update_ops` struct.
-
-```c
-// From trcache.h
-typedef struct trcache_candle_update_ops {
-	void (*init)(struct trcache_candle_base *c, struct trcache_trade_data *d);
-	bool (*update)(struct trcache_candle_base *c, struct trcache_trade_data *d);
-} trcache_candle_update_ops;
-```
-
-- `void init(trcache_candle_base *c, trcache_trade_data *d)`
-	- This function is called once to initialize a new candle.
-	- `c`: A pointer to the uninitialized memory for your new candle. You should cast it to your custom candle type (e.g., `MyOHLCV *candle = (MyOHLCV *)c;`).
-	- `d`: A pointer to the first trade data that triggered the creation of this candle.
-	- **You must set the c->key.** The key must be unique and monotonically increasing for all subsequent candles of this same type.
-- `bool update(trcache_candle_base *c, trcache_trade_data *d)`
-	- This function is called for each subsequent trade to update an existing, active candle.
-	- `c`: A pointer to the current, active candle.
-	- `d`: A pointer to the incoming `trcache_trade_data`.
-	- Return Value:
-		- Return `true` if the trade was successfully applied to the current candle `c`.
-		- Return `false` if the trade does not belong to the current candle (i.e., the candle's closing condition has been met). Before returning `false`, you must set `c->is_closed = true;`. `trcache` will then automatically call your `init` function to start a new candle using this same trade data `d`.
-
-```c
-// Example logic for a 1-minute time-based candle
-void my_1min_init(trcache_candle_base *c, struct trcache_trade_data *d) {
+void init_tick(trcache_candle_base *c, trcache_trade_data *d) {
     MyOHLCV *candle = (MyOHLCV *)c;
-    // Set the key to the start of the 1-minute interval
-    c->key.timestamp = d->timestamp - (d->timestamp % 60000);
+    c->key.trade_id = d->trade_id;  // Use trade_id for tick candles
     c->is_closed = false;
     
-    candle->open = d->price.as_double;
-    candle->high = d->price.as_double;
-    candle->low = d->price.as_double;
-    candle->close = d->price.as_double;
+    double price = d->price.as_double;
+    candle->open = candle->high = candle->low = candle->close = price;
     candle->volume = d->volume.as_double;
     candle->trade_count = 1;
 }
 
-bool my_1min_update(trcache_candle_base *c, struct trcache_trade_data *d) {
-    // Check if the trade is outside the current candle's time window
-    if (d->timestamp >= c->key.timestamp + 60000) {
-        c->is_closed = true; // Mark the candle as complete
-        return false;        // Signal that this trade should start a new candle
-    }
-
+bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
     MyOHLCV *candle = (MyOHLCV *)c;
     double price = d->price.as_double;
     
@@ -183,329 +224,321 @@ bool my_1min_update(trcache_candle_base *c, struct trcache_trade_data *d) {
     candle->volume += d->volume.as_double;
     candle->trade_count++;
     
-    return true; // Trade was successfully consumed by this candle
+    if (candle->trade_count >= 100) {  // 100-tick candle
+        c->is_closed = true;
+        return false;  // Trigger new candle creation
+    }
+    return true;  // Trade consumed
+}
+```
+
+### Step 4: Implement Flush Callbacks
+
+#### Synchronous Example
+```c
+void* sync_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+    FILE *fp = (FILE *)ctx;
+    fwrite(batch->key_array, sizeof(uint64_t), batch->num_candles, fp);
+    // ... write other columns ...
+    return NULL;  // NULL = synchronous completion
 }
 
-const struct trcache_candle_update_ops my_1min_update_ops = { .init = my_1min_init, .update = my_1min_update };
+trcache_batch_flush_ops flush_ops = {.flush = sync_flush, .flush_ctx = my_file};
 ```
 
-### Step 6: Implement the Batch Persistence Logic
-
-Define how completed batches of your candles are saved. These operations are triggered by a worker thread when the number of completed, in-memory batches exceeds the `cached_batch_count_pow2` threshold. At this point, the oldest batch is passed to your `flush` callback and evicted from the cache.
-
+#### Asynchronous Example (io_uring)
 ```c
-// From trcache.h
-typedef struct trcache_batch_flush_ops {
-	void *(*flush)(trcache *cache, trcache_candle_batch *batch, void *flush_ctx);
-	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *async_handle);
-	void (*destroy_async_handle)(void *async_handle, void *destroy_async_handle_ctx);
-	void (*on_batch_destroy)(trcache_candle_batch *batch, void *on_destroy_ctx);
-	void *flush_ctx;
-	void *destroy_async_handle_ctx;
-	void *on_destroy_ctx;
-} trcache_batch_flush_ops;
-```
-
-- `void* flush(trcache *cache, trcache_candle_batch *batch, void *flush_ctx)`
-	- Called to initiate the persistence of a full batch.
-	- `batch`: A pointer to the column-oriented `trcache_candle_batch` ready to be saved.
-	- `flush_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
-	- Return Value:
-		- `NULL`: For a synchronous flush. The engine assumes the I/O is complete when the function returns.
-		- `non-NULL` handle: For an asynchronous flush. Return a unique pointer or token (e.g., a job context struct) that identifies the I/O operation.
-- `bool is_done(trcache *cache, trcache_candle_batch *batch, void *async_handle)`
-	- (Asynchronous only) Polled periodically by the engine if flush returned a `non-NULL` handle.
-	- `async_handle`: The handle you returned from your `flush` function.
-	- Return Value: Return `true` when the I/O operation associated with the handle is complete, `false` otherwise.
-- `void destroy_async_handle(void *async_handle, void *destroy_async_handle_ctx)`
-	- (Asynchronous only) Called once after `is_done` returns `true`.
-	- `async_handle`: The handle you returned from `flush`. Use this callback to clean up any resources associated with the asynchronous operation (e.g., free(async_handle)).
-	- `destroy_async_handle_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
-- `void on_batch_destroy(trcache_candle_batch *batch, void *on_destroy_ctx)`
-	- Called just before the memory for a `trcache_candle_batch` is freed by the engine. This is your last chance to clean up any resources held within the candles themselves (e.g., if you used `FIELD_TYPE_POINTER` for a field and need to free the pointed-to memory).
-	- `on_destroy_ctx`: Your user-defined context pointer, passed from the `trcache_batch_flush_ops`.
-
-Unlike synchronous flushing, which processes one batch at a time (blocking until the I/O is finished before starting the next), the asynchronous model allows the system to achieve higher throughput. The `FLUSH` worker can call your `flush` callback for multiple batches concurrently, submitting many I/O requests to the operating system without waiting. It then periodically polls the `is_done` callback for all pending batches to check their completion status.
-
-#### Synchronous Flush Example
-
-```c
-void* my_sync_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
-    printf("Sync flushing %d candles for candle_idx=%d\n", batch->num_candles, batch->candle_idx);
-    // write_batch_to_disk(batch);
-    return NULL; // Synchronous completion
-}
-
-const struct trcache_batch_flush_ops my_sync_flush_ops = {
-    .flush = my_sync_flush
-};
-```
-
-#### Asynchronous Flush Example
-
-This example demonstrates a simplified asynchronous file write using `liburing`.
-
-```c
-// Requires linking with -luring
-#include <liburing.h>
-#include <fcntl.h>
-
-// Context for the flush operation and a single I/O request
 typedef struct {
     struct io_uring *ring;
     int fd;
-} UringFlushCtx;
+} UringCtx;
 
-typedef struct {
-    UringFlushCtx *parent_ctx;
-    struct iovec iov;
-    bool is_complete;
-} UringJob;
-
-// flush: Submits a write request and returns a handle
-void* uring_async_flush(trcache *cache, trcache_candle_batch *batch, void *flush_ctx) {
-    UringFlushCtx *ctx = (UringFlushCtx *)flush_ctx;
+void* async_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+    UringCtx *uring = (UringCtx *)ctx;
     
-    UringJob *job = malloc(sizeof(UringJob));
-    job->parent_ctx = ctx;
-    job->is_complete = false;
+    // Allocate job context
+    struct job {
+        struct iovec iov;
+        bool done;
+    } *job = malloc(sizeof(*job));
     
-    // Prepare the data to be written (in a real scenario, you'd serialize the batch)
     job->iov.iov_base = batch->key_array;
     job->iov.iov_len = batch->num_candles * sizeof(uint64_t);
+    job->done = false;
     
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ctx->ring);
-    io_uring_prep_writev(sqe, ctx->fd, &job->iov, 1, -1);
-    io_uring_sqe_set_data(sqe, job); // Associate job with the request
+    // Submit write
+    struct io_uring_sqe *sqe = io_uring_get_sqe(uring->ring);
+    io_uring_prep_writev(sqe, uring->fd, &job->iov, 1, -1);
+    io_uring_sqe_set_data(sqe, job);
+    io_uring_submit(uring->ring);
     
-    io_uring_submit(ctx->ring);
-    
-    return job; // Return the job as the handle
+    return job;  // Non-NULL = async, will poll for completion
 }
 
-// is_done: Checks for completion events from the ring
-bool uring_async_is_done(trcache *cache, trcache_candle_batch *batch, void *handle) {
-    UringJob *job = (UringJob *)handle;
-    struct io_uring_cqe *cqe;
-
-    // Peek for a completion event for this specific job
-    int ret = io_uring_peek_cqe(job->parent_ctx->ring, &cqe);
-    if (ret == 0 && cqe != NULL) {
-        UringJob *completed_job = (UringJob *)io_uring_cqe_get_data(cqe);
-        if (completed_job == job) {
-            // Our job is complete
-            if (cqe->res < 0) {
-                fprintf(stderr, "Async write failed: %s\n", strerror(-cqe->res));
-            }
-            job->is_complete = true;
-            io_uring_cqe_seen(job->parent_ctx->ring, cqe);
-        }
-    }
-    return job->is_complete;
+bool async_is_done(trcache *cache, trcache_candle_batch *batch, void *handle) {
+    struct job *job = (struct job *)handle;
+    // Poll completion queue and check if our job finished
+    // ... (see benchmark/htap_benchmark.c for full example)
+    return job->done;
 }
 
-// destroy_async_handle: Cleans up the job context
-void uring_async_destroy_handle(void *handle, void *ctx) {
+void async_cleanup(void *handle, void *ctx) {
     free(handle);
 }
 
-// In your main application, you would initialize the UringFlushCtx
-// UringFlushCtx flush_context;
-// io_uring_queue_init(QUEUE_DEPTH, &flush_context.ring, 0);
-// flush_context.fd = open("candle_data.bin", O_WRONLY | O_CREAT, 0644);
-
-const struct trcache_batch_flush_ops my_async_flush_ops = {
-    .flush = uring_async_flush,
-    .is_done = uring_async_is_done,
-    .destroy_async_handle = uring_async_destroy_handle,
-    .flush_ctx = &flush_context, // Pass the io_uring context
+trcache_batch_flush_ops async_ops = {
+    .flush = async_flush,
+    .is_done = async_is_done,
+    .destroy_async_handle = async_cleanup
 };
 ```
 
-### Step 7: Configure Your Candle Type
-
-Combine the metadata and logic into a `trcache_candle_config` struct. The index in this array becomes the unique ID for your candle type.
+### Step 5: Configure Your Candle Types
 
 ```c
-const trcache_candle_config my_candle_configs[] = {
-    [0] = { // This candle will have ID = 0 (index)
+trcache_candle_config configs[] = {
+    [0] = {  // 100-tick candle
         .user_candle_size = sizeof(MyOHLCV),
-        .field_definitions = my_ohlcv_fields,
-        .num_fields = sizeof(my_ohlcv_fields) / sizeof(trcache_field_def),
-        .update_ops = my_1min_update_ops,
-        .flush_ops = my_sync_flush_ops, // Choose sync or async ops
+        .field_definitions = my_fields,
+        .num_fields = 5,
+        .update_ops = {.init = init_tick, .update = update_tick},
+        .flush_ops = flush_ops,
     },
-	[1] = { ... },
-	[2] = { ... },
-	...
+    [1] = {  // 1-minute candle
+        .user_candle_size = sizeof(MyOHLCV),
+        .field_definitions = my_fields,
+        .num_fields = 5,
+        .update_ops = {.init = init_time, .update = update_time},
+        .flush_ops = flush_ops,
+    },
 };
 ```
 
-### Step 8: Initialize the Engine
-
-Pass your configuration array and other settings to `trcache_init()` via the `trcache_init_ctx` struct.
+### Step 6: Initialize the Engine
 
 ```c
-// From trcache.h
-typedef struct trcache_init_ctx {
-	const struct trcache_candle_config *candle_configs;
-	int num_candle_configs;
-	int batch_candle_count_pow2;
-	int cached_batch_count_pow2;
-	size_t total_memory_limit;
-	int num_worker_threads;
-} trcache_init_ctx;
+trcache_init_ctx ctx = {
+    .candle_configs = configs,
+    .num_candle_configs = 2,
+    .batch_candle_count_pow2 = 10,      // 2^10 = 1024 candles per batch
+    .cached_batch_count_pow2 = 3,       // 2^3 = 8 batches cached before flush
+    .total_memory_limit = 5ULL << 30,   // 5GB
+    .num_worker_threads = 8,
+    .max_symbols = 4096
+};
+
+trcache *cache = trcache_init(&ctx);
+if (!cache) {
+    // Check stderr for detailed error (e.g., memory limit too low)
+}
 ```
 
-- `candle_configs`: A pointer to your array of `trcache_candle_config` structs.
-- `num_candle_configs`: The total number of configurations in your array.
-- `batch_candle_count_pow2`: The number of candles per columnar batch, expressed as a power of two (e.g., 10 for 1024).
-- `cached_batch_count_pow2`: The number of full batches per symbol per candle type to keep in memory before triggering a flush on the oldest one, as a power of two (e.g., 3 for 8 batches).
-- `total_memory_limit`: The total memory limit in bytes for the entire `trcache` instance.
-- `num_worker_threads`: The number of worker threads for the pipeline.
+**Memory Limit Calculation**: If initialization fails with "memory limit too low", the error message will show:
+- Minimum required memory for your configuration
+- Per-candle-type breakdown (chunk size, page size)
+- Suggestions to increase limit or reduce `cached_batch_count_pow2`.
+
+### Step 7: Register Symbols and Feed Data
 
 ```c
-struct trcache_init_ctx ctx = { /* ... */ };
-struct trcache *cache = trcache_init(&ctx);
-```
-
-Upon a successful return from `trcache_init()`, the library is fully active. One admin thread and a pool of worker threads (the number specified by `num_worker_threads`) are created and running in the background.
-
-The admin thread continuously monitors the system's workload. Based on the rate of incoming data and the processing speed of each pipeline stage, it dynamically assigns tasks to the worker threads to ensure the pipeline (`APPLY`, `CONVERT`, `FLUSH`) remains balanced and operates at maximum efficiency.
-
-### Step 9: Register Symbols and Feed Data
-
-Register each symbol and feed trade data. The `trcache_trade_data` struct you pass is copied into an internal buffer, so you can safely allocate it on the stack and let it go out of scope after the call.
-
-```c
-// Register specific symbol
 int aapl_id = trcache_register_symbol(cache, "AAPL");
 
-// Receive trade data from the trading server
-while (receive_trade_data_from_your_api()) {
-	// Define trade data
-	struct trcache_trade_data trade = { /* ... */ };
-	trcache_feed_trade_data(cache, &trade, aapl_id);
-}
-```
-
-**Concurrency Limitation**: While `trcache` is thread-safe for most operations, there is one important restriction: **you should not have multiple threads calling `trcache_feed_trade_data` for the same symbol ID at the same time**. Feeding data for different symbols concurrently from different threads is perfectly safe and encouraged.
-
-### Step 10: Query Candle Data
-
-To retrieve data, you must specify which fields you want using a `trcache_field_request`.
-
-```c
-// From trcache.h
-typedef struct trcache_field_request {
-	const int *field_indices;
-	int num_fields;
-} trcache_field_request;
-```
-
-- `field_indices`: An array of integers. Each integer is an index into the `field_definitions` array that you provided in Step 2. This tells trcache which specific custom fields you want to retrieve.
-- `num_fields`: The number of indices in your `field_indices` array.
-
-For example, to query the `high`, `low`, and `close` fields from our `MyOHLCV` candle, we refer to the indices from `my_ohlcv_fields` (1, 2, and 3) to build our request.
-
-```c
-// The ID for our 1-minute candle is its index in the config array.
-int my_1min_candle_idx = 0;
-
-// Request the High, Low, and Close fields using their indices from my_ohlcv_fields.
-const int fields_to_get[] = {1, 2, 3}; 
-const struct trcache_field_request request = {
-    .field_indices = fields_to_get,
-    .num_fields = 3,
+trcache_trade_data trade = {
+    .timestamp = 1609459200000,  // Unix ms
+    .trade_id = 1,
+    .price = {.as_double = 132.05},
+    .volume = {.as_double = 100.0}
 };
 
-// Allocate a batch to store the results.
-struct trcache_candle_batch *result_batch = 
-    trcache_batch_alloc_on_heap(cache, my_1min_candle_idx, 100, &request);
-
-// Get the 10 most recent candles
-if (trcache_get_candles_by_symbol_id_and_offset(cache, aapl_id, my_1min_candle_idx, &request, 0, 10, result_batch) == 0) {
-    printf("Retrieved %d candles for AAPL.\n", result_batch->num_candles);
-    
-    // IMPORTANT: To access the data, use the original indices from your field_definitions array,
-    // not the indices from your 'fields_to_get' request array.
-    double *high_prices = (double *)result_batch->column_arrays[1]; // Index 1 is 'high'
-    double *low_prices = (double *)result_batch->column_arrays[2];  // Index 2 is 'low'
-    double *close_prices = (double *)result_batch->column_arrays[3]; // Index 3 is 'close'
-
-    for (int i = 0; i < result_batch->num_candles; i++) {
-        printf("  Timestamp: %llu, High: %.2f, Low: %.2f, Close: %.2f\n",
-               result_batch->key_array[i], high_prices[i], low_prices[i], close_prices[i]);
-    }
-}
-
-trcache_batch_free(result_batch);
+trcache_feed_trade_data(cache, &trade, aapl_id);
 ```
 
-### Step 11: Destroy the Engine
+**Important**: Only one thread should feed data for a given symbol. Feeding from different symbols concurrently is safe.
 
-Clean up all resources, stop background threads, and flush any remaining data.
+### Step 8: Query Candle Data
+
+#### Specify Which Fields to Retrieve
 
 ```c
-trcache_destroy(cache);
+int field_indices[] = {1, 2, 3};  // Request: high, low, close
+trcache_field_request request = {
+    .field_indices = field_indices,
+    .num_fields = 3
+};
 ```
 
-# Implementation Details
+#### Allocate Result Batch
 
-### Core Lock-Free Primitives
+```c
+trcache_candle_batch *batch = trcache_batch_alloc_on_heap(
+    cache, 
+    0,          // candle_idx (0 = first config)
+    100,        // capacity
+    &request    // NULL = allocate all fields
+);
+```
 
-- [**`atomsnap`**](https://github.com/minseok127/atomsnap): A custom-built mechanism for atomic pointer snapshotting and grace-period memory reclamation. It's used to manage shared data structures that undergo structural changes, such as the `candle_chunk_list`'s head pointer, allowing readers to access data without locks while writers perform updates.
-- [**`scalable_queue`**](https://github.com/minseok127/scalable-queue): A highly concurrent queue designed to minimize contention. It is used as the underlying engine for all internal object pools (memory free-lists).
+#### Query by Offset (Most Recent N Candles)
 
-### Data Flow and Pipeline
+```c
+int ret = trcache_get_candles_by_symbol_id_and_offset(
+    cache, aapl_id, 
+    0,          // candle_idx
+    &request, 
+    0,          // offset (0 = most recent)
+    10,         // count
+    batch
+);
 
-The journey of a single trade begins when `trcache_feed_trade_data` is called.
+if (ret == 0) {
+    printf("Retrieved %d candles\n", batch->num_candles);
+}
+```
 
-1.  **Ingestion**: The trade is copied into a thread-local `trade_data_buffer` associated with its symbol. This buffer is a linked list of `trade_data_chunk`s, allowing for lock-free writes from the user thread.
-2.  **Apply Stage**: A worker thread assigned to the `APPLY` stage consumes trades from the `trade_data_buffer`. It updates the currently active (mutable) candle within a `candle_chunk`. Only the most recent candle is mutable; all prior candles are considered immutable.
-3.  **Convert Stage**: Once a candle is complete, a worker thread in the `CONVERT` stage transforms the immutable row-oriented candle data into a column-oriented `trcache_candle_batch` (Array of Structs to Struct of Arrays).
-4.  **Flush Stage**: When a `candle_chunk` is fully converted into a columnar batch and the number of unflushed batches exceeds a threshold, a `FLUSH` worker invokes the user-provided `trcache_batch_flush_ops` callbacks to persist the data.
+#### Query by Key (Specific Candle)
 
-### Memory Model: From Rows to Columns
+```c
+uint64_t target_key = 1609459200000;  // Timestamp or trade_id
+trcache_get_candles_by_symbol_id_and_key(
+    cache, aapl_id, 0, &request, target_key, 10, batch
+);
+```
 
-- **`candle_chunk`**: This is the central data structure, acting as a staging area. It contains multiple `candle_row_page`s, holding row-oriented candle structs. This row-major layout is efficient for write-heavy updates in the `APPLY` stage.
-- **`atomsnap` for Row Pages**: The pointers to these row pages within a chunk are managed by `atomsnap`. This allows the `CONVERT` worker to read a stable version of a page for conversion while the `APPLY` worker might be writing to a newer page, all without locks. Once a page is fully converted, `atomsnap` ensures it's safely reclaimed after all reader threads have finished with it.
-- **`trcache_candle_batch`**: The final output is a struct where each candle field is a separate array. All these arrays are allocated in a single contiguous memory block and are aligned to 64 bytes to enable efficient SIMD vector instructions for analytical queries.
+#### Access Column Data
 
-### Memory Reclamation of Flushed Chunks
+**CRITICAL**: Use the **original field index** from `field_definitions`, NOT the request array index!
 
-`trcache` employs a lock-free, grace-period-based memory reclamation scheme to safely deallocate `candle_chunk` structures after they have been flushed. This mechanism is built upon `atomsnap`, an RCU-like (Read-Copy-Update) primitive that ensures reader threads can safely traverse the list of chunks even while `FLUSH` workers are removing old chunks.
+```c
+// ❌ WRONG - using request array indices
+double *highs = (double *)batch->column_arrays[0];  // This is NULL!
 
-1. **Versioned List Head**: The `candle_chunk_list` maintains a linked list of chunks. The head of this list, representing the oldest available data, is not a direct pointer but is managed through an `atomsnap` version (`candle_chunk_list_head_version`). Reader threads that query candle data first acquire this version to get a stable snapshot of the list's head.
+// ✅ CORRECT - using original field_definitions indices
+double *highs  = (double *)batch->column_arrays[1];  // Index 1 in my_fields
+double *lows   = (double *)batch->column_arrays[2];  // Index 2 in my_fields
+double *closes = (double *)batch->column_arrays[3];  // Index 3 in my_fields
 
-2. **Graceful Retirement**: When a `FLUSH` worker successfully persists a range of chunks, it doesn't immediately deallocate them. Instead, it advances the logical head of the list past these flushed chunks by publishing a new `atomsnap` version pointing to the next live chunk. The old version, which references the now-obsolete chunks, is retired.
+for (int i = 0; i < batch->num_candles; i++) {
+    printf("Candle %d: H=%.2f L=%.2f C=%.2f\n", 
+           i, highs[i], lows[i], closes[i]);
+}
+```
 
-3. **Delayed Deallocation**: The `atomsnap` primitive guarantees a grace period. The retired version is only deallocated after all threads that might have acquired it have finished their operations and released their references.
+**Why?** The `column_arrays` is sized to match your **full** `field_definitions` array, but only requested fields are allocated. Non-requested fields will be NULL.
 
-4. **Callback-Driven Freeing**: The actual memory deallocation is performed inside `candle_chunk_list_head_free`, a callback function that is invoked by `atomsnap` when a retired version's reference count drops to zero. This callback iterates through the list of flushed chunks covered by that version and safely calls `candle_chunk_destroy` on each one, releasing its memory.
+#### Cleanup
 
-### Memory Pooling with scalable_queue
+```c
+trcache_batch_free(batch);
+```
 
-Instead of calling `malloc` and `free` repeatedly, the system uses `scalable_queue` to implement thread-safe, scalable object pools.
+### Step 9: Destroy the Engine
 
-- **Pooled Objects**: This pooling strategy is used for:
-	- `candle_chunk`
-	- `candle_row_page` (managed via `atomsnap_version` bundles)
-	- `candle_chunk_list_head_version` (also bundled with `atomsnap_version`)
-- **Memory Pressure Integration**: These pools are integrated with the global memory accounting system. When the admin thread detects that total memory usage is high (exceeding a threshold), it signals all pools. The pools then dynamically switch from recycling objects (enqueueing them back to the free-list) to actively freeing them (`free()`), providing graceful degradation under high memory load.
+```c
+trcache_destroy(cache);  // Flushes remaining data and frees all resources
+```
 
-### Concurrency and Scheduling
+---
 
-- **Admin Thread**: This thread acts as the central scheduler. It continously:
-    - Calculates the throughput (rate) and EMA cycle cost of each pipeline stage (`APPLY`, `CONVERT`, `FLUSH`) for every symbol.
-    - Estimates the total cycle demand for the In-Memory group (`APPLY` + `CONVERT`) versus the `FLUSH` group.
-    - Partitions the total worker pool into two groups (`GROUP_IN_MEMORY`, `GROUP_FLUSH`), assigning a number of workers to each group proportional to its cycle demand.
-    - Calculates a cycle "budget" for each worker.
-	- Assigns all active tasks (e.g., "Apply for AAPL, 1-min") to a specific worker by setting a bit in that worker's local work bitmap, filling their budget.
-- **Worker Threads**: Workers are the execution units. Each worker is assigned to a single group (`GROUP_IN_MEMORY` or `GROUP_FLUSH`) by the admin thread. They continuously:
-	- Scan their local, private work bitmap for assigned tasks.
-	- If a bit is set, they execute the corresponding task (e.g., `worker_do_apply` for a specific symbol/type).
-	- This bitmap-based approach eliminates the need for a shared work queue and minimizes scheduling contention.
-- **Communication**: The admin thread publishes the new bitmaps and group assignments directly to the worker-local state. Workers read these updates atomically, allowing for dynamic re-balancing without locks or message passing.
+## Examples & Benchmarks
 
-# Evaluation
+### Running Benchmarks
+
+```bash
+# Build benchmarks
+make benchmark
+
+# 1. Feed-only (write throughput)
+./benchmark/feed_only_benchmark \
+  -f 4            `# 4 feed threads` \
+  -w 8            `# 8 worker threads` \
+  -o feed.csv     `# output file` \
+  -t 60           `# 60 sec total` \
+  -W 10           `# 10 sec warmup` \
+  -s 0.99         `# Zipf skew (0=uniform, 1=extreme)`
+
+# 2. Static read (OLAP query latency)
+./benchmark/static_read_benchmark \
+  -r 8            `# 8 reader threads` \
+  -w 8            `# 8 worker threads` \
+  -o read.csv \
+  -k              `# key-based access (default: offset-based)`
+
+# 3. HTAP (mixed read/write with phases)
+./benchmark/htap_benchmark \
+  -f 4            `# 4 feed threads` \
+  -w 8            `# 8 worker threads` \
+  -o htap.csv \
+  -d 100          `# 100μs delay between queries`
+```
+
+**HTAP Benchmark Phases**:
+- Phase 1 (0-30s): OLTP only (baseline)
+- Phase 2 (30-60s): OLTP + Light OLAP (2 readers)
+- Phase 3 (60-90s): OLTP + Heavy OLAP (8 readers)
+- Phase 4 (90-120s): OLTP only (recovery)
+
+See `benchmark/` directory for source code and detailed documentation.
+
+---
+
+## Troubleshooting
+
+### "Memory limit reached" during initialization
+
+**Cause**: `total_memory_limit` is below the minimum required for your configuration.
+
+**Solution**: The error message shows:
+- Minimum required memory
+- Per-candle-type breakdown
+- Suggestions to adjust `cached_batch_count_pow2` or increase limit
+
+Example error:
+```
+[trcache_init] Failed: total_memory_limit (100.0 MB) is less than 
+the minimum required memory (512.5 MB).
+Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
+```
+
+### Feed threads returning -1 (drops)
+
+**Cause**: Memory limit reached at runtime.
+
+**Solution**:
+1. Check if `total_memory_limit` is too low for current workload
+2. Increase limit or reduce `cached_batch_count_pow2`
+3. Optimize flush callbacks to reduce latency
+
+### Segfault on query
+
+**Cause**: Accessing `column_arrays` with wrong index (see Step 8).
+
+**Solution**: Always use the original `field_definitions` index, not the `field_request` index:
+```c
+// If field_definitions[5] is volume:
+double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
+```
+
+---
+
+## Implementation Highlights
+
+- **Lock-Free Primitives**: 
+  - `atomsnap`: Custom RCU-like mechanism for atomic pointer snapshots with grace-period reclamation
+  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations
+
+- **Memory Management**: 
+  - Grace-period reclamation for chunks/pages
+  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
+  - Admin thread aggregates distributed counters and updates global pressure flag
+
+- **Adaptive Scheduling**: 
+  - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage)
+  - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand
+  - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership)
+
+- **SIMD Optimization**: 
+  - Column batches aligned to 64 bytes
+  - Contiguous memory layout for vectorized analytics
+  - Base fields (key, is_closed) always present for fast filtering
+
+For detailed architecture documentation, see inline comments in `src/`.
