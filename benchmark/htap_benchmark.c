@@ -59,10 +59,10 @@ struct phase_config {
 };
 
 static struct phase_config g_phases[] = {
-	{PHASE_OLTP_ONLY_BASELINE, 10, 0, "OLTP-Only (Baseline)"},
-	{PHASE_OLTP_LIGHT_OLAP, 10, 2, "OLTP + Light OLAP"},
-	{PHASE_OLTP_HEAVY_OLAP, 10, 8, "OLTP + Heavy OLAP"},
-	{PHASE_OLTP_ONLY_RECOVERY, 10, 0, "OLTP-Only (Recovery)"}
+	{PHASE_OLTP_ONLY_BASELINE, 30, 0, "OLTP-Only (Baseline)"},
+	{PHASE_OLTP_LIGHT_OLAP, 30, 2, "OLTP + Light OLAP"},
+	{PHASE_OLTP_HEAVY_OLAP, 30, 8, "OLTP + Heavy OLAP"},
+	{PHASE_OLTP_ONLY_RECOVERY, 30, 0, "OLTP-Only (Recovery)"}
 };
 
 #define NUM_PHASES (sizeof(g_phases) / sizeof(g_phases[0]))
@@ -273,7 +273,7 @@ static void* reader_thread_main(void *arg)
 	struct reader_state *state = (struct reader_state *)arg;
 	unsigned int rand_state = (unsigned int)(time(NULL) ^ pthread_self());
 	int candle_idx = 0;
-	int query_size = 8192;
+	int query_size = 10000;
 	int field_indices[] = {1, 2, 3}; /* high, low, close */
 	struct trcache_field_request request = {
 		.field_indices = field_indices,
@@ -303,22 +303,25 @@ static void* reader_thread_main(void *arg)
 			continue;
 		}
 
-		int symbol_id = g_symbol_ids[rand_r(&rand_state) % NUM_SYMBOLS];
-		int offset = rand_r(&rand_state) % 500;
+		for (int symbol_id = 0; symbol_id < NUM_SYMBOLS; symbol_id++) {
+			int offset = rand_r(&rand_state) % 500;
 		
-		clock_gettime(CLOCK_MONOTONIC, &start_ts);
-		int ret = trcache_get_candles_by_symbol_id_and_offset(
-			g_cache, symbol_id, candle_idx, &request,
-			offset, query_size, batch);
-		clock_gettime(CLOCK_MONOTONIC, &end_ts);
+			clock_gettime(CLOCK_MONOTONIC, &start_ts);
+			int ret = trcache_get_candles_by_symbol_id_and_offset(
+				g_cache, symbol_id, candle_idx, &request,
+				offset, query_size, batch);
+			clock_gettime(CLOCK_MONOTONIC, &end_ts);
 
-		if (ret == 0) {
-			uint64_t latency_ns = (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
-				(end_ts.tv_nsec - start_ts.tv_nsec);
-			hdr_histogram_record_value(state->latency_hist, (int64_t)latency_ns);
-			state->query_count.count++;
-		} else {
-			state->failed_count.count++;
+			if (ret == 0) {
+				uint64_t latency_ns
+					= (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
+						(end_ts.tv_nsec - start_ts.tv_nsec);
+				hdr_histogram_record_value(state->latency_hist,
+					(int64_t)latency_ns);
+				state->query_count.count++;
+			} else {
+				state->failed_count.count++;
+			}
 		}
 
 		if (has_delay) {
