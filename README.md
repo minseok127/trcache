@@ -164,10 +164,10 @@ trcache_destroy(cache);
 ### Pipeline Overview
 
 ```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+┌──────────────┐       ┌──────────────┐       ┌──────────────┐
 │    APPLY     │─────▶│   CONVERT    │─────▶│    FLUSH     │
-│  (Row AoS)   │      │ (Column SoA) │      │  (Persist)   │
-└──────────────┘      └──────────────┘      └──────────────┘
+│  (Row AoS)   │       │ (Column SoA) │       │  (Persist)   │
+└──────────────┘       └──────────────┘       └──────────────┘
        │                     │                      │
    Trade Data          Immutable Rows        Completed Batches
    Aggregation         → SIMD Columns        → User Callbacks
