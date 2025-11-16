@@ -483,6 +483,7 @@ int candle_chunk_flush(struct candle_chunk *chunk,
 
 	/* Flush operation is not defined, do nothing */
 	if (flush_ops->flush == NULL) {
+		chunk->is_flushed = 1;
 		return 1;
 	}
 	
