@@ -38,9 +38,17 @@
 
 ### Scalability
 
+---
 
-### Limitations
+## Limitations
 
+- Single feed thread per symbol (concurrent feeds to same symbol not supported).
+- The `max_symbols` capacity is pre-allocated at initialization and cannot be changed at runtime.
+- The `total_memory_limit` is a hard cap; `trcache_feed_trade_data` will return -1 if this limit is exceeded.
+- Initialization will fail if `total_memory_limit` is set lower than the minimum memory required by the configuration.
+- The number of worker threads (`num_worker_threads`) must be greater than 2 (minimum 3).
+- `trcache_candle_base` must be the first member of any custom candle struct definition.
+- The system has hard-coded compile-time limits, such as `MAX_CANDLE_TYPES` (32) and `MAX_NUM_THREADS` (1024).
 
 ---
 
@@ -555,3 +563,5 @@ double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
   - Base fields (key, is_closed) always present for fast filtering
 
 For detailed architecture documentation, see inline comments in `src/`.
+
+---
