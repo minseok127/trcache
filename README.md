@@ -22,7 +22,7 @@
 
 ### Throughput
 
-- **Feed Rate**: `15,000,000` trades/sec (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99, 5GB memory limit)
+- **Feed Rate**: `15,000,000` trades/sec (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99, 5GB memory)
 
 ### Query Latency (10,000 candles, offset-based, 1 reader, fields=3):
 
