@@ -20,7 +20,7 @@
 
 *For detailed benchmark results and in-depth analysis, please see the Benchmark & Analysis section below.*
 
-### Throughput (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99, 5GB memory)
+### Throughput (1 feed thread, 3 worker threads, 1024 symbols, Zipf s=0.99, 5GB memory limit)
 
 - **Feed Rate**: `15,000,000` trades/sec (no concurrent readers)
 
@@ -36,10 +36,18 @@
   - P99: `58` μs
   - Mean: `28` μs
 
-### Scalability
-| # of Feed / Worker Threads | Feed Rate (trades / sec) |  # of Readers  | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) |
-|:--------------------------:|:------------------------:|:--------------:|:------------------------:|:-----------------------:|:-----------------------:|
-|||
+### Scalability (1024 symbols, Zipf s=0.99, 1 reader, fields=3, 5GB memory limit)
+- **num_worker_threads=3**
+
+| # of Feed Threads | Feed Rate (trades / sec) | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) |
+|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------------------:|
+||||||
+
+- **num_worker_threads=6**
+
+| # of Feed Threads | Feed Rate (trades / sec) | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) |
+|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------------------:|
+||||||
 
 ---
 
