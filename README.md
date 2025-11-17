@@ -576,12 +576,6 @@ For detailed architecture documentation, see inline comments in `src/`.
   -d 100          `# 100μs delay between queries`
 ```
 
-**HTAP Benchmark Phases**:
-- Phase 1 (0-30s): OLTP only (baseline)
-- Phase 2 (30-60s): OLTP + Light OLAP (2 readers)
-- Phase 3 (60-90s): OLTP + Heavy OLAP (8 readers)
-- Phase 4 (90-120s): OLTP only (recovery)
-
 See `benchmark/` directory for source code and detailed documentation.
 
 ### In-depth Analysis 
