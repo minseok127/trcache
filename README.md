@@ -221,7 +221,6 @@ trcache_destroy(cache);
 - **SIMD Optimization**: 
   - Column batches aligned to 64 bytes
   - Contiguous memory layout for vectorized analytics
-  - Base fields (key, is_closed) always present for fast filtering
 
 For detailed architecture documentation, see inline comments in `src/`.
 
