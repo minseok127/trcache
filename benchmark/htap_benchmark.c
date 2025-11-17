@@ -59,10 +59,10 @@ struct phase_config {
 };
 
 static struct phase_config g_phases[] = {
-	{PHASE_OLTP_ONLY_BASELINE, 30, 0, "OLTP-Only (Baseline)"},
-	{PHASE_OLTP_LIGHT_OLAP, 30, 2, "OLTP + Light OLAP"},
-	{PHASE_OLTP_HEAVY_OLAP, 30, 8, "OLTP + Heavy OLAP"},
-	{PHASE_OLTP_ONLY_RECOVERY, 30, 0, "OLTP-Only (Recovery)"}
+	{PHASE_OLTP_ONLY_BASELINE, 600, 0, "OLTP-Only (Baseline)"},
+	{PHASE_OLTP_LIGHT_OLAP, 600, 1, "OLTP + Light OLAP"},
+	{PHASE_OLTP_HEAVY_OLAP, 600, 8, "OLTP + Heavy OLAP"},
+	{PHASE_OLTP_ONLY_RECOVERY, 600, 0, "OLTP-Only (Recovery)"}
 };
 
 #define NUM_PHASES (sizeof(g_phases) / sizeof(g_phases[0]))
@@ -113,6 +113,17 @@ struct reader_state {
 	int thread_idx;
 };
 
+/**
+ * @brief Holds accumulated stats for a single phase for the final summary.
+ */
+struct phase_summary_stats {
+	uint64_t total_feed_per_sec;
+	double total_mean_lat_ns;
+	double total_p50_lat_ns;
+	double total_p99_lat_ns;
+	int sample_count; /* Number of seconds (samples) recorded */
+};
+
 /* Global State */
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
@@ -124,6 +135,9 @@ static struct padded_counter *g_feed_counters = NULL;
 static struct reader_state *g_reader_states = NULL;
 static int g_max_readers = 0;
 static _Atomic int g_current_phase = PHASE_OLTP_ONLY_BASELINE;
+
+/* Holds the summary data for each phase, initialized to zero in main() */
+static struct phase_summary_stats g_phase_summary[NUM_PHASES];
 
 /* Candle callbacks (same as static_read_benchmark) */
 static void candle_init_tick(struct trcache_candle_base *c,
@@ -543,6 +557,15 @@ static void* monitor_thread_main(void *arg)
 			p50_lat_ns,
 			p99_lat_ns);
 
+		/* Accumulate stats for the final summary */
+		if (current_phase_idx < (int)NUM_PHASES) {
+			g_phase_summary[current_phase_idx].total_feed_per_sec += feed_per_sec;
+			g_phase_summary[current_phase_idx].total_mean_lat_ns += mean_lat_ns;
+			g_phase_summary[current_phase_idx].total_p50_lat_ns += p50_lat_ns;
+			g_phase_summary[current_phase_idx].total_p99_lat_ns += p99_lat_ns;
+			g_phase_summary[current_phase_idx].sample_count++;
+		}
+
 		if (merged_hist) hdr_histogram_close(merged_hist);
 
 		prev_feed_count = curr_feed_count;
@@ -556,6 +579,42 @@ static void* monitor_thread_main(void *arg)
 		g_csv_file = NULL;
 	}
 	return NULL;
+}
+
+/**
+ * @brief Prints the final summary table of averages per phase.
+ */
+static void print_final_summary(void)
+{
+	printf("\n==> Final Benchmark Summary (Averages per Phase):\n");
+	printf("=======================================================================================================\n");
+	printf("| %-25s | Avg. Feed/sec | Avg. Latency (Mean) | Avg. Latency (P50) | Avg. Latency (P99) |\n", "Phase Name");
+	printf("|---------------------------|---------------|---------------------|--------------------|--------------------|\n");
+
+	for (size_t i = 0; i < NUM_PHASES; i++) {
+		const char *phase_name = g_phases[i].name;
+		struct phase_summary_stats *stats = &g_phase_summary[i];
+		
+		if (stats->sample_count == 0) {
+			/* This phase didn't run or recorded no samples */
+			printf("| %-25s | %13s | %19s | %18s | %18s |\n",
+				   phase_name, "N/A", "N/A", "N/A", "N/A");
+			continue;
+		}
+
+		double avg_feed = (double)stats->total_feed_per_sec / stats->sample_count;
+		double avg_mean_lat = stats->total_mean_lat_ns / stats->sample_count;
+		double avg_p50_lat = stats->total_p50_lat_ns / stats->sample_count;
+		double avg_p99_lat = stats->total_p99_lat_ns / stats->sample_count;
+
+		printf("| %-25s | %13.0f | %18.0f ns | %17.0f ns | %17.0f ns |\n",
+			   phase_name,
+			   avg_feed,
+			   avg_mean_lat,
+			   avg_p50_lat,
+			   avg_p99_lat);
+	}
+	printf("=======================================================================================================\n");
 }
 
 static int initialize_trcache(void)
@@ -698,6 +757,9 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
+	/* Initialize phase summary stats */
+	memset(g_phase_summary, 0, sizeof(g_phase_summary));
+
 	/* Find max readers needed across all phases */
 	g_max_readers = 0;
 	for (size_t i = 0; i < NUM_PHASES; i++) {
@@ -810,6 +872,9 @@ int main(int argc, char **argv)
 		pthread_join(g_reader_states[i].thread, NULL);
 	}
 	printf("All reader threads joined.\n");
+
+	/* Print the final summary table */
+	print_final_summary();
 
 cleanup:
 	printf("Cleaning up resources...\n");
