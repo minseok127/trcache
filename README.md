@@ -211,7 +211,7 @@ trcache_destroy(cache);
 - **Memory Management**: 
   - Grace-period reclamation for chunks/pages
   - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
-  - Admin thread aggregates distributed counters and updates global pressure flag
+  - Admin thread aggregates distributed memory tracking counters and updates global pressure flag
 
 - **Adaptive Scheduling**: 
   - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage)
