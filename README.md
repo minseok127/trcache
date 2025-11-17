@@ -202,12 +202,28 @@ trcache_destroy(cache);
 
 3. **FLUSH**: When the number of unflushed batches exceeds a threshold, a worker invokes user-provided callbacks to persist data (supports both sync and async I/O).
 
-### Concurrency Model
+### Implementation Highlights
 
-- **Lock-Free Reads**: Queries use `atomsnap` (RCU-like snapshots) to read stable data without blocking writers
-- **Memory Reclamation**: Grace-period mechanism ensures chunks are freed only after all readers finish
-- **Object Pooling**: `scalable_queue` provides per-thread memory pools with pressure-aware recycling
-- **Adaptive Scheduling**: Admin thread calculates EMA cycle costs per stage and dynamically assigns workers to balance load
+- **Lock-Free Primitives**: 
+  - `atomsnap`: Custom RCU-like mechanism for atomic pointer snapshots with grace-period reclamation
+  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations
+
+- **Memory Management**: 
+  - Grace-period reclamation for chunks/pages
+  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
+  - Admin thread aggregates distributed counters and updates global pressure flag
+
+- **Adaptive Scheduling**: 
+  - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage)
+  - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand
+  - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership)
+
+- **SIMD Optimization**: 
+  - Column batches aligned to 64 bytes
+  - Contiguous memory layout for vectorized analytics
+  - Base fields (key, is_closed) always present for fast filtering
+
+For detailed architecture documentation, see inline comments in `src/`.
 
 ---
 
@@ -519,31 +535,6 @@ Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
 // If field_definitions[5] is volume:
 double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
 ```
-
----
-
-## Implementation Highlights
-
-- **Lock-Free Primitives**: 
-  - `atomsnap`: Custom RCU-like mechanism for atomic pointer snapshots with grace-period reclamation
-  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations
-
-- **Memory Management**: 
-  - Grace-period reclamation for chunks/pages
-  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
-  - Admin thread aggregates distributed counters and updates global pressure flag
-
-- **Adaptive Scheduling**: 
-  - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage)
-  - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand
-  - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership)
-
-- **SIMD Optimization**: 
-  - Column batches aligned to 64 bytes
-  - Contiguous memory layout for vectorized analytics
-  - Base fields (key, is_closed) always present for fast filtering
-
-For detailed architecture documentation, see inline comments in `src/`.
 
 ---
 
