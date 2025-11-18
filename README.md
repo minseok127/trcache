@@ -27,7 +27,11 @@ Measured under the following configuration:
 - Distribution: Zipf (s=0.99)
 - Memory Limit: 5GB
 
-† *This performance assumes that network/frontend provides trades **as fast as possible** via direct function call.*
+† *This benchmark represents a **stress test scenario** where the feed threads
+push trades via direct function calls at maximum rate, **with no network I/O 
+overhead or rate limiting**. In production environments with network-based feeds, 
+the sustained ingestion rate will be constrained by network throughput rather 
+than trcache's processing capacity.*
 
 ### Write Throughput (1 feed thread, no concurrent readers)
 
