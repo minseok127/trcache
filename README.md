@@ -24,7 +24,7 @@ Measured under the following configuration:
 - CPU: Intel Core i5-13400F (16 cores)
 - RAM: 16GB DDR5 5600MHz
 - Symbols: 1,024
-- Distribution: Zipf (s=0.99) - realistic skewed workload
+- Distribution: Zipf (s=0.99)
 - Memory Limit: 5GB
 
 † *This performance assumes that network/frontend provides trades **as fast as possible** via direct function call.*
