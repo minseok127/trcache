@@ -576,10 +576,4 @@ double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
 
 See `benchmark/` directory for source code and detailed documentation.
 
-### In-depth Analysis 
-
----
-
-## Real-World Operational Results
-
 ---
