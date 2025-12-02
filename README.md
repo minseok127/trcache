@@ -18,8 +18,6 @@
 
 ## Performance Characteristics
 
-> *For detailed benchmark results and in-depth analysis, please see the Benchmark & Analysis section below.*
-
 Measured under the following configuration:
 - CPU: Intel Core i5-13400F (16 cores)
 - RAM: 16GB DDR5 5600MHz
