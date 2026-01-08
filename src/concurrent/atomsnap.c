@@ -362,7 +362,7 @@ static void global_init_routine(void)
  */
 static inline struct thread_context *get_or_init_thread_context(void)
 {
-	struct thread_context *ctx;
+	struct thread_context *ctx = NULL;
 
 	pthread_once(&g_init_once, global_init_routine);
 
