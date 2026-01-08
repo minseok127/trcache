@@ -208,6 +208,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	chunk->trc = trc;
 	chunk->chunk_pool = chunk_pool;
 	chunk->row_page_pool = row_page_pool;
+	chunk->row_page_count = row_page_count;
 	chunk->column_batch->symbol_id = symbol_id;
 	chunk->column_batch->candle_idx = candle_idx;
 
@@ -255,6 +256,13 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 
 	if (chunk == NULL) {
 		return;
+	}
+
+	/*
+	 * Explicitly release all row page versions to trigger their cleanup.
+	 */
+	for (int i = 0; i < chunk->row_page_count; i++) {
+		atomsnap_exchange_version_slot(chunk->row_gate, i, NULL);
 	}
 
 	trc = chunk->trc;

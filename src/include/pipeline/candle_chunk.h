@@ -58,6 +58,7 @@ struct candle_row_page {
  * @row_page_pool:        Pointer to the scq pool for row pages.
  * @chunk_mem_size:       Memory size of (this chunk + its column_batch).
  * @row_page_mem_size:    Memory size of one candle_row_page.
+ * @row_page_count:       Number of row pages per chunk.
  *
  * This structure is a linked list node of #candle_chunk_list. A Chunk holds
  * row-based candles initially, then converts them into columnar format for
@@ -116,6 +117,7 @@ struct candle_chunk {
 	struct scalable_queue *row_page_pool;
 	size_t chunk_mem_size;
 	size_t row_page_mem_size;
+	int row_page_count;
 
 } ____cacheline_aligned;
 
