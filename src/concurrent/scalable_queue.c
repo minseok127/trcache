@@ -358,9 +358,9 @@ static void scq_tls_destructor(void *arg)
  * @brief   Gets or initializes the scq_tls_data for the current thread.
  *
  * This function handles all registration scenarios:
- * 1. Fast O(1) re-registration (for paused threads).
- * 2. Lock-free O(N) slot reuse (for new threads recycling old slots).
- * 3. Lock-free O(1) new slot allocation (for new threads).
+ * 1. Fast re-registration (for paused threads).
+ * 2. Slot reuse (for new threads recycling old slots).
+ * 3. New slot allocation (for new threads).
  *
  * @param   scq: The scalable_queue instance.
  *
@@ -373,6 +373,7 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 	struct scq_tls_data **registrations;
 	struct scq_tls_data *tls_data;
 	int num_threads, my_idx;
+	bool is_new_slot = false;
 
 	/* 1. Get thread-local "registration list" */
 	registrations = (struct scq_tls_data **)pthread_getspecific(g_scq_key);
@@ -391,7 +392,7 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 
 	tls_data = registrations[scq->scq_id];
 
-	/* 2. Case 1: Fast O(1) Path (Already registered) */
+	/* 2. Case 1: Fast Path (Already registered) */
 	if (tls_data != NULL) {
 		if (atomic_load_explicit(&tls_data->is_active,
 				memory_order_acquire) == true) {
@@ -417,7 +418,7 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 	/* 3. Case 2: Slow Path (New Thread) */
 	num_threads = scq->thread_num;
 	
-	/* 3a. [Lock-Free O(N) Slot Reuse] */
+	/* 3a. [Slot Reuse] */
 	for (int i = 0; i < num_threads; i++) {
 		struct scq_tls_data *ptr = atomic_load_explicit(
 			&scq->tls_data_ptr_list[i], memory_order_acquire);
@@ -433,10 +434,9 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 		}
 	}
 
-	/* 3b. [Lock-Free O(1) New Slot Allocation] */
-	my_idx = scq->thread_num++;
+	/* 3b. [New Slot Allocation] */
+	my_idx = num_threads;
 	if (my_idx >= MAX_THREAD_NUM) {
-		scq->thread_num--; /* Rollback */
 		errmsg(stderr, "scq_init: MAX_THREAD_NUM reached\n");
 		pthread_spin_unlock(&scq->spinlock);
 		return NULL;
@@ -445,7 +445,6 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 	ptr_to_use = calloc(1, sizeof(struct scq_tls_data));
 	if (ptr_to_use == NULL) {
 		errmsg(stderr, "Failed to alloc scq_tls_data\n");
-		scq->thread_num--; 
 		pthread_spin_unlock(&scq->spinlock);
 		/* Note: this leaks a slot in thread_num, but is a fatal error */
 		return NULL;
@@ -466,6 +465,8 @@ static struct scq_tls_data *scq_get_or_init_tls_data(
 
 	ptr_to_use->shared_sentinel.next = NULL;
 	ptr_to_use->shared_tail = &ptr_to_use->shared_sentinel;
+
+	is_new_slot = true;
 	
 	atomic_store_explicit(&scq->tls_data_ptr_list[my_idx], ptr_to_use,
 		memory_order_release);
@@ -488,6 +489,11 @@ slot_acquired:
 	ptr_to_use->scq_id = scq->scq_id;
 
 	registrations[scq->scq_id] = ptr_to_use; /* Register in thread-local list */
+
+	if (is_new_slot) {
+		atomic_store_explicit(&scq->thread_num, num_threads + 1,
+			memory_order_release);
+	}
 
 	pthread_spin_unlock(&scq->spinlock);
 
@@ -691,7 +697,10 @@ bool scq_dequeue(struct scalable_queue *scq, void **datum)
 
 	for (int i = 0; i < scq->thread_num; i++ ) {
 		thread_idx = (tls_data->last_dequeued_thread_idx + i) % scq->thread_num;
-		tls_data_enq_thread = scq->tls_data_ptr_list[thread_idx];
+		tls_data_enq_thread = atomic_load_explicit(
+			&scq->tls_data_ptr_list[thread_idx], memory_order_acquire);
+
+		assert(tls_data_enq_thread != NULL);
 
 		if (tls_data_enq_thread->shared_sentinel.next == NULL) {
 			continue;
