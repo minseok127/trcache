@@ -34,7 +34,6 @@
  * range of the linked list.
  */
 struct candle_chunk_list_head_version {
-	struct atomsnap_version *snap_version;
 	struct candle_chunk_list_head_version *head_version_prev;
 	struct candle_chunk_list_head_version *head_version_next;
 	struct candle_chunk *tail_node;

@@ -60,92 +60,74 @@ static size_t calculate_batch_total_size(struct trcache *trc,
 }
 
 /**
- * @brief   Allocate an atomsnap_version and its owned candle row page.
+ * @brief   Allocate a candle row page object.
  *
- * @param   arg: A pointer to the parent #candle_chunk struct.
+ * @param   chunk: Pointer to the parent #candle_chunk struct.
  *
- * The returned version already contains a zero‑initialized, 64‑byte‑aligned
- * row page in its @object field.
+ * The returned pointer is a zero‑initialized, 64‑byte‑aligned row page.
  *
- * @return  Pointer to version, or NULL on failure.
+ * @return  Pointer to candle_row_page, or NULL on failure.
  */
-static struct atomsnap_version *row_page_version_alloc(void *arg)
+static struct candle_row_page *alloc_row_page_object(struct candle_chunk *chunk)
 {
-	struct candle_chunk *chunk = (struct candle_chunk *)arg;
 	struct scalable_queue *row_page_pool = chunk->row_page_pool;
-	struct atomsnap_version *version  = NULL;
 	struct candle_row_page *row_page = NULL;
 
 	/* 1. Try to get from pool */
-	scq_dequeue(row_page_pool, (void **)&version);
+	scq_dequeue(row_page_pool, (void **)&row_page);
 
 	/* 2. Pool empty or memory pressure, allocate new one */
-	if (version == NULL) {
-		version = malloc(sizeof(struct atomsnap_version));
-		if (version == NULL) {
-			errmsg(stderr, "#atomsnap_version allocation failed\n");
-			return NULL;
-		}
-
+	if (row_page == NULL) {
 		row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, chunk->row_page_mem_size);
 		if (row_page == NULL) {
 			errmsg(stderr, "#candle_row_page allocation failed\n");
-			free(version);
 			return NULL;
 		}
 
-		/* Track memory for the new page */
+		/*
+		 * Track memory for the new page.
+		 */
 		mem_add_atomic(&row_page_pool->object_memory_usage.value,
-			sizeof(struct atomsnap_version) + chunk->row_page_mem_size);
-
-		version->object = row_page;
-	} else {
-		row_page = (struct candle_row_page *)version->object;
+			chunk->row_page_mem_size);
 	}
 
 	memset(row_page, 0, sizeof(struct candle_row_page));
 	row_page->pool = row_page_pool;
-	version->free_context = arg;
 
-	return version;
+	return row_page;
 }
 
 /**
- * @brief   Final cleanup for a row page version.
+ * @brief   Final cleanup for a row page object.
  *
- * @param   version: Pointer to the atomsnap_version
+ * @param   object:       Pointer to the #candle_row_page.
+ * @param   free_context: Pointer to the #candle_chunk.
  *
- * Called by the last thread to release its reference to the version.
+ * Called by atomsnap when the reference count drops to zero.
  */
-static void row_page_version_free(struct atomsnap_version *version)
+static void free_row_page_object(void *object, void *free_context)
 {
-	struct candle_chunk *chunk;
-	struct trcache *trc;
-	struct scalable_queue *row_page_pool;
-	struct candle_row_page *row_page;
+	struct candle_chunk *chunk = (struct candle_chunk *)free_context;
+	struct trcache *trc = chunk->trc;
+	struct candle_row_page *row_page = (struct candle_row_page *)object;
+	struct scalable_queue *row_page_pool = row_page->pool;
 	bool memory_pressure;
 
-	if (version == NULL) {
+	if (row_page == NULL) {
 		return;
 	}
-
-	chunk = (struct candle_chunk *)version->free_context;
-	trc = chunk->trc;
-	row_page = (struct candle_row_page *)version->object;
-	row_page_pool = row_page->pool;
 
 	memory_pressure = atomic_load_explicit(
 		&trc->mem_acc.memory_pressure, memory_order_acquire);
 
 	if (memory_pressure) {
-		/* Free the bundle and update object memory tracking */
+		/* Free the page and update object memory tracking */
 		mem_sub_atomic(&row_page_pool->object_memory_usage.value,
-			sizeof(struct atomsnap_version) + chunk->row_page_mem_size);
+			chunk->row_page_mem_size);
 		free(row_page);
-		free(version);
 	} else {
-		/* Return the version (which points to the page) to the pool */
-		scq_enqueue(row_page_pool, version);
+		/* Return the page to the pool */
+		scq_enqueue(row_page_pool, row_page);
 	}
 }
 
@@ -168,8 +150,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 {
 	struct candle_chunk *chunk = NULL;
 	struct atomsnap_init_context ctx = {
-		.atomsnap_alloc_impl = row_page_version_alloc,
-		.atomsnap_free_impl = row_page_version_free,
+		.free_impl = free_row_page_object,
 		.num_extra_control_blocks = row_page_count - 1
 	};
 	size_t batch_total_size = 0;
@@ -308,16 +289,24 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	struct trcache_trade_data *trade, uint64_t *first_key)
 {
 	struct candle_row_page *row_page = NULL;
-	struct atomsnap_version *row_page_version
-		= atomsnap_make_version(chunk->row_gate, (void *)chunk);
+	struct atomsnap_version *row_page_version = NULL;
 	struct trcache_candle_base *first_candle;
 
+	row_page_version = atomsnap_make_version(chunk->row_gate);
 	if (row_page_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return -1;
 	}
 
-	row_page = (struct candle_row_page *)row_page_version->object;
+	row_page = alloc_row_page_object(chunk);
+	if (row_page == NULL) {
+		errmsg(stderr, "Failure on alloc_row_page_object()\n");
+		atomsnap_free_version(row_page_version);
+		return -1;
+	}
+
+	atomsnap_set_object(row_page_version, row_page, chunk);
+
 	first_candle = (struct trcache_candle_base *)row_page->data;
 
 	/*
@@ -416,7 +405,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	struct atomsnap_version *page_version
 		= atomsnap_acquire_version_slot(chunk->row_gate, cur_page_idx);
 	struct candle_row_page *page
-		= (struct candle_row_page *)page_version->object;
+		= (struct candle_row_page *)atomsnap_get_object(page_version);
 
 	for (int idx = start_idx; idx <= end_idx; idx++) {
 		int next_page_idx = candle_chunk_calc_page_idx(idx);
@@ -434,7 +423,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 			page_version = atomsnap_acquire_version_slot(
 				chunk->row_gate, cur_page_idx);
-			page = (struct candle_row_page *)page_version->object;
+			page = (struct candle_row_page *)atomsnap_get_object(page_version);
 		}
 
 		char *src_candle_base = page->data +
@@ -575,7 +564,7 @@ int candle_chunk_copy_mutable_row(struct candle_chunk *chunk,
 		return 0;
 	}
 
-	row_page = (struct candle_row_page *)page_version->object;
+	row_page = (struct candle_row_page *)atomsnap_get_object(page_version);
 	row_idx = candle_chunk_calc_row_idx(idx);
 
 	src_candle_base = row_page->data + (row_idx * config->user_candle_size);
@@ -627,7 +616,7 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 		return 0;
 	}
 
-	row_page = (struct candle_row_page *)page_version->object;
+	row_page = (struct candle_row_page *)atomsnap_get_object(page_version);
 
 	for (int idx = end_idx; idx >= start_idx; idx--) {
 		next_page_idx = candle_chunk_calc_page_idx(idx);
@@ -642,7 +631,8 @@ int candle_chunk_copy_rows_until_converted(struct candle_chunk *chunk,
 				return num_copied;
 			}
 
-			row_page = (struct candle_row_page *)page_version->object;
+			row_page = (struct candle_row_page *)
+				atomsnap_get_object(page_version);
 		}
 
 		row_idx = candle_chunk_calc_row_idx(idx);

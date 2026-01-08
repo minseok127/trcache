@@ -18,56 +18,40 @@
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
 
-/*
- * Bundle of head version structs for object pooling.
- * This combines the atomsnap struct and the head_version struct
- * into a single allocation unit that can be pooled.
- */
-struct trcache_head_version_bundle {
-	struct atomsnap_version snap_version;
-	struct candle_chunk_list_head_version head_version;
-};
-
 /**
- * @brief   Allocate an candle chunk list's head version.
+ * @brief   Allocate an candle chunk list's head version object.
  *
  * @param   chunk_list: #candle_chunk_list pointer.
  *
- * @return  Pointer to #atomsnap_version, or NULL on failure.
+ * @return  Pointer to #candle_chunk_list_head_version, or NULL on failure.
  */
-static struct atomsnap_version *candle_chunk_list_head_alloc(
-	void *chunk_list)
+static struct candle_chunk_list_head_version *alloc_head_version_object(
+	struct candle_chunk_list *list)
 {
-	struct candle_chunk_list *list = (struct candle_chunk_list *)chunk_list;
 	struct trcache *trc = list->trc;
-	struct trcache_head_version_bundle *bundle = NULL;
-	size_t bundle_size = sizeof(struct trcache_head_version_bundle);
+	struct candle_chunk_list_head_version *head_ver = NULL;
+	size_t size = sizeof(struct candle_chunk_list_head_version);
 
 	/* 1. Try to get from pool */
-	scq_dequeue(trc->head_version_pool, (void **)&bundle);
+	scq_dequeue(trc->head_version_pool, (void **)&head_ver);
 
 	/* 2. Pool empty or memory pressure, allocate new one */
-	if (bundle == NULL) {
-		bundle = malloc(bundle_size);
-		if (bundle == NULL) {
-			errmsg(stderr, "#trcache_head_version_bundle alloc failed\n");
+	if (head_ver == NULL) {
+		head_ver = malloc(size);
+		if (head_ver == NULL) {
+			errmsg(stderr, "#candle_chunk_list_head_version alloc failed\n");
 			return NULL;
 		}
 
-		/* Track memory for the new bundle */
+		/* Track memory for the new object */
 		mem_add_atomic(&trc->head_version_pool->object_memory_usage.value,
-			bundle_size);
+			size);
 	}
 
 	/* 3. Initialize and return */
-	memset(&bundle->head_version, 0,
-		sizeof(struct candle_chunk_list_head_version));
+	memset(head_ver, 0, size);
 	
-	bundle->head_version.snap_version = &bundle->snap_version;
-	bundle->snap_version.object = (void *)&bundle->head_version;
-	bundle->snap_version.free_context = chunk_list;
-
-	return &bundle->snap_version;
+	return head_ver;
 }
 
 #define HEAD_VERSION_RELEASE_MASK (0x8000000000000000ULL)
@@ -75,7 +59,8 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
 /**
  * @brief   Frees the chunks covered by the given head version.
  *
- * @param   version: Version holding the #candle_chunk_list_head_version.
+ * @param   object:       The #candle_chunk_list_head_version object.
+ * @param   free_context: The #candle_chunk_list pointer.
  *
  * This function implements a "chain-freeing" mechanism. When a head version
  * is freed, it checks if it's the current end of the retired list (i.e., its
@@ -91,19 +76,17 @@ static struct atomsnap_version *candle_chunk_list_head_alloc(
  * This ensures that only one thread can successfully claim the responsibility
  * for freeing a subsequent version in the chain, preventing double-frees.
  */
-static void candle_chunk_list_head_free(struct atomsnap_version *version)
+static void candle_chunk_list_head_free(void *object, void *free_context)
 {
 	struct candle_chunk_list *chunk_list
-		= (struct candle_chunk_list *)version->free_context;
+		= (struct candle_chunk_list *)free_context;
 	struct trcache *trc = chunk_list->trc;
 	struct candle_chunk_index *chunk_index = chunk_list->chunk_index;
 	struct candle_chunk_list_head_version *head_version
-		= (struct candle_chunk_list_head_version *)version->object;
+		= (struct candle_chunk_list_head_version *)object;
 	struct candle_chunk_list_head_version *next_head_version = NULL;
 	struct candle_chunk_list_head_version *prev_head_version = NULL;
 	struct candle_chunk *prev_chunk = NULL, *chunk = NULL;
-	struct trcache_head_version_bundle *bundle =
-		container_of(version, struct trcache_head_version_bundle, snap_version);
 	bool memory_pressure;
 #ifdef TRCACHE_DEBUG
 	struct candle_chunk *pop_head = NULL; /* debug purpose */
@@ -163,17 +146,17 @@ free_head_version:
 	next_head_version = atomic_load(&head_version->head_version_next);
 
 	/*
-	 * Recycle or free the bundle (atomsnap_version + head_version)
+	 * Recycle or free the head_version.
 	 */
 	memory_pressure = atomic_load_explicit(
 		&trc->mem_acc.memory_pressure, memory_order_acquire);
 	
 	if (memory_pressure) {
 		mem_sub_atomic(&trc->head_version_pool->object_memory_usage.value,
-			sizeof(struct trcache_head_version_bundle));
-		free(bundle);
+			sizeof(struct candle_chunk_list_head_version));
+		free(head_version);
 	} else {
-		scq_enqueue(trc->head_version_pool, bundle);
+		scq_enqueue(trc->head_version_pool, head_version);
 	}
 
 	/*
@@ -211,8 +194,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 {
 	struct candle_chunk_list *list = NULL;
 	struct atomsnap_init_context atomsnap_ctx = {
-		.atomsnap_alloc_impl = candle_chunk_list_head_alloc,
-		.atomsnap_free_impl = candle_chunk_list_head_free,
+		.free_impl = candle_chunk_list_head_free,
 		.num_extra_control_blocks = 0
 	};
 
@@ -298,7 +280,8 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 		return;
 	}
 
-	head_version = (struct candle_chunk_list_head_version *)snap->object;
+	head_version
+		= (struct candle_chunk_list_head_version *)atomsnap_get_object(snap);
 	head_version->tail_node = chunk_list->tail;
 
 	/*
@@ -317,7 +300,12 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 
 	atomsnap_release_version(snap);
 
-	/* This will call candle_chunk_list_head_free() */
+	/* 
+	 * Force release the current version held by the gate.
+	 * This triggers candle_chunk_list_head_free() for the last version.
+	 */
+	atomsnap_exchange_version(chunk_list->head_gate, NULL);
+
 	atomsnap_destroy_gate(chunk_list->head_gate);
 
 	candle_chunk_index_destroy(chunk_list->chunk_index);
@@ -351,15 +339,23 @@ static int init_first_candle(struct candle_chunk_list *list,
 		return -1;
 	}
 
-	head_snap_version
-		= atomsnap_make_version(list->head_gate, (void *)list);
+	head_snap_version = atomsnap_make_version(list->head_gate);
 	if (head_snap_version == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		candle_chunk_destroy(new_chunk);
 		return -1;
 	}
 
-	head = (struct candle_chunk_list_head_version *)head_snap_version->object;
+	head = alloc_head_version_object(list);
+	if (head == NULL) {
+		errmsg(stderr, "Failure on alloc_head_version_object()\n");
+		atomsnap_free_version(head_snap_version);
+		candle_chunk_destroy(new_chunk);
+		return -1;
+	}
+
+	atomsnap_set_object(head_snap_version, head, list);
+
 	head->head_version_prev = NULL;
 	head->head_version_next = NULL;
 	head->tail_node = NULL;
@@ -515,7 +511,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 
 	row_page_version = atomsnap_acquire_version_slot(chunk->row_gate,
 		chunk->mutable_page_idx);
-	row_page = (struct candle_row_page *)row_page_version->object;
+	row_page = (struct candle_row_page *)atomsnap_get_object(row_page_version);
 	candle = (struct trcache_candle_base *)(row_page->data +
 		(chunk->mutable_row_idx * config->user_candle_size));
 
@@ -731,14 +727,24 @@ int candle_chunk_list_flush(struct candle_chunk_list *list)
 		return 0;
 	}
 
-	new_snap = atomsnap_make_version(list->head_gate, (void*)list);
+	new_snap = atomsnap_make_version(list->head_gate);
 	if (new_snap == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
 		return 0;
 	}
 
+	new_ver = alloc_head_version_object(list);
+	if (new_ver == NULL) {
+		errmsg(stderr, "Failure on alloc_head_version_object()\n");
+		atomsnap_free_version(new_snap);
+		return 0;
+	}
+
+	atomsnap_set_object(new_snap, new_ver, list);
+
 	head_snap = atomsnap_acquire_version(list->head_gate);
-	head_version = (struct candle_chunk_list_head_version *)head_snap->object;
+	head_version = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
 
 	/*
 	 * Modifying the head of the list is restricted to a single thread,
@@ -781,8 +787,6 @@ int candle_chunk_list_flush(struct candle_chunk_list *list)
 		memory_order_release);
 
 	/* Change head version */
-	new_ver = (struct candle_chunk_list_head_version *)new_snap->object;
-
 	new_ver->head_version_prev = head_version;
 	new_ver->head_version_next = NULL;
 
@@ -943,7 +947,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		return -1;
 	}
 	
-	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
+	head_ver = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
 	head_chunk = head_ver->head_node;
 
 	if (seq_end + 1 < (uint64_t)count) {
@@ -1023,7 +1028,8 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 		return -1;
 	}
 
-	head_ver = (struct candle_chunk_list_head_version *)head_snap->object;
+	head_ver = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
 	head_chunk = head_ver->head_node;
 
 	/* Search the last chunk after pinning the head */
