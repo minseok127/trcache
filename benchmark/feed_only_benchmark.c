@@ -232,7 +232,6 @@ static bool candle_update_tick_##N(struct trcache_candle_base *c, \
 	candle->trade_count++; \
 	if (candle->trade_count >= N) { \
 		c->is_closed = true; \
-		return false; \
 	} \
 	return true; \
 }
