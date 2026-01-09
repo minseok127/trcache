@@ -516,19 +516,18 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		(chunk->mutable_row_idx * config->user_candle_size));
 
 	/* 
-	 * Attempt to update the current candle. The update callback returns
-	 * true if the trade was consumed by the candle; false if the candle
-	 * is closed and the trade must start a new candle. A spinlock
-	 * protects the update to ensure readers never observe partially
-	 * updated candles.
+	 * Attempt to update the latest candle. The update callback returns
+	 * true if the trade was consumed by the candle.
 	 */
-	pthread_spin_lock(&chunk->spinlock);
-	consumed = ops->update(candle, trade);
-	pthread_spin_unlock(&chunk->spinlock);
+	if (!candle->is_closed) {
+		pthread_spin_lock(&chunk->spinlock);
+		consumed = ops->update(candle, trade);
+		pthread_spin_unlock(&chunk->spinlock);
 
-	if (consumed) {
-		atomsnap_release_version(row_page_version);
-		return 0;
+		if (consumed) {
+			atomsnap_release_version(row_page_version);
+			return 0;
+		}
 	}
 
 	expected_num_completed = atomic_load_explicit(&chunk->num_completed, 
