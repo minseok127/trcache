@@ -295,6 +295,13 @@ bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
 }
 ```
 
+The routing of `trcache_trade_data` to either the `update` or `init` callback is determined by the following cases:
+- **First Trade for a Symbol**: The first trade data received for a given symbol is always routed to the `init` callback.
+- **Update Returns False**: When the `update` callback returns `false`, the trade data is considered not applied to the current candle. This trade data is automatically routed to the `init` callback for the next candle.
+- **Update Returns True**: When the `update` callback returns `true`, the trade data is considered successfully applied to the current candle, and `init` is not invoked. The routing of the next trade data depends on the `is_closed` flag:
+  - If `is_closed` is `true`: The next trade data is automatically routed to `init`
+  - If `is_closed` is `false`: The next trade data is routed to `update`
+
 ### Step 4: Implement Flush Callbacks
 
 #### Synchronous Example
