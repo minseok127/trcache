@@ -130,7 +130,7 @@ void init_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
 bool update_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
     if (d->timestamp >= c->key.timestamp + 60000) {
         c->is_closed = true;
-        return false;  // Start new candle
+        return false;  // This trade will be used in the init_1min_candle()
     }
     MyCandle *candle = (MyCandle *)c;
     double price = d->price.as_double;
@@ -287,11 +287,9 @@ bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
     if (price < candle->low) candle->low = price;
     candle->close = price;
     candle->volume += d->volume.as_double;
-    candle->trade_count++;
     
-    if (candle->trade_count >= 100) {  // 100-tick candle
-        c->is_closed = true;
-        return false;  // Trigger new candle creation
+    if (++candle->trade_count == 100) {  // 100-tick candle
+        c->is_closed = true; // Next trade will be used in the init_tick()
     }
     return true;  // Trade consumed
 }
