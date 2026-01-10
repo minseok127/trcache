@@ -211,11 +211,11 @@ trcache_destroy(cache);
 ### Implementation Highlights
 
 - **Lock-Free Primitives**: 
-  - `atomsnap`: Custom RCU-like mechanism for atomic pointer snapshots with grace-period reclamation
-  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations
+  - `atomsnap`: Custom Copy-on-Write mechanism for atomic pointer snapshots.
+  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations.
 
 - **Memory Management**: 
-  - Grace-period reclamation for chunks/pages
+  - Non-blocking reclamation for chunks/pages
   - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
   - Admin thread aggregates distributed memory tracking counters and updates global pressure flag
 
