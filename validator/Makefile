@@ -1,0 +1,47 @@
+#
+# Validator Build Script
+#
+# Dependencies:
+# - trcache (Local or Installed)
+# - nlohmann/json (Header only)
+# - openssl
+#
+
+# Output Binary
+TARGET = validator_app
+
+# Compiler Settings
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pthread
+CXXFLAGS += -I./core -I./exchanges
+
+# Dependency Paths (Adjust as needed)
+TRCACHE_ROOT = ../trcache
+CXXFLAGS += -I$(TRCACHE_ROOT) -I$(TRCACHE_ROOT)/src/include
+
+# Libraries (Removed -lcurl)
+LDFLAGS = -L$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto
+
+# Source Files
+SRCS = main.cpp \
+       core/config_loader.cpp \
+       core/engine.cpp \
+       core/auditor.cpp \
+       exchanges/binance/binance_client.cpp
+
+# Object Files
+OBJS = $(SRCS:.cpp=.o)
+
+# Build Rules
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+
+.PHONY: all clean
