@@ -16,7 +16,7 @@
 
 ---
 
-## Performance Characteristics
+## Benchmark Stress Test
 
 Measured under the following configuration:
 - CPU: Intel Core i5-13400F (16 cores)
