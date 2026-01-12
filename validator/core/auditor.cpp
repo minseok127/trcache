@@ -260,7 +260,7 @@ void run_auditor(struct trcache* cache,
 
 					/* 2. Tick Count Validation (Requested) */
 					if (is_tick_candle) {
-						if (c_tick_cnt[i] != != candle_cfg.threshold) {
+						if (c_tick_cnt[i] != candle_cfg.threshold) {
 							stats.tick_error_count++;
 							std::cerr << "[Auditor] TICK ERR | Sym: "
 								  << sym_id
