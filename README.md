@@ -24,12 +24,13 @@ Measured under the following configuration:
 - Symbols: 1,024
 - Distribution: Zipf (s=0.99)
 - Memory Limit: 5GB
+- Candle Types: 3-tick candle, 1-minute candle
 
-† *This benchmark represents a **stress test scenario** where the feed threads
+This benchmark represents a **stress test scenario** where the feed threads
 push trades via direct function calls at maximum rate, **with no network I/O 
 overhead or rate limiting**. In production environments with network-based feeds, 
 the sustained ingestion rate will be constrained by network throughput rather 
-than trcache's processing capacity.*
+than trcache's processing capacity.
 
 ### Write Throughput (1 feed thread, 3 worker threads, no concurrent readers)
 
