@@ -7,6 +7,7 @@
  * 2. Optimized SSL Context management (Shared CTX).
  * 3. Robust WebSocket frame parsing.
  * 4. Zero-Copy feed to trcache.
+ * 5. Dynamic URL parsing from configuration.
  */
 
 #include "binance_client.h"
@@ -40,8 +41,6 @@ using json = nlohmann::json;
  */
 
 #define WS_BUFFER_SIZE 65536
-#define BINANCE_WS_HOST "stream.binance.com"
-#define BINANCE_WS_PORT "9443"
 
 enum WSOpcode {
 	WS_OP_CONTINUATION = 0x0,
@@ -51,6 +50,52 @@ enum WSOpcode {
 	WS_OP_PING = 0x9,
 	WS_OP_PONG = 0xA
 };
+
+/*
+ * URL Structure helper
+ */
+struct parsed_url {
+	std::string host;
+	std::string port;
+	std::string path;
+};
+
+/*
+ * parse_ws_url - Simple parser for wss://host:port/path
+ * Defaults: port 443, path /
+ */
+static parsed_url parse_ws_url(const std::string& url)
+{
+	parsed_url res;
+	res.port = "443"; /* Default SSL port */
+	res.path = "/";
+
+	std::string temp = url;
+	
+	/* Remove protocol prefix */
+	const std::string pfx = "wss://";
+	if (temp.find(pfx) == 0) {
+		temp = temp.substr(pfx.length());
+	}
+
+	/* Find Path */
+	size_t slash_pos = temp.find('/');
+	if (slash_pos != std::string::npos) {
+		res.path = temp.substr(slash_pos);
+		temp = temp.substr(0, slash_pos);
+	}
+
+	/* Find Port */
+	size_t colon_pos = temp.find(':');
+	if (colon_pos != std::string::npos) {
+		res.port = temp.substr(colon_pos + 1);
+		res.host = temp.substr(0, colon_pos);
+	} else {
+		res.host = temp;
+	}
+
+	return res;
+}
 
 /*
  * tcp_connect - Thread-safe TCP connection helper using getaddrinfo.
@@ -94,7 +139,6 @@ static int tcp_connect(const char* host, const char* port)
 binance_client::binance_client()
 	: running(false), cache_ref(nullptr)
 {
-	/* OpenSSL auto-initializes in version 3.0+ */
 }
 
 binance_client::~binance_client()
@@ -111,14 +155,19 @@ bool binance_client::init(const struct validator_config& config)
 {
 	this->ws_base_url = config.ws_endpoint;
 
+	if (this->ws_base_url.empty()) {
+		/* Fallback default */
+		this->ws_base_url = "wss://stream.binance.com:9443/ws";
+	}
+
 	if (!config.manual_symbols.empty()) {
 		this->target_symbols = config.manual_symbols;
 	} else {
 		this->target_symbols = {"btcusdt", "ethusdt"};
 	}
 
-	std::cout << "[Binance] Initialized. Targets: "
-		  << this->target_symbols.size() << std::endl;
+	std::cout << "[Binance] Initialized. URL: " << this->ws_base_url
+		  << " Targets: " << this->target_symbols.size() << std::endl;
 	return true;
 }
 
@@ -145,6 +194,11 @@ void binance_client::start_feed(struct trcache* cache)
 		trcache_register_symbol(cache, sym.c_str());
 	}
 
+	/* Parse URL from config */
+	parsed_url p_url = parse_ws_url(this->ws_base_url);
+	std::cout << "[Binance] Connecting to Host: " << p_url.host
+		  << " Port: " << p_url.port << std::endl;
+
 	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
 	if (!ctx) {
 		std::cerr << "[Binance] Fatal: Failed to create SSL Context"
@@ -153,8 +207,8 @@ void binance_client::start_feed(struct trcache* cache)
 	}
 
 	while (this->running) {
-		/* 1. TCP Connect */
-		int sock = tcp_connect(BINANCE_WS_HOST, BINANCE_WS_PORT);
+		/* 1. TCP Connect (Dynamic Host/Port) */
+		int sock = tcp_connect(p_url.host.c_str(), p_url.port.c_str());
 		if (sock < 0) {
 			std::cerr << "[Binance] Connect failed. Retrying..."
 				  << std::endl;
@@ -165,7 +219,8 @@ void binance_client::start_feed(struct trcache* cache)
 		/* 2. SSL Handshake */
 		SSL* ssl = SSL_new(ctx);
 		SSL_set_fd(ssl, sock);
-		SSL_set_tlsext_host_name(ssl, BINANCE_WS_HOST);
+		/* SNI is crucial for Cloudflare/AWS hosted services */
+		SSL_set_tlsext_host_name(ssl, p_url.host.c_str());
 
 		if (SSL_connect(ssl) <= 0) {
 			std::cerr << "[Binance] SSL Handshake failed" << std::endl;
@@ -183,9 +238,10 @@ void binance_client::start_feed(struct trcache* cache)
 			if (i < target_symbols.size() - 1) path += "/";
 		}
 
+		/* Construct HTTP Request using parsed Host */
 		std::string request =
 			"GET " + path + " HTTP/1.1\r\n"
-			"Host: " + BINANCE_WS_HOST + ":" + BINANCE_WS_PORT + "\r\n"
+			"Host: " + p_url.host + ":" + p_url.port + "\r\n"
 			"Upgrade: websocket\r\n"
 			"Connection: Upgrade\r\n"
 			"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
