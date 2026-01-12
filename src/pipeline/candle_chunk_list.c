@@ -928,7 +928,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	struct candle_chunk *head_chunk, *chunk;
 	struct atomsnap_version *head_snap;
 	struct candle_chunk_list_head_version *head_ver;
-	uint64_t seq_start = seq_end - count + 1;
+	uint64_t seq_start, head_seq_first, available;
 	int ret;
 
 	if (dst == NULL || dst->capacity < count) {
@@ -954,25 +954,10 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		atomsnap_get_object(head_snap);
 	head_chunk = head_ver->head_node;
 
-	if (seq_end + 1 < (uint64_t)count) {
-		errmsg(stderr,
-			"Requested too many candles (seq_end=%" PRIu64 ", "
-			"count=%d)\n",
-			seq_end, count);
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
-
-	if (seq_start < head_chunk->seq_first) {
-		errmsg(stderr,
-			"Start sequence number is out of range "
-			"(seq_start=%" PRIu64 ", head_first=%" PRIu64 ")\n",
-			seq_start, head_chunk->seq_first);
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
-	
-	/* Search the last chunk after pinning the head */
+	/*
+	 * Search the last chunk FIRST to ensure seq_end is valid and reachable.
+	 * If seq_end is found, it guarantees seq_end >= head_chunk->seq_first.
+	 */
 	chunk = candle_chunk_index_find_seq(idx, seq_end);
 	if (chunk == NULL) {
 		errmsg(stderr,
@@ -981,6 +966,17 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 		atomsnap_release_version(head_snap);
 		return -1;
 	}
+
+	/* Calculate available candles from the head of the list to seq_end */
+	head_seq_first = head_chunk->seq_first;
+	available = seq_end - head_seq_first + 1;
+
+	/* If requested count exceeds available history, clamp it */
+	if ((uint64_t)count > available) {
+		count = (int)available;
+	}
+
+	seq_start = seq_end - count + 1;
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
 		count, dst, request);
@@ -1011,7 +1007,7 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	struct candle_chunk *head_chunk, *chunk;
 	struct atomsnap_version *head_snap;
 	struct candle_chunk_list_head_version *head_ver;
-	uint64_t seq_start, seq_end;
+	uint64_t seq_start, seq_end, head_seq_first, available;
 	int ret;
 	
 	if (dst == NULL || dst->capacity < count) {
@@ -1024,10 +1020,12 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
+#ifdef TRCACHE_DEBUG
 		errmsg(stderr,
 			"Head of candle chunk list is not yet initialized "
 			"(key=%" PRIu64 ")\n",
 			key);
+#endif /* TRCACHE_DEBUG */
 		return -1;
 	}
 
@@ -1035,7 +1033,7 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 		atomsnap_get_object(head_snap);
 	head_chunk = head_ver->head_node;
 
-	/* Search the last chunk after pinning the head */
+	/* Search the last chunk FIRST */
 	chunk = candle_chunk_index_find_key(idx, key);
 
 	if (chunk == NULL) {
@@ -1048,26 +1046,16 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 
 	seq_end = candle_chunk_calc_seq_by_key(chunk, key);
 
-	if (seq_end + 1 < (uint64_t)count) {
-		errmsg(stderr,
-			"Requested too many candles (seq_end=%" PRIu64 ", "
-			"count=%d)\n",
-			seq_end, count);
-		atomsnap_release_version(head_snap);
-		return -1;
+	/* Calculate available candles from the head of the list to seq_end */
+	head_seq_first = head_chunk->seq_first;
+	available = seq_end - head_seq_first + 1;
+
+	/* If requested count exceeds available history, clamp it */
+	if ((uint64_t)count > available) {
+		count = (int)available;
 	}
 
 	seq_start = seq_end - count + 1;
-	assert(seq_end != UINT64_MAX);
-
-	if (seq_start < head_chunk->seq_first) {
-		errmsg(stderr,
-			"Start sequence number is out of range "
-			"(seq_start=%" PRIu64 ", head_first=%" PRIu64 ")\n",
-			seq_start, head_chunk->seq_first);
-		atomsnap_release_version(head_snap);
-		return -1;
-	}
 
 	ret = candle_chunk_list_copy_backward(list, chunk, seq_start, seq_end,
 		count, dst, request);
