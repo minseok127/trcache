@@ -1,8 +1,8 @@
 {
   "exchange": "binance",
   "target": {
-    "top_n": 20,
-    "manual_symbols": []
+    "top_n": 0,
+    "manual_symbols": ["btcusdt", "ethusdt"]
   },
   "engine": {
     "memory_limit_mb": 2048,
@@ -12,19 +12,14 @@
   },
   "candles": [
     {
-      "name": "1-minute-candle",
-      "type": "TIME_FIXED",
-      "threshold": 60000
-    },
-    {
       "name": "5-tick-candle",
       "type": "TICK_MODULO",
       "threshold": 5
     }
   ],
   "network": {
-    "ws_url": "wss://stream.binance.com:9443/ws",
-    "rest_url": "https://api.binance.com"
+    "ws_url": "wss://fstream.binance.com/ws",
+    "rest_url": "https://fapi.binance.com"
   },
   "options": {
     "note": "Optional: Add API keys here if needed in future"
