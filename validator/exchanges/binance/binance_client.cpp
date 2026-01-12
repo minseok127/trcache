@@ -125,6 +125,14 @@ static int tcp_connect(const char* host, const char* port)
 		if (sock == -1) continue;
 
 		if (::connect(sock, rp->ai_addr, rp->ai_addrlen) != -1) {
+			int flag = 1;
+            int ret = setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, 
+                    			(char *)&flag, sizeof(flag));
+            if (ret == -1) {
+                std::cerr
+					<< "[Binance] Warning: Failed to set TCP_NODELAY" 
+					<< std::endl;
+            }
 			break; /* Success */
 		}
 
