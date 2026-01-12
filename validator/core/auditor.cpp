@@ -270,7 +270,7 @@ void run_auditor(struct trcache* cache,
 					}
 
 					/* 3. Latency Measurement */
-					uint64_t ex_ts_ns = c_ex_ts[i] * 1000000000;
+					uint64_t ex_ts_ns = c_ex_ts[i] * 1000000;
 					double engine_lat = (double)
 						((int64_t)c_loc_ts[i] -
 						 (int64_t)ex_ts_ns);
