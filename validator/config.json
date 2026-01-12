@@ -1,7 +1,7 @@
 {
   "exchange": "binance",
   "target": {
-    "top_n": 1024,
+    "top_n": 10,
     "manual_symbols": []
   },
   "engine": {
@@ -17,9 +17,9 @@
       "threshold": 60000
     },
     {
-      "name": "100-tick-candle",
+      "name": "5-tick-candle",
       "type": "TICK_MODULO",
-      "threshold": 100
+      "threshold": 5
     }
   ],
   "network": {

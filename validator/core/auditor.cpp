@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstring>
 #include <time.h>
+#include <iomanip>
 
 /*
  * --------------------------------------------------------------------------
@@ -27,11 +28,11 @@
  */
 
 struct symbol_cursor {
-	uint64_t next_key;
+	uint64_t last_key;
 	uint64_t last_end_seq_id;
 	bool initialized;
 
-	symbol_cursor() : next_key(0), last_end_seq_id(0), initialized(false) {}
+	symbol_cursor() : last_key(0), last_end_seq_id(0), initialized(false) {}
 };
 
 struct latency_stats {
@@ -82,12 +83,13 @@ struct latency_stats {
 
 		std::cout << "[Auditor] Processed: " << total_candles
 			  << " | Gaps: " << gap_count
-			  << " | Eng Lat(us) Avg: " << (long)eng_avg
-			  << " P99: " << (long)eng_p99
-			  << " Max: " << (long)eng_max
-			  << " | Tot Lat(us) Avg: " << (long)tot_avg
-			  << " P99: " << (long)tot_p99
-			  << " Max: " << (long)tot_max
+			  << std::fixed << std::setprecision(3)
+			  << " | Eng Lat(ms) Avg: " << eng_avg / 1000.0
+			  << " P99: " << eng_p99 / 1000.0
+			  << " Max: " << eng_max / 1000.0
+			  << " | Tot Lat(ms) Avg: " << tot_avg / 1000.0
+			  << " P99: " << tot_p99 / 1000.0
+			  << " Max: " << tot_max / 1000.0
 			  << std::endl;
 
 		engine_samples.clear();
@@ -144,7 +146,8 @@ void run_auditor(struct trcache* cache,
 	/* Allocate Batches (One per config type) */
 	std::vector<trcache_candle_batch*> batches(num_configs);
 	for (int i = 0; i < num_configs; ++i) {
-		batches[i] = trcache_batch_alloc_on_heap(cache, i, 1, &req);
+		/* Allocate enough buffer to fetch multiple candles at once */
+		batches[i] = trcache_batch_alloc_on_heap(cache, i, 32, &req);
 		if (!batches[i]) {
 			std::cerr << "[Auditor] Batch alloc failed for cfg "
 				  << i << std::endl;
@@ -166,43 +169,54 @@ void run_auditor(struct trcache* cache,
 				int idx = (sym_id * num_configs) + cfg_idx;
 				symbol_cursor& cur = cursors[idx];
 				trcache_candle_batch* batch = batches[cfg_idx];
-				int threshold = config.candles[cfg_idx].threshold;
+				
+				/*
+				 * 1. Check the latest candle (Offset 0) first.
+				 * This avoids unnecessary large fetches if nothing changed.
+				 */
+				int ret = trcache_get_candles_by_symbol_id_and_offset(
+						cache, sym_id, cfg_idx, &req, 0, 1, batch);
+				
+				if (ret != 0 || batch->num_candles == 0) {
+					continue;
+				}
 
-				/* Synchronization Step */
+				/*
+				 * trcache batch order is typically Time-Ascending.
+				 * So index 0 is the result of the query (Newest).
+				 */
+				uint64_t latest_key = batch->key_array[0];
+				
+				/* Initialization */
 				if (!cur.initialized) {
-					int ret =
-					trcache_get_candles_by_symbol_id_and_offset(
-						cache, sym_id, cfg_idx, &req,
-						0, 1, batch);
-					
-					if (ret == 0 && batch->num_candles > 0 &&
-					    batch->is_closed_array[0]) {
-						cur.next_key =
-							batch->key_array[0] +
-							threshold;
+					/* Wait for a closed candle to start tracking */
+					if (batch->is_closed_array[0]) {
 						uint64_t* end_ids = (uint64_t*)
-						batch->column_arrays[VAL_COL_END_SEQ_ID];
+							batch->column_arrays[VAL_COL_END_SEQ_ID];
+						cur.last_key = latest_key;
 						cur.last_end_seq_id = end_ids[0];
 						cur.initialized = true;
 					}
 					continue;
 				}
 
-				/* Sequential Polling Step */
-				int ret =
-				trcache_get_candles_by_symbol_id_and_key(
-					cache, sym_id, cfg_idx, &req,
-					cur.next_key, 1, batch);
-
-				if (ret != 0 || batch->num_candles == 0 ||
-				    !batch->is_closed_array[0]) {
+				/* If no new data, skip */
+				if (latest_key <= cur.last_key) {
 					continue;
 				}
 
-				uint64_t read_ts = get_micros();
-				busy = true;
+				/*
+				 * 2. Fetch recent candles to find what's new.
+				 * We fetch a larger batch (e.g., 32) to cover gaps.
+				 */
+				ret = trcache_get_candles_by_symbol_id_and_offset(
+						cache, sym_id, cfg_idx, &req, 0, 32, batch);
+				
+				if (ret != 0 || batch->num_candles == 0) continue;
 
-				/* Extract Column Data */
+				uint64_t read_ts = get_micros();
+				
+				/* Extract Column Arrays */
 				uint64_t* c_ex_ts = (uint64_t*)
 					batch->column_arrays[VAL_COL_EXCHANGE_TS];
 				uint64_t* c_loc_ts = (uint64_t*)
@@ -212,26 +226,40 @@ void run_auditor(struct trcache* cache,
 				uint64_t* c_end = (uint64_t*)
 					batch->column_arrays[VAL_COL_END_SEQ_ID];
 
-				/* 1. Gap Detection */
-				if (c_start[0] != cur.last_end_seq_id + 1) {
-					stats.gap_count++;
+				/* Iterate through batch (Oldest -> Newest) */
+				for (int i = 0; i < batch->num_candles; ++i) {
+					/* Skip incomplete (open) candles */
+					if (!batch->is_closed_array[i]) continue;
+
+					/* Skip already processed candles */
+					if (batch->key_array[i] <= cur.last_key) continue;
+
+					busy = true;
+
+					/* 1. Gap Detection */
+					if (c_start[i] != cur.last_end_seq_id + 1) {
+						stats.gap_count++;
+					}
+
+					/* 2. Latency Measurement */
+					double engine_lat = 0;
+					double total_lat = 0;
+					
+					/* Convert exchange ts (ms) to micros */
+					uint64_t ex_ts_us = c_ex_ts[i] * 1000;
+
+					if (c_loc_ts[i] > ex_ts_us)
+						engine_lat = (double)(c_loc_ts[i] - ex_ts_us);
+					
+					if (read_ts > ex_ts_us)
+						total_lat = (double)(read_ts - ex_ts_us);
+
+					stats.add(engine_lat, total_lat);
+
+					/* Update Cursor */
+					cur.last_key = batch->key_array[i];
+					cur.last_end_seq_id = c_end[i];
 				}
-
-				/* 2. Latency Measurement */
-				double engine_lat = 0;
-				double total_lat = 0;
-				if (c_loc_ts[0] > c_ex_ts[0])
-					engine_lat = (double)(c_loc_ts[0] -
-							      c_ex_ts[0]);
-				if (read_ts > c_ex_ts[0])
-					total_lat = (double)(read_ts -
-							     c_ex_ts[0]);
-				
-				stats.add(engine_lat, total_lat);
-
-				/* Update State */
-				cur.last_end_seq_id = c_end[0];
-				cur.next_key += threshold;
 			}
 		}
 
