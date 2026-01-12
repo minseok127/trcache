@@ -31,18 +31,18 @@ overhead or rate limiting**. In production environments with network-based feeds
 the sustained ingestion rate will be constrained by network throughput rather 
 than trcache's processing capacity.*
 
-### Write Throughput (1 feed thread, no concurrent readers)
+### Write Throughput (1 feed thread, 3 worker threads, no concurrent readers)
 
 - **Feed Rate**: `15,485,115` trades/sec
 
-### Query Latency (10,000 candles, 1 reader, requiring 3 fields):
+### Query Latency: 10k Candles (3 Fields, Single Reader):
 
 - **Static Read** (no concurrent writes):
   - P50: `6.2` μs
   - P99: `9.18` μs
   - Mean: `6.4` μs
 
-- **Concurrent Read** (concurrent feed rate: `14,869,372` trades/sec):
+- **Concurrent Read** (1 feed thread, 3 worker threads):
   - P50: `25.5` μs
   - P99: `56.4` μs
   - Mean: `27.4` μs
