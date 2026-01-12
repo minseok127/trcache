@@ -519,9 +519,15 @@ void binance_client::parse_and_feed(const char* json_str, size_t len)
 		trade.price.as_double = price;
 		trade.volume.as_double = vol;
 
-		trcache_feed_trade_data(this->cache_ref, &trade, sym_id);
+		if (trcache_feed_trade_data(this->cache_ref, &trade, sym_id) != 0) {
+			std::cerr 
+				<< "[Binance] trcache_feed_trade_data() is failed"
+				<< std::endl;
+		}
 
-	} catch (...) {
-		/* Ignore parse errors */
-	}
+	} catch (const std::exception& e) {
+        std::cerr << "[Binance] Parse Error: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[Binance] Unknown Parse Error (Silent Drop)" << std::endl;
+    }
 }

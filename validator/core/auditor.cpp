@@ -247,6 +247,13 @@ void run_auditor(struct trcache* cache,
 					/* 1. Gap Detection */
 					if (c_start[i] != cur.last_end_seq_id + 1) {
 						stats.gap_count++;
+
+						std::cerr << "[Auditor] GAP | Sym: " << sym_id
+							  << " | Exp: " << (cur.last_end_seq_id + 1)
+							  << " | Act: " << c_start[i]
+							  << " | Diff: " 
+							  << (c_start[i] - (cur.last_end_seq_id + 1))
+							  << std::endl;
 					}
 
 					/* 2. Latency Measurement */
