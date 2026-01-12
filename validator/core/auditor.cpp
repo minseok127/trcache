@@ -98,6 +98,7 @@ struct latency_stats {
 		engine_samples.reserve(4096);
 		audit_samples.reserve(4096);
 		total_candles = 0;
+		gap_count = 0;
 	}
 };
 
