@@ -939,10 +939,12 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
+#ifdef TRCACHE_DEBUG
 		errmsg(stderr,
 			"Head of candle chunk list is not yet initialized "
 			"(seq_end=%" PRIu64 ")(symbol_id=%" PRIu32 ")\n",
 			seq_end, list->symbol_id);
+#endif /* TRCACHE_DEBUG */
 		return -1;
 	}
 	
