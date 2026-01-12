@@ -1,10 +1,10 @@
-#
 # Validator Build Script
 #
 # Dependencies:
 # - trcache (Local or Installed)
 # - nlohmann/json (Header only)
 # - openssl
+# - libcurl
 #
 
 # Output Binary
@@ -19,8 +19,8 @@ CXXFLAGS += -I./core -I./exchanges
 TRCACHE_ROOT = ../trcache
 CXXFLAGS += -I$(TRCACHE_ROOT) -I$(TRCACHE_ROOT)/src/include
 
-# Libraries (Removed -lcurl)
-LDFLAGS = -L$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto
+# Libraries
+LDFLAGS = -L$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto -lcurl
 
 # Source Files
 SRCS = main.cpp \

@@ -36,6 +36,11 @@ private:
 	/* Internal Helpers */
 	void ws_loop_impl(void* ssl_ptr, std::string& leftover);
 	void parse_and_feed(const char* json_str, size_t len);
+
+	/*
+	 * Fetches all tickers, sorts by quote volume, and picks top N.
+	 */
+	bool fetch_top_symbols(int n, const std::string& rest_url);
 };
 
 #endif /* VALIDATOR_EXCHANGES_BINANCE_BINANCE_CLIENT_H */

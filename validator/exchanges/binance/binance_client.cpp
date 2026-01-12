@@ -8,6 +8,7 @@
  * 3. Robust WebSocket frame parsing.
  * 4. Zero-Copy feed to trcache.
  * 5. Dynamic URL parsing from configuration.
+ * 6. Automatic top-N symbol fetching via REST API.
  */
 
 #include "binance_client.h"
@@ -24,6 +25,9 @@
 #include <netinet/tcp.h>
 #include <thread>
 #include <chrono>
+
+/* HTTP Request */
+#include <curl/curl.h>
 
 /* OpenSSL Headers */
 #include <openssl/ssl.h>
@@ -131,6 +135,16 @@ static int tcp_connect(const char* host, const char* port)
 	return sock;
 }
 
+/*
+ * curl_write_cb - Callback for libcurl to write data into a string.
+ */
+static size_t curl_write_cb(void* contents, size_t size, size_t nmemb,
+			    void* userp)
+{
+	((std::string*)userp)->append((char*)contents, size * nmemb);
+	return size * nmemb;
+}
+
 /* --------------------------------------------------------------------------
  * Constructor / Destructor
  * --------------------------------------------------------------------------
@@ -160,14 +174,106 @@ bool binance_client::init(const struct validator_config& config)
 		this->ws_base_url = "wss://stream.binance.com:9443/ws";
 	}
 
+	/*
+	 * Priority:
+	 * 1. Manual Symbols (if provided in config)
+	 * 2. Top-N Symbols (fetched dynamically)
+	 * 3. Fallback Hardcoded
+	 */
 	if (!config.manual_symbols.empty()) {
 		this->target_symbols = config.manual_symbols;
+	} else if (config.top_n > 0) {
+		std::string rest_url = config.rest_endpoint;
+		if (rest_url.empty()) {
+			rest_url = "https://api.binance.com";
+		}
+		if (!fetch_top_symbols(config.top_n, rest_url)) {
+			std::cerr << "[Binance] Failed to fetch top "
+				  << config.top_n << " symbols." << std::endl;
+			return false;
+		}
 	} else {
 		this->target_symbols = {"btcusdt", "ethusdt"};
 	}
 
 	std::cout << "[Binance] Initialized. URL: " << this->ws_base_url
 		  << " Targets: " << this->target_symbols.size() << std::endl;
+	return true;
+}
+
+/* --------------------------------------------------------------------------
+ * Automatic Symbol Fetching
+ * --------------------------------------------------------------------------
+ */
+
+bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
+{
+	CURL* curl;
+	CURLcode res;
+	std::string read_buffer;
+	std::string url = rest_url + "/api/v3/ticker/24hr";
+
+	curl = curl_easy_init();
+	if (!curl) return false;
+
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &read_buffer);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "validator/1.0");
+
+	std::cout << "[Binance] Fetching market data from " << url << "..."
+		  << std::endl;
+	
+	res = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK) {
+		std::cerr << "[Binance] curl_easy_perform() failed: "
+			  << curl_easy_strerror(res) << std::endl;
+		return false;
+	}
+
+	try {
+		json j = json::parse(read_buffer);
+		if (!j.is_array()) return false;
+
+		/*
+		 * Sort by quoteVolume (descending).
+		 * Binance returns numbers as strings, so we must convert using
+		 * std::stod for correct comparison.
+		 */
+		std::sort(j.begin(), j.end(), 
+			[](const json& a, const json& b) {
+				double v1 = std::stod(
+					a.value("quoteVolume", "0"));
+				double v2 = std::stod(
+					b.value("quoteVolume", "0"));
+				return v1 > v2;
+			}
+		);
+
+		this->target_symbols.clear();
+		int count = 0;
+		for (const auto& item : j) {
+			std::string sym = item["symbol"];
+			/* Store as lowercase to match WS stream convention */
+			std::transform(sym.begin(), sym.end(), sym.begin(),
+				       ::tolower);
+			
+			/* Filter out non-USDT pairs if needed, or take all */
+			if (sym.find("usdt") != std::string::npos) {
+				this->target_symbols.push_back(sym);
+				count++;
+			}
+			if (count >= n) break;
+		}
+
+	} catch (const json::exception& e) {
+		std::cerr << "[Binance] JSON Parse Error: " << e.what()
+			  << std::endl;
+		return false;
+	}
+
 	return true;
 }
 
@@ -391,4 +497,6 @@ void binance_client::parse_and_feed(const char* json_str, size_t len)
 	} catch (...) {
 		/* Ignore parse errors */
 	}
+}
+
 }
