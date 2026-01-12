@@ -414,22 +414,35 @@ void binance_client::ws_loop_impl(void* ssl_ptr, std::string& leftover)
 	unsigned char buf[WS_BUFFER_SIZE];
 	
 	auto read_exact = [&](void* dest, size_t n) -> int {
-		size_t copied = 0;
-		if (!leftover.empty()) {
-			size_t take = std::min(n, leftover.size());
-			memcpy(dest, leftover.data(), take);
-			leftover.erase(0, take);
-			copied += take;
-			if (copied == n) return n;
-		}
-		while (copied < n) {
-			int r = SSL_read(ssl, (unsigned char*)dest + copied,
-					 n - copied);
-			if (r <= 0) return -1;
-			copied += r;
-		}
-		return n;
-	};
+        size_t copied = 0;
+        if (!leftover.empty()) {
+            size_t take = std::min(n, leftover.size());
+            memcpy(dest, leftover.data(), take);
+            leftover.erase(0, take);
+            copied += take;
+            if (copied == n) return n;
+        }
+        while (copied < n) {
+            int r = SSL_read(ssl, (unsigned char*)dest + copied,
+                     n - copied);
+            
+            if (r <= 0) {
+                int err = SSL_get_error(ssl, r);
+                if (err == SSL_ERROR_ZERO_RETURN) {
+                    std::cerr
+						<<  "[Binance] Connection closed by server (EOF)."
+						<< std::endl;
+                } else {
+                    std::cerr
+						<< "[Binance] SSL_read Error: Code "
+						<< err << std::endl;
+                }
+                return -1;
+            }
+            copied += r;
+        }
+        return n;
+    };
 
 	while (this->running) {
 		if (read_exact(buf, 2) != 2) break;
@@ -461,6 +474,7 @@ void binance_client::ws_loop_impl(void* ssl_ptr, std::string& leftover)
 			unsigned char pong[] = {0x8A, 0x00};
 			SSL_write(ssl, pong, sizeof(pong));
 		} else if (opcode == WS_OP_CLOSE) {
+			std::cout << "[Binance] Received WS_OP_CLOSE frame." << std::endl;
 			break;
 		} else if (opcode == WS_OP_TEXT) {
 			this->parse_and_feed((char*)buf, payload_len);
@@ -494,7 +508,6 @@ void binance_client::parse_and_feed(const char* json_str, size_t len)
 		trade.volume.as_double = vol;
 
 		trcache_feed_trade_data(this->cache_ref, &trade, sym_id);
-
 	} catch (...) {
 		/* Ignore parse errors */
 	}

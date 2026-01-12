@@ -1,7 +1,7 @@
 {
   "exchange": "binance",
   "target": {
-    "top_n": 10,
+    "top_n": 20,
     "manual_symbols": []
   },
   "engine": {
