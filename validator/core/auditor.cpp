@@ -87,10 +87,10 @@ struct latency_stats {
 			  << " | Gaps: " << gap_count
 			  << " | TickErrs: " << tick_error_count
 			  << std::fixed << std::setprecision(3)
-			  << " | Eng Lat(ms) Avg: " << eng_avg / 1000.0
-			  << " P99: " << eng_p99 / 1000.0
-			  << " Max: " << eng_max / 1000.0
-			  << " | Audit Lat(ms) Avg: " << aud_avg / 1000.0
+			  << " | Eng Lat(millisecond) Avg: " << eng_avg / 1000000.0
+			  << " P99: " << eng_p99 / 1000000.0
+			  << " Max: " << eng_max / 1000000.0
+			  << " | Audit Lat(microsecond) Avg: " << aud_avg / 1000.0
 			  << " P99: " << aud_p99 / 1000.0
 			  << " Max: " << aud_max / 1000.0
 			  << std::endl;
@@ -111,12 +111,12 @@ struct latency_stats {
  * --------------------------------------------------------------------------
  */
 
-static inline uint64_t get_micros()
+static inline uint64_t get_nanos()
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
-	return (uint64_t)ts.tv_sec * 1000000ULL +
-	       (uint64_t)ts.tv_nsec / 1000;
+	return (uint64_t)ts.tv_sec * 1000000000ULL +
+	       (uint64_t)ts.tv_nsec;
 }
 
 /*
@@ -141,7 +141,8 @@ void run_auditor(struct trcache* cache,
 		VAL_COL_EXCHANGE_TS,
 		VAL_COL_LOCAL_TS,
 		VAL_COL_START_SEQ_ID,
-		VAL_COL_END_SEQ_ID
+		VAL_COL_END_SEQ_ID,
+		VAL_COL_TICK_COUNT
 	};
 	trcache_field_request req = {
 		req_indices,
@@ -152,7 +153,7 @@ void run_auditor(struct trcache* cache,
 	std::vector<trcache_candle_batch*> batches(num_configs);
 	for (int i = 0; i < num_configs; ++i) {
 		/* Allocate enough buffer to fetch multiple candles at once */
-		batches[i] = trcache_batch_alloc_on_heap(cache, i, 32, &req);
+		batches[i] = trcache_batch_alloc_on_heap(cache, i, 128, &req);
 		if (!batches[i]) {
 			std::cerr << "[Auditor] Batch alloc failed for cfg "
 				  << i << std::endl;
@@ -166,7 +167,6 @@ void run_auditor(struct trcache* cache,
 	auto last_report = std::chrono::steady_clock::now();
 
 	while (running_flag) {
-		bool busy = false;
 
 		for (int sym_id = 0; sym_id < max_symbols; ++sym_id) {
 			for (int cfg_idx = 0; cfg_idx < num_configs; ++cfg_idx) {
@@ -213,15 +213,17 @@ void run_auditor(struct trcache* cache,
 				}
 
 				/*
-				 * 2. Fetch recent candles to find what's new.
+				 * 2. Fetch recent candle to find what's new.
 				 */
-				ret = trcache_get_candles_by_symbol_id_and_offset(
+				ret = trcache_get_candles_by_symbol_id_and_key(
 						cache, sym_id, cfg_idx, &req,
-						0, 32, batch);
+						latest_key,
+						(latest_key - cur.last_key) / candle_cfg.threshold,
+						batch);
 				
 				if (ret != 0 || batch->num_candles == 0) continue;
 
-				uint64_t read_ts = get_micros();
+				uint64_t read_ts = get_nanos();
 				
 				/* Extract Column Arrays */
 				uint64_t* c_ex_ts = (uint64_t*)
@@ -232,6 +234,8 @@ void run_auditor(struct trcache* cache,
 					batch->column_arrays[VAL_COL_START_SEQ_ID];
 				uint64_t* c_end = (uint64_t*)
 					batch->column_arrays[VAL_COL_END_SEQ_ID];
+				uint64_t* c_tick_cnt = (uint64_t*)
+					batch->column_arrays[VAL_COL_TICK_COUNT];
 
 				/* Iterate through batch (Oldest -> Newest) */
 				for (int i = 0; i < batch->num_candles; ++i) {
@@ -241,8 +245,6 @@ void run_auditor(struct trcache* cache,
 					/* Skip already processed candles */
 					if (batch->key_array[i] <= cur.last_key)
 						continue;
-
-					busy = true;
 
 					/* 1. Gap Detection */
 					if (c_start[i] != cur.last_end_seq_id + 1) {
@@ -258,25 +260,21 @@ void run_auditor(struct trcache* cache,
 
 					/* 2. Tick Count Validation (Requested) */
 					if (is_tick_candle) {
-						/* seq is inclusive: count = end - start + 1 */
-						uint64_t actual_ticks = 
-							c_end[i] - c_start[i] + 1;
-						
-						if (actual_ticks != target_ticks) {
+						if (c_tick_cnt[i] != != candle_cfg.threshold) {
 							stats.tick_error_count++;
 							std::cerr << "[Auditor] TICK ERR | Sym: "
 								  << sym_id
-								  << " | Exp: " << target_ticks
-								  << " | Act: " << actual_ticks
+								  << " | Exp: " << candle_cfg.threshold
+								  << " | Act: " << c_tick_cnt[i]
 								  << std::endl;
 						}
 					}
 
 					/* 3. Latency Measurement */
-					uint64_t ex_ts_us = c_ex_ts[i] * 1000;
+					uint64_t ex_ts_ns = c_ex_ts[i] * 1000000000;
 					double engine_lat = (double)
 						((int64_t)c_loc_ts[i] -
-						 (int64_t)ex_ts_us);
+						 (int64_t)ex_ts_ns);
 					double audit_lat = (double)
 						((int64_t)read_ts -
 						 (int64_t)c_loc_ts[i]);
@@ -296,11 +294,6 @@ void run_auditor(struct trcache* cache,
 			now - last_report).count() >= 1) {
 			stats.report_and_reset();
 			last_report = now;
-		}
-
-		if (!busy) {
-			std::this_thread::sleep_for(
-				std::chrono::milliseconds(1));
 		}
 	}
 

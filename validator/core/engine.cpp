@@ -129,8 +129,8 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 		/* Capture close time (Latency for partial candle) */
 		struct timespec ts;
 		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000ULL +
-				   (uint64_t)ts.tv_nsec / 1000;
+		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
+				   (uint64_t)ts.tv_nsec;
 
 		/* Return false: Do NOT consume this trade, use it for next */
 		return false; 
@@ -144,8 +144,8 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 		/* Capture latency timestamp */
 		struct timespec ts;
 		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000ULL +
-				   (uint64_t)ts.tv_nsec / 1000;
+		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
+				   (uint64_t)ts.tv_nsec;
 	}
 	return true; /* Include this trade */
 }
@@ -173,8 +173,8 @@ bool update_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
 		c->is_closed = true;
 		struct timespec ts;
 		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000ULL +
-				   (uint64_t)ts.tv_nsec / 1000;
+		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
+				   (uint64_t)ts.tv_nsec;
 		return false; /* Trade belongs to next candle */
 	}
 
