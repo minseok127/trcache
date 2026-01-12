@@ -260,7 +260,7 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 			/* Store as lowercase to match WS stream convention */
 			std::transform(sym.begin(), sym.end(), sym.begin(),
 				       ::tolower);
-			
+
 			/* Filter out non-USDT pairs if needed, or take all */
 			if (sym.find("usdt") != std::string::npos) {
 				this->target_symbols.push_back(sym);

@@ -1,11 +1,11 @@
 {
   "exchange": "binance",
   "target": {
-    "top_n": 4096,
+    "top_n": 1024,
     "manual_symbols": []
   },
   "engine": {
-    "memory_limit_mb": 4096,
+    "memory_limit_mb": 2048,
     "worker_threads": 6,
     "batch_size_pow2": 12,
     "cached_batch_count_pow2": 0

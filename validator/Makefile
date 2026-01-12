@@ -21,7 +21,8 @@ TRCACHE_ROOT = ..
 CXXFLAGS += -I$(TRCACHE_ROOT) -I$(TRCACHE_ROOT)/src/include
 
 # Libraries
-LDFLAGS = -L$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto -lcurl
+# Added -Wl,-rpath=$(TRCACHE_ROOT) to embed library path into the binary
+LDFLAGS = -L$(TRCACHE_ROOT) -Wl,-rpath=$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto -lcurl
 
 # Source Files
 SRCS = main.cpp \
