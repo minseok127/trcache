@@ -6,7 +6,7 @@
  * This module acts as the quality assurance layer for the validator.
  * It performs two key verification tasks:
  * 1. Internal Integrity: Checks for sequence gaps in candle trades.
- * 2. System Latency: Measures Engine Latency and Total System Latency.
+ * 2. System Latency: Measures Engine Latency and Audit (Read) Latency.
  */
 
 #include "auditor.h"
@@ -37,18 +37,18 @@ struct symbol_cursor {
 
 struct latency_stats {
 	std::vector<double> engine_samples;
-	std::vector<double> total_samples;
+	std::vector<double> audit_samples; /* Renamed from total_samples */
 	uint64_t gap_count;
 	uint64_t total_candles;
 
 	latency_stats() : gap_count(0), total_candles(0) {
 		engine_samples.reserve(4096);
-		total_samples.reserve(4096);
+		audit_samples.reserve(4096);
 	}
 
-	void add(double engine_lat, double total_lat) {
+	void add(double engine_lat, double audit_lat) {
 		engine_samples.push_back(engine_lat);
-		total_samples.push_back(total_lat);
+		audit_samples.push_back(audit_lat);
 		total_candles++;
 	}
 
@@ -77,25 +77,26 @@ struct latency_stats {
 		double eng_p99 = get_p99(engine_samples);
 		double eng_max = get_max(engine_samples);
 
-		double tot_avg = get_avg(total_samples);
-		double tot_p99 = get_p99(total_samples);
-		double tot_max = get_max(total_samples);
+		double aud_avg = get_avg(audit_samples);
+		double aud_p99 = get_p99(audit_samples);
+		double aud_max = get_max(audit_samples);
 
+		/* Changed Label: Tot -> Audit */
 		std::cout << "[Auditor] Processed: " << total_candles
 			  << " | Gaps: " << gap_count
 			  << std::fixed << std::setprecision(3)
 			  << " | Eng Lat(ms) Avg: " << eng_avg / 1000.0
 			  << " P99: " << eng_p99 / 1000.0
 			  << " Max: " << eng_max / 1000.0
-			  << " | Tot Lat(ms) Avg: " << tot_avg / 1000.0
-			  << " P99: " << tot_p99 / 1000.0
-			  << " Max: " << tot_max / 1000.0
+			  << " | Audit Lat(ms) Avg: " << aud_avg / 1000.0
+			  << " P99: " << aud_p99 / 1000.0
+			  << " Max: " << aud_max / 1000.0
 			  << std::endl;
 
 		engine_samples.clear();
-		total_samples.clear();
+		audit_samples.clear();
 		engine_samples.reserve(4096);
-		total_samples.reserve(4096);
+		audit_samples.reserve(4096);
 		total_candles = 0;
 	}
 };
@@ -172,10 +173,12 @@ void run_auditor(struct trcache* cache,
 				
 				/*
 				 * 1. Check the latest candle (Offset 0) first.
-				 * This avoids unnecessary large fetches if nothing changed.
+				 * This avoids unnecessary large fetches if nothing
+				 * changed.
 				 */
 				int ret = trcache_get_candles_by_symbol_id_and_offset(
-						cache, sym_id, cfg_idx, &req, 0, 1, batch);
+						cache, sym_id, cfg_idx, &req,
+						0, 1, batch);
 				
 				if (ret != 0 || batch->num_candles == 0) {
 					continue;
@@ -189,10 +192,11 @@ void run_auditor(struct trcache* cache,
 				
 				/* Initialization */
 				if (!cur.initialized) {
-					/* Wait for a closed candle to start tracking */
+					/* Wait for a closed candle to start */
 					if (batch->is_closed_array[0]) {
 						uint64_t* end_ids = (uint64_t*)
-							batch->column_arrays[VAL_COL_END_SEQ_ID];
+							batch->column_arrays
+							[VAL_COL_END_SEQ_ID];
 						cur.last_key = latest_key;
 						cur.last_end_seq_id = end_ids[0];
 						cur.initialized = true;
@@ -207,10 +211,12 @@ void run_auditor(struct trcache* cache,
 
 				/*
 				 * 2. Fetch recent candles to find what's new.
-				 * We fetch a larger batch (e.g., 32) to cover gaps.
+				 * We fetch a larger batch (e.g., 32) to cover
+				 * gaps.
 				 */
 				ret = trcache_get_candles_by_symbol_id_and_offset(
-						cache, sym_id, cfg_idx, &req, 0, 32, batch);
+						cache, sym_id, cfg_idx, &req,
+						0, 32, batch);
 				
 				if (ret != 0 || batch->num_candles == 0) continue;
 
@@ -232,7 +238,8 @@ void run_auditor(struct trcache* cache,
 					if (!batch->is_closed_array[i]) continue;
 
 					/* Skip already processed candles */
-					if (batch->key_array[i] <= cur.last_key) continue;
+					if (batch->key_array[i] <= cur.last_key)
+						continue;
 
 					busy = true;
 
@@ -242,19 +249,31 @@ void run_auditor(struct trcache* cache,
 					}
 
 					/* 2. Latency Measurement */
-					double engine_lat = 0;
-					double total_lat = 0;
 					
 					/* Convert exchange ts (ms) to micros */
 					uint64_t ex_ts_us = c_ex_ts[i] * 1000;
 
-					if (c_loc_ts[i] > ex_ts_us)
-						engine_lat = (double)(c_loc_ts[i] - ex_ts_us);
+					/*
+					 * 2.1 Engine Latency (With Clock Skew)
+					 * Time: Exchange -> Engine Close
+					 * This value may be negative if local clock
+					 * is slower than exchange clock.
+					 */
+					double engine_lat = (double)
+						((int64_t)c_loc_ts[i] -
+						 (int64_t)ex_ts_us);
 					
-					if (read_ts > ex_ts_us)
-						total_lat = (double)(read_ts - ex_ts_us);
+					/*
+					 * 2.2 Audit Latency (Internal Only)
+					 * Time: Engine Close -> Auditor Read
+					 * Both timestamps are local (CLOCK_REALTIME),
+					 * so this is pure processing/queueing delay.
+					 */
+					double audit_lat = (double)
+						((int64_t)read_ts -
+						 (int64_t)c_loc_ts[i]);
 
-					stats.add(engine_lat, total_lat);
+					stats.add(engine_lat, audit_lat);
 
 					/* Update Cursor */
 					cur.last_key = batch->key_array[i];
