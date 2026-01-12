@@ -123,7 +123,7 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
 ### Implementation Highlights
 
 - **Lock-Free Primitives**: 
-  - `atomsnap`: Custom Copy-on-Write mechanism for atomic pointer snapshots.
+  - `atomsnap`: Custom versioning mechanism for atomic pointer snapshots.
   - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations.
 
 - **Memory Management**: 
