@@ -178,7 +178,6 @@ void run_auditor(struct trcache* cache,
 				/* Check config for TICK type validation */
 				const auto& candle_cfg = config.candles[cfg_idx];
 				bool is_tick_candle = (candle_cfg.type == "TICK");
-				uint64_t target_ticks = candle_cfg.threshold;
 
 				/*
 				 * 1. Check the latest candle (Offset 0) first.
@@ -260,7 +259,7 @@ void run_auditor(struct trcache* cache,
 
 					/* 2. Tick Count Validation (Requested) */
 					if (is_tick_candle) {
-						if (c_tick_cnt[i] != candle_cfg.threshold) {
+						if (c_tick_cnt[i] != (uint64_t)candle_cfg.threshold) {
 							stats.tick_error_count++;
 							std::cerr << "[Auditor] TICK ERR | Sym: "
 								  << sym_id
