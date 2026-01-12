@@ -100,98 +100,6 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
 
 ---
 
-## Quick Start
-
-Here's a minimal example to get `trcache` running in under 5 minutes:
-
-```c
-#include "trcache.h"
-
-// 1. Define your candle structure (must start with trcache_candle_base)
-typedef struct {
-    trcache_candle_base base;  // REQUIRED as first member
-    double open, high, low, close, volume;
-} MyCandle;
-
-// 2. Define field layout
-const trcache_field_def fields[] = {
-    {offsetof(MyCandle, open),   sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyCandle, high),   sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyCandle, low),    sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyCandle, close),  sizeof(double), FIELD_TYPE_DOUBLE},
-    {offsetof(MyCandle, volume), sizeof(double), FIELD_TYPE_DOUBLE},
-};
-
-// 3. Implement update callbacks
-void init_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
-    MyCandle *candle = (MyCandle *)c;
-    c->key.timestamp = d->timestamp - (d->timestamp % 60000);  // 1-min window
-    c->is_closed = false;
-    candle->open = candle->high = candle->low = candle->close = d->price.as_double;
-    candle->volume = d->volume.as_double;
-}
-
-bool update_1min_candle(trcache_candle_base *c, trcache_trade_data *d) {
-    if (d->timestamp >= c->key.timestamp + 60000) {
-        c->is_closed = true;
-        return false;  // This trade will be used in the init_1min_candle()
-    }
-    MyCandle *candle = (MyCandle *)c;
-    double price = d->price.as_double;
-    if (price > candle->high) candle->high = price;
-    if (price < candle->low) candle->low = price;
-    candle->close = price;
-    candle->volume += d->volume.as_double;
-    return true;
-}
-
-// 4. Initialize trcache
-trcache_candle_config config = {
-    .user_candle_size = sizeof(MyCandle),
-    .field_definitions = fields,
-    .num_fields = 5,
-    .update_ops = {.init = init_1min_candle, .update = update_1min_candle},
-    .flush_ops = {.flush = NULL}  // No-op flush for this example
-};
-
-trcache_init_ctx ctx = {
-    .candle_configs = &config,
-    .num_candle_configs = 1,
-    .batch_candle_count_pow2 = 10,      // 1024 candles per batch
-    .cached_batch_count_pow2 = 3,       // Cache 8 batches before flush
-    .total_memory_limit = 5ULL << 30,   // 5GB
-    .num_worker_threads = 4,
-    .max_symbols = 1024
-};
-
-trcache *cache = trcache_init(&ctx);
-
-// 5. Register symbol and feed data
-int btc_id = trcache_register_symbol(cache, "BTC-USD");
-trcache_trade_data trade = {
-    .timestamp = 1609459200000,  // 2021-01-01 00:00:00 UTC
-    .trade_id = 1,
-    .price = {.as_double = 29000.0},
-    .volume = {.as_double = 1.5}
-};
-trcache_feed_trade_data(cache, &trade, btc_id);
-
-// 6. Query candles
-int field_indices[] = {1, 2, 3};  // high, low, close
-trcache_field_request request = {.field_indices = field_indices, .num_fields = 3};
-trcache_candle_batch *batch = trcache_batch_alloc_on_heap(cache, 0, 100, &request);
-
-trcache_get_candles_by_symbol_id_and_offset(cache, btc_id, 0, &request, 0, 10, batch);
-
-double *highs = (double *)batch->column_arrays[1];   // Use original field index!
-printf("Latest high: %.2f\n", highs[batch->num_candles - 1]);
-
-trcache_batch_free(batch);
-trcache_destroy(cache);
-```
-
----
-
 ## Architecture
 
 ### Pipeline Overview
@@ -295,7 +203,29 @@ bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
     if (++candle->trade_count == 100) {  // 100-tick candle
         c->is_closed = true; // Next trade will be used in the init_tick()
     }
-    return true;  // Trade consumed
+    return true;  // Trade is consumed
+}
+
+void init_time(trcache_candle_base *c, trcache_trade_data *d) {
+    MyCandle *candle = (MyCandle *)c;
+    c->key.timestamp = d->timestamp - (d->timestamp % 60000);  // 1-min window
+    c->is_closed = false;
+    candle->open = candle->high = candle->low = candle->close = d->price.as_double;
+    candle->volume = d->volume.as_double;
+}
+
+bool update_time(trcache_candle_base *c, trcache_trade_data *d) {
+    if (d->timestamp >= c->key.timestamp + 60000) {
+        c->is_closed = true;
+        return false;  // This trade will be used in the init_time()
+    }
+    MyCandle *candle = (MyCandle *)c;
+    double price = d->price.as_double;
+    if (price > candle->high) candle->high = price;
+    if (price < candle->low) candle->low = price;
+    candle->close = price;
+    candle->volume += d->volume.as_double;
+    return true; // Trade is consumed
 }
 ```
 
@@ -484,13 +414,14 @@ trcache_get_candles_by_symbol_id_and_key(
 
 ```c
 // ❌ WRONG - using request array indices
-double *highs = (double *)batch->column_arrays[0];  // This is NULL!
+double *highs = (double *)batch->column_arrays[0];  // This is NULL! Because the 0 index was not required
 
 // ✅ CORRECT - using original field_definitions indices
 double *highs  = (double *)batch->column_arrays[1];  // Index 1 in my_fields
 double *lows   = (double *)batch->column_arrays[2];  // Index 2 in my_fields
 double *closes = (double *)batch->column_arrays[3];  // Index 3 in my_fields
 
+/* Oldest -> Newest */
 for (int i = 0; i < batch->num_candles; i++) {
     printf("Candle %d: H=%.2f L=%.2f C=%.2f\n", 
            i, highs[i], lows[i], closes[i]);
@@ -549,38 +480,5 @@ Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
 // If field_definitions[5] is volume:
 double *vol = (double *)batch->column_arrays[5];  // ✅ Correct
 ```
-
----
-
-## Benchmark & Analysis
-
-### Running Benchmarks
-
-```bash
-# 1. Feed-only (write throughput)
-./benchmark/feed_only_benchmark \
-  -f 4            `# 4 feed threads` \
-  -w 8            `# 8 worker threads` \
-  -o feed.csv     `# output file` \
-  -t 60           `# 60 sec total` \
-  -W 10           `# 10 sec warmup` \
-  -s 0.99         `# Zipf skew (0=uniform, 1=extreme)`
-
-# 2. Static read (OLAP query latency)
-./benchmark/static_read_benchmark \
-  -r 8            `# 8 reader threads` \
-  -w 8            `# 8 worker threads` \
-  -o read.csv \
-  -k              `# key-based access (default: offset-based)`
-
-# 3. HTAP (mixed read/write with phases)
-./benchmark/htap_benchmark \
-  -f 4            `# 4 feed threads` \
-  -w 8            `# 8 worker threads` \
-  -o htap.csv \
-  -d 100          `# 100μs delay between queries`
-```
-
-See `benchmark/` directory for source code and detailed documentation.
 
 ---
