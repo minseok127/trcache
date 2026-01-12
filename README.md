@@ -78,13 +78,16 @@ All measurements use **1 concurrent reader thread** (same as Query Latency bench
 
 ## Limitations
 
-- Concurrent feeds to same symbol not supported, but single thread can handle feeding data for multiple symbols.
+**[Planned]: Features or constraints targeted for optimization or removal in future releases.**
 - The `max_symbols` capacity is pre-allocated at initialization and cannot be changed at runtime.
 - The `total_memory_limit` is a hard cap; `trcache_feed_trade_data` will return -1 if this limit is exceeded.
 - Initialization will fail if `total_memory_limit` is set lower than the minimum memory required by the configuration.
 - The number of worker threads (`num_worker_threads`) must be greater than 2 (minimum 3).
-- `trcache_candle_base` must be the first member of any custom candle struct definition.
 - The system has hard-coded compile-time limits, such as `MAX_CANDLE_TYPES` (32) and `MAX_NUM_THREADS` (1024).
+
+**[Fixed]: Permanent architectural constraints or safety policies that will remain unchanged.**
+- Concurrent feeds to same symbol not supported, but single thread can handle feeding data for multiple symbols.
+- `trcache_candle_base` must be the first member of any custom candle struct definition.
 
 ---
 
