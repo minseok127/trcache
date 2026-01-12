@@ -273,7 +273,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	snap = atomsnap_acquire_version(chunk_list->head_gate);
 	if (snap == NULL) {
+#ifdef TRCACHE_DEBUG
 		errmsg(stderr, "Unused candle chunk list\n");
+#endif /* TRCACHE_DEBUG */
 		atomsnap_destroy_gate(chunk_list->head_gate);
 		candle_chunk_index_destroy(chunk_list->chunk_index);
 		free(chunk_list);

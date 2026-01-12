@@ -58,3 +58,5 @@ tags
 /tests/test_*
 !/tests/test_*.c
 /tests/*.o
+
+validator_app
