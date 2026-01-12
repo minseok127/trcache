@@ -42,7 +42,7 @@ than trcache's processing capacity.*
   - P99: `9.18` μs
   - Mean: `6.4` μs
 
-- **Concurrent Read** (1 feed thread, 3 worker threads):
+- **Concurrent Read** (1 feed thread, 3 worker threads, feed rate: 14,869,372 / sec):
   - P50: `25.5` μs
   - P99: `56.4` μs
   - Mean: `27.4` μs
