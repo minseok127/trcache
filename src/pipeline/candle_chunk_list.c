@@ -941,8 +941,8 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	if (head_snap == NULL) {
 		errmsg(stderr,
 			"Head of candle chunk list is not yet initialized "
-			"(seq_end=%" PRIu64 ")\n",
-			seq_end);
+			"(seq_end=%" PRIu64 ")(symbol_id=%" PRIu32 ")\n",
+			seq_end, list->symbol_id);
 		return -1;
 	}
 	
