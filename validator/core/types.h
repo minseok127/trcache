@@ -28,6 +28,7 @@ enum {
 	VAL_COL_LOCAL_TS,
 	VAL_COL_START_SEQ_ID,
 	VAL_COL_END_SEQ_ID,
+	VAL_COL_TICK_COUNT,
 	/* Sentinel for count */
 	VAL_COL_COUNT
 };
@@ -78,6 +79,11 @@ typedef struct {
 	 */
 	uint64_t start_seq_id;
 	uint64_t end_seq_id;
+	
+	/*
+	 * [Stats] Number of trades aggregated in this candle.
+	 */
+	uint64_t tick_count;
 
 } val_candle;
 
@@ -104,6 +110,8 @@ static const trcache_field_def val_candle_fields[] = {
 	{offsetof(val_candle, start_seq_id), sizeof(uint64_t),
 		FIELD_TYPE_UINT64},
 	{offsetof(val_candle, end_seq_id),   sizeof(uint64_t),
+		FIELD_TYPE_UINT64},
+	{offsetof(val_candle, tick_count),   sizeof(uint64_t),
 		FIELD_TYPE_UINT64}
 };
 

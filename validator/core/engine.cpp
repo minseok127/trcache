@@ -92,7 +92,8 @@ static void* flush_noop(struct trcache* cache,
 
 /* --------------------------------------------------------------------------
  * 2. Slot Template System
- * -------------------------------------------------------------------------- */
+ * --------------------------------------------------------------------------
+ */
 
 /*
  * Helper macros to define callback functions for a specific slot index.
@@ -148,6 +149,7 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 	}
 	return true; /* Include this trade */
 }
+
 /* TIME_FIXED Logic */
 template <int SLOT>
 void init_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
@@ -214,7 +216,8 @@ static const update_func_t UPDATE_TIME_OPS[] = {
 
 /* --------------------------------------------------------------------------
  * 3. Engine Initialization
- * -------------------------------------------------------------------------- */
+ * --------------------------------------------------------------------------
+ */
 
 struct trcache* engine_init(const struct validator_config& config)
 {
@@ -226,8 +229,9 @@ struct trcache* engine_init(const struct validator_config& config)
 		return nullptr;
 	}
 
-	/* Allocate generic C structs for trcache init */
-	std::vector<trcache_candle_config> tr_configs(num_configs);
+	/* Use vector with push_back to handle const members correctly */
+	std::vector<trcache_candle_config> tr_configs;
+	tr_configs.reserve(num_configs);
 
 	for (int i = 0; i < num_configs; i++) {
 		const auto& user_cfg = config.candles[i];
@@ -235,24 +239,37 @@ struct trcache* engine_init(const struct validator_config& config)
 		/* Store threshold in global slot for callback access */
 		g_slot_configs[i] = user_cfg;
 
-		/* Setup trcache config struct */
-		tr_configs[i].user_candle_size = sizeof(val_candle);
-		tr_configs[i].field_definitions = val_candle_fields;
-		tr_configs[i].num_fields = num_val_candle_fields;
-		tr_configs[i].flush_ops.flush = flush_noop;
+		/* Prepare Ops Structures */
+		trcache_candle_update_ops u_ops = {};
+		trcache_batch_flush_ops f_ops = {};
+		
+		f_ops.flush = flush_noop;
 
 		/* Map Logic Type to Slot Function */
 		if (user_cfg.type == "TICK_MODULO") {
-			tr_configs[i].update_ops.init = INIT_TICK_OPS[i];
-			tr_configs[i].update_ops.update = UPDATE_TICK_OPS[i];
+			u_ops.init = INIT_TICK_OPS[i];
+			u_ops.update = UPDATE_TICK_OPS[i];
 		} else if (user_cfg.type == "TIME_FIXED") {
-			tr_configs[i].update_ops.init = INIT_TIME_OPS[i];
-			tr_configs[i].update_ops.update = UPDATE_TIME_OPS[i];
+			u_ops.init = INIT_TIME_OPS[i];
+			u_ops.update = UPDATE_TIME_OPS[i];
 		} else {
 			std::cerr << "[Engine] Error: Unknown candle type: "
 				  << user_cfg.type << std::endl;
 			return nullptr;
 		}
+
+		/* * Initialize trcache_candle_config using aggregate init.
+		 * This is required because update_ops and flush_ops are const.
+		 */
+		trcache_candle_config c_conf = {
+			sizeof(val_candle),        /* user_candle_size */
+			val_candle_fields,         /* field_definitions */
+			num_val_candle_fields,     /* num_fields */
+			u_ops,                     /* update_ops */
+			f_ops                      /* flush_ops */
+		};
+
+		tr_configs.push_back(c_conf);
 	}
 
 	/* 2. Prepare Initialization Context */

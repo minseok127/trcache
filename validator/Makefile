@@ -12,11 +12,12 @@ TARGET = validator_app
 
 # Compiler Settings
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -pthread
+CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -pthread
 CXXFLAGS += -I./core -I./exchanges
 
 # Dependency Paths (Adjust as needed)
-TRCACHE_ROOT = ../trcache
+# Corrected path to point to the project root (where trcache.h resides)
+TRCACHE_ROOT = ..
 CXXFLAGS += -I$(TRCACHE_ROOT) -I$(TRCACHE_ROOT)/src/include
 
 # Libraries

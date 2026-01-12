@@ -106,7 +106,8 @@ static parsed_url parse_ws_url(const std::string& url)
  */
 static int tcp_connect(const char* host, const char* port)
 {
-	struct addrinfo hints = {0}, *result, *rp;
+	struct addrinfo hints = {}; /* Zero-initialize all fields */
+	struct addrinfo *result, *rp;
 	int sock = -1;
 
 	hints.ai_family = AF_UNSPEC;     /* Allow IPv4 or IPv6 */
@@ -497,6 +498,4 @@ void binance_client::parse_and_feed(const char* json_str, size_t len)
 	} catch (...) {
 		/* Ignore parse errors */
 	}
-}
-
 }
