@@ -7,6 +7,7 @@
  * It performs two key verification tasks:
  * 1. Internal Integrity: Checks for sequence gaps in candle trades.
  * 2. System Latency: Measures Engine Latency and Audit (Read) Latency.
+ * 3. Tick Count Integrity: Verifies tick counts for TICK-based candles.
  */
 
 #include "auditor.h"
@@ -37,11 +38,12 @@ struct symbol_cursor {
 
 struct latency_stats {
 	std::vector<double> engine_samples;
-	std::vector<double> audit_samples; /* Renamed from total_samples */
+	std::vector<double> audit_samples;
 	uint64_t gap_count;
+	uint64_t tick_error_count; /* Added for tick count verification */
 	uint64_t total_candles;
 
-	latency_stats() : gap_count(0), total_candles(0) {
+	latency_stats() : gap_count(0), tick_error_count(0), total_candles(0) {
 		engine_samples.reserve(4096);
 		audit_samples.reserve(4096);
 	}
@@ -81,9 +83,9 @@ struct latency_stats {
 		double aud_p99 = get_p99(audit_samples);
 		double aud_max = get_max(audit_samples);
 
-		/* Changed Label: Tot -> Audit */
 		std::cout << "[Auditor] Processed: " << total_candles
 			  << " | Gaps: " << gap_count
+			  << " | TickErrs: " << tick_error_count
 			  << std::fixed << std::setprecision(3)
 			  << " | Eng Lat(ms) Avg: " << eng_avg / 1000.0
 			  << " P99: " << eng_p99 / 1000.0
@@ -99,6 +101,7 @@ struct latency_stats {
 		audit_samples.reserve(4096);
 		total_candles = 0;
 		gap_count = 0;
+		tick_error_count = 0;
 	}
 };
 
@@ -172,10 +175,13 @@ void run_auditor(struct trcache* cache,
 				symbol_cursor& cur = cursors[idx];
 				trcache_candle_batch* batch = batches[cfg_idx];
 				
+				/* Check config for TICK type validation */
+				const auto& candle_cfg = config.candles[cfg_idx];
+				bool is_tick_candle = (candle_cfg.type == "TICK");
+				uint64_t target_ticks = candle_cfg.threshold;
+
 				/*
 				 * 1. Check the latest candle (Offset 0) first.
-				 * This avoids unnecessary large fetches if nothing
-				 * changed.
 				 */
 				int ret = trcache_get_candles_by_symbol_id_and_offset(
 						cache, sym_id, cfg_idx, &req,
@@ -185,10 +191,6 @@ void run_auditor(struct trcache* cache,
 					continue;
 				}
 
-				/*
-				 * trcache batch order is typically Time-Ascending.
-				 * So index 0 is the result of the query (Newest).
-				 */
 				uint64_t latest_key = batch->key_array[0];
 				
 				/* Initialization */
@@ -212,8 +214,6 @@ void run_auditor(struct trcache* cache,
 
 				/*
 				 * 2. Fetch recent candles to find what's new.
-				 * We fetch a larger batch (e.g., 32) to cover
-				 * gaps.
 				 */
 				ret = trcache_get_candles_by_symbol_id_and_offset(
 						cache, sym_id, cfg_idx, &req,
@@ -256,27 +256,27 @@ void run_auditor(struct trcache* cache,
 							  << std::endl;
 					}
 
-					/* 2. Latency Measurement */
-					
-					/* Convert exchange ts (ms) to micros */
-					uint64_t ex_ts_us = c_ex_ts[i] * 1000;
+					/* 2. Tick Count Validation (Requested) */
+					if (is_tick_candle) {
+						/* seq is inclusive: count = end - start + 1 */
+						uint64_t actual_ticks = 
+							c_end[i] - c_start[i] + 1;
+						
+						if (actual_ticks != target_ticks) {
+							stats.tick_error_count++;
+							std::cerr << "[Auditor] TICK ERR | Sym: "
+								  << sym_id
+								  << " | Exp: " << target_ticks
+								  << " | Act: " << actual_ticks
+								  << std::endl;
+						}
+					}
 
-					/*
-					 * 2.1 Engine Latency (With Clock Skew)
-					 * Time: Exchange -> Engine Close
-					 * This value may be negative if local clock
-					 * is slower than exchange clock.
-					 */
+					/* 3. Latency Measurement */
+					uint64_t ex_ts_us = c_ex_ts[i] * 1000;
 					double engine_lat = (double)
 						((int64_t)c_loc_ts[i] -
 						 (int64_t)ex_ts_us);
-					
-					/*
-					 * 2.2 Audit Latency (Internal Only)
-					 * Time: Engine Close -> Auditor Read
-					 * Both timestamps are local (CLOCK_REALTIME),
-					 * so this is pure processing/queueing delay.
-					 */
 					double audit_lat = (double)
 						((int64_t)read_ts -
 						 (int64_t)c_loc_ts[i]);
