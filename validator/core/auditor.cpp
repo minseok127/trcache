@@ -47,12 +47,12 @@ struct symbol_cursor {
 /*
  * Simple fixed-bin histogram for latency measurement.
  * - Unit: 100ns (0.1us)
- * - Range: 0 ~ 100ms (100,000,000ns)
- * - Size: 1,000,000 buckets (Approx. 8MB per instance)
+ * - Range: 0 ~ 1000ms (1,000,000,000ns)
+ * - Size: 10,000,000 buckets (Approx. 80MB per instance)
  */
 struct SimpleHistogram {
 	static constexpr int64_t UNIT_NS = 100;
-	static constexpr int64_t MAX_NS = 100 * 1000 * 1000; /* 100ms */
+	static constexpr int64_t MAX_NS = 1000 * 1000 * 1000; /* 1000ms */
 	static constexpr int BUCKET_COUNT = MAX_NS / UNIT_NS;
 
 	std::vector<uint64_t> buckets;
