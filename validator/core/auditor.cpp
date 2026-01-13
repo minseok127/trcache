@@ -6,7 +6,7 @@
  * This module acts as the quality assurance layer for the validator.
  * It performs two key verification tasks:
  * 1. Internal Integrity: Checks for sequence gaps in candle trades.
- * 2. System Latency: Measures Feed, Internal, and Audit Latency in Nanoseconds.
+ * 2. System Latency: Measures Feed, Internal, and Audit Latency.
  * 3. Tick Count Integrity: Verifies tick counts for TICK-based candles.
  */
 
@@ -37,26 +37,65 @@ struct symbol_cursor {
 };
 
 struct latency_stats {
-	/* Separate vectors for 3-stage latency analysis */
-	std::vector<double> feed_samples;     /* Exchange -> Engine Input */
-	std::vector<double> internal_samples; /* Input -> Engine Close */
-	std::vector<double> audit_samples;    /* Close -> Auditor Read */
+	/* Interval Data (Reset every report) */
+	std::vector<double> feed_samples;
+	std::vector<double> internal_samples;
+	std::vector<double> audit_samples;
 	
-	uint64_t gap_count;
-	uint64_t tick_error_count;
+	/* Cumulative Counters (Never reset) */
 	uint64_t total_candles;
+	uint64_t total_gaps;
+	uint64_t total_tick_errors;
 
-	latency_stats() : gap_count(0), tick_error_count(0), total_candles(0) {
+	/* Global Stats for Final Report */
+	double global_feed_sum;
+	double global_feed_max;
+	double global_int_sum;
+	double global_int_max;
+	double global_aud_sum;
+	double global_aud_max;
+	uint64_t global_count;
+
+	latency_stats() : 
+		total_candles(0), total_gaps(0), total_tick_errors(0),
+		global_feed_sum(0), global_feed_max(0),
+		global_int_sum(0), global_int_max(0),
+		global_aud_sum(0), global_aud_max(0),
+		global_count(0)
+	{
+		reserve_vectors();
+	}
+
+	void reserve_vectors() {
 		feed_samples.reserve(4096);
 		internal_samples.reserve(4096);
 		audit_samples.reserve(4096);
 	}
 
-	void add(double feed, double internal, double audit) {
+	void add(double feed, double internal, double audit,
+		 bool has_gap, bool has_tick_err) {
+		
+		/* Interval Samples */
 		feed_samples.push_back(feed);
 		internal_samples.push_back(internal);
 		audit_samples.push_back(audit);
+
+		/* Cumulative Counters */
 		total_candles++;
+		if (has_gap) total_gaps++;
+		if (has_tick_err) total_tick_errors++;
+
+		/* Global Stats Update */
+		global_count++;
+		
+		global_feed_sum += feed;
+		if (feed > global_feed_max) global_feed_max = feed;
+
+		global_int_sum += internal;
+		if (internal > global_int_max) global_int_max = internal;
+
+		global_aud_sum += audit;
+		if (audit > global_aud_max) global_aud_max = audit;
 	}
 
 	double get_avg(const std::vector<double>& v) {
@@ -77,8 +116,9 @@ struct latency_stats {
 		return v.back();
 	}
 
-	void report_and_reset() {
-		if (total_candles == 0) return;
+	/* Reports interval latency but cumulative counts */
+	void report_interval() {
+		if (feed_samples.empty()) return;
 
 		double f_avg = get_avg(feed_samples);
 		double f_p99 = get_p99(feed_samples);
@@ -92,10 +132,12 @@ struct latency_stats {
 		double a_p99 = get_p99(audit_samples);
 		double a_max = get_max(audit_samples);
 
-		/* Report in Microseconds (us) with ns precision (.3f) */
-		std::cout << "[Auditor] Candles: " << total_candles
-			  << " | Gaps: " << gap_count
-			  << " | TickErrs: " << tick_error_count << "\n"
+		/* * Print Cumulative Counts first to see progress.
+		 * Then print Interval Latency to see current health.
+		 */
+		std::cout << "[Auditor] Total: " << total_candles
+			  << " | Gaps: " << total_gaps
+			  << " | TickErr: " << total_tick_errors << "\n"
 			  << std::fixed << std::setprecision(3)
 			  << "   [Feed Latency] Avg: " << f_avg / 1000.0
 			  << " us | P99: " << f_p99 / 1000.0
@@ -108,16 +150,36 @@ struct latency_stats {
 			  << " us | Max: " << a_max / 1000.0 << " us"
 			  << std::endl;
 
+		/* Reset Interval Data Only */
 		feed_samples.clear();
 		internal_samples.clear();
 		audit_samples.clear();
-		feed_samples.reserve(4096);
-		internal_samples.reserve(4096);
-		audit_samples.reserve(4096);
-		
-		total_candles = 0;
-		gap_count = 0;
-		tick_error_count = 0;
+		reserve_vectors();
+	}
+
+	void report_final() {
+		if (global_count == 0) return;
+
+		double f_avg = global_feed_sum / global_count;
+		double i_avg = global_int_sum / global_count;
+		double a_avg = global_aud_sum / global_count;
+
+		std::cout << "\n========================================\n"
+			  << "        VALIDATOR FINAL REPORT          \n"
+			  << "========================================\n"
+			  << " Total Candles Processed : " << total_candles << "\n"
+			  << " Total Sequence Gaps     : " << total_gaps << "\n"
+			  << " Total Tick Count Errors : " << total_tick_errors << "\n"
+			  << "----------------------------------------\n"
+			  << std::fixed << std::setprecision(3)
+			  << " [Feed Latency] Avg: " << f_avg / 1000.0
+			  << " us | Max: " << global_feed_max / 1000.0 << " us\n"
+			  << " [Int  Latency] Avg: " << i_avg / 1000.0
+			  << " us | Max: " << global_int_max / 1000.0 << " us\n"
+			  << " [Aud  Latency] Avg: " << a_avg / 1000.0
+			  << " us | Max: " << global_aud_max / 1000.0 << " us\n"
+			  << "========================================\n"
+			  << std::endl;
 	}
 };
 
@@ -169,7 +231,6 @@ void run_auditor(struct trcache* cache,
 	/* Allocate Batches (One per config type) */
 	std::vector<trcache_candle_batch*> batches(num_configs);
 	for (int i = 0; i < num_configs; ++i) {
-		/* Allocate enough buffer to fetch multiple candles at once */
 		batches[i] = trcache_batch_alloc_on_heap(cache, i, 128, &req);
 		if (!batches[i]) {
 			std::cerr << "[Auditor] Batch alloc failed for cfg "
@@ -195,13 +256,10 @@ void run_auditor(struct trcache* cache,
 				
 				const auto& candle_cfg = config.candles[cfg_idx];
 				bool is_tick_candle = (candle_cfg.type == "TICK_MODULO");
-				/* For TICK_MODULO, threshold is used for fetching calc */
 				uint64_t threshold = candle_cfg.threshold;
 				if (threshold == 0) threshold = 1;
 
-				/*
-				 * 1. Check the latest candle (Offset 0) first.
-				 */
+				/* 1. Check Latest */
 				int ret = trcache_get_candles_by_symbol_id_and_offset(
 						cache, sym_id, cfg_idx, &req,
 						0, 1, batch);
@@ -229,16 +287,10 @@ void run_auditor(struct trcache* cache,
 					continue;
 				}
 
-				/*
-				 * 2. Fetch specific range using Key Logic.
-				 * Calculate how many candles are missing between 
-				 * last_key and latest_key.
-				 */
+				/* 2. Fetch specific range */
 				uint64_t diff = latest_key - cur.last_key;
-				/* We want the batch ENDING at latest_key */
 				int count = diff / threshold;
 				
-				/* Cap count to batch size limit (128) */
 				if (count > 128) count = 128;
 				if (count < 1) count = 1;
 
@@ -250,7 +302,6 @@ void run_auditor(struct trcache* cache,
 
 				uint64_t read_ts = get_current_ns();
 				
-				/* Extract Column Arrays */
 				uint64_t* c_ex_ts = (uint64_t*)
 					batch->column_arrays[VAL_COL_EXCHANGE_TS];
 				uint64_t* c_feed_ts = (uint64_t*)
@@ -264,42 +315,35 @@ void run_auditor(struct trcache* cache,
 				uint64_t* c_tick_cnt = (uint64_t*)
 					batch->column_arrays[VAL_COL_TICK_COUNT];
 
-				/* Iterate through batch (Oldest -> Newest) */
 				for (int i = 0; i < batch->num_candles; ++i) {
-					/* Skip incomplete (open) candles */
 					if (!batch->is_closed_array[i]) continue;
-
 					if (batch->key_array[i] <= cur.last_key)
 						continue;
 
 					busy = true;
+					bool has_gap = false;
+					bool has_tick_err = false;
 
-					/* 1. Gap Detection */
+					/* Gap Check */
 					if (c_start[i] != cur.last_end_seq_id + 1) {
-						stats.gap_count++;
-						if (stats.gap_count <= 5) {
-							std::cerr << "[Auditor] GAP | Sym: "
-								  << sym_id
-								  << " | Exp: "
-								  << (cur.last_end_seq_id + 1)
-								  << " | Act: " << c_start[i]
+						has_gap = true;
+						/* Print gap warning only once in a while */
+						if (stats.total_gaps % 100 == 0) {
+							std::cerr << "[Auditor] GAP | "
+								  << "Exp: " << cur.last_end_seq_id + 1
+								  << " Act: " << c_start[i]
 								  << std::endl;
 						}
 					}
 
-					/* 2. Tick Count Validation */
+					/* Tick Count Check */
 					if (is_tick_candle) {
 						if (c_tick_cnt[i] != threshold) {
-							stats.tick_error_count++;
+							has_tick_err = true;
 						}
 					}
 
-					/* 3. Latency Measurement (in Nanoseconds) */
-					/*
-					 * Feed Latency = Feed - Exchange
-					 * Internal Latency = Local - Feed
-					 * Audit Latency = Read - Local
-					 */
+					/* Latency Calc */
 					int64_t lat_feed = (int64_t)c_feed_ts[i] - 
 							   (int64_t)c_ex_ts[i];
 					int64_t lat_int = (int64_t)c_loc_ts[i] - 
@@ -307,14 +351,14 @@ void run_auditor(struct trcache* cache,
 					int64_t lat_aud = (int64_t)read_ts - 
 							  (int64_t)c_loc_ts[i];
 
-					/* Sanity check */
 					if (lat_feed < 0) lat_feed = 0;
 					if (lat_int < 0) lat_int = 0;
 					if (lat_aud < 0) lat_aud = 0;
 
 					stats.add((double)lat_feed,
 						  (double)lat_int,
-						  (double)lat_aud);
+						  (double)lat_aud,
+						  has_gap, has_tick_err);
 
 					cur.last_key = batch->key_array[i];
 					cur.last_end_seq_id = c_end[i];
@@ -325,7 +369,7 @@ void run_auditor(struct trcache* cache,
 		auto now = std::chrono::steady_clock::now();
 		if (std::chrono::duration_cast<std::chrono::seconds>(
 			now - last_report).count() >= 1) {
-			stats.report_and_reset();
+			stats.report_interval();
 			last_report = now;
 		}
 
@@ -334,6 +378,9 @@ void run_auditor(struct trcache* cache,
 				std::chrono::milliseconds(1));
 		}
 	}
+
+	/* Final Summary on Exit */
+	stats.report_final();
 
 	for (auto* b : batches) {
 		trcache_batch_free(b);
