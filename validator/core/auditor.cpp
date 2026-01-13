@@ -137,7 +137,7 @@ struct latency_stats {
 			  << "   [Network + Parsing Latency] Avg: " << f_avg / 1000.0
 			  << " us | P99: " << f_p99 / 1000.0
 			  << " us | Max: " << f_max / 1000.0 << " us\n"
-			  << "   [Engine Internal Latency] Avg: " << i_avg / 1000.0
+			  << "   [Engine Internal Latency]   Avg: " << i_avg / 1000.0
 			  << " us | P99: " << i_p99 / 1000.0
 			  << " us | Max: " << i_max / 1000.0 << " us\n"
 			  << "   [Auditor Detection Latency] Avg: " << a_avg / 1000.0
