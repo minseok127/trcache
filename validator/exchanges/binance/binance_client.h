@@ -11,7 +11,8 @@
 #include <string>
 #include <vector>
 #include <atomic>
-#include <simdjson.h> /* Added simdjson header */
+#include <thread> /* Added for worker threads */
+#include <simdjson.h>
 
 class binance_client : public exchange_client {
 public:
@@ -31,20 +32,28 @@ private:
 	std::atomic<bool> running;
 	struct trcache* cache_ref;
 
-	/* * Helper: Fetch top N symbols by volume via REST API
-	 * Now uses simdjson internally in .cpp
+	/*
+	 * Worker Threads Management
+	 * To support >200 symbols, we must shard connections.
 	 */
+	std::vector<std::thread> worker_threads;
+
+	/* Helper: Fetch top N symbols by volume via REST API */
 	bool fetch_top_symbols(int n, const std::string& rest_url);
 
-	/* * Internal Helper: WebSocket Read Loop
-	 * Updated signature to accept reusable parser
+	/*
+	 * Worker Entry Point
+	 * Handles a single WebSocket connection for a subset of symbols.
+	 * Removed unused 'cache' parameter.
 	 */
+	void feed_shard_worker(std::vector<std::string> symbols,
+			       int shard_id);
+
+	/* Internal Helper: WebSocket Read Loop */
 	void ws_loop_impl(void* ssl_ptr, std::string& leftover,
 			  simdjson::dom::parser& parser);
 
-	/* * Internal Helper: Parse JSON and push to trcache
-	 * Updated signature to accept reusable parser
-	 */
+	/* Internal Helper: Parse JSON and push to trcache */
 	void parse_and_feed(const char* json_str, size_t len,
 			    simdjson::dom::parser& parser);
 };
