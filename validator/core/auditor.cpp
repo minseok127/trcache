@@ -140,7 +140,7 @@ struct latency_stats {
 			  << "   [Engine Internal Latency] Avg: " << i_avg / 1000.0
 			  << " us | P99: " << i_p99 / 1000.0
 			  << " us | Max: " << i_max / 1000.0 << " us\n"
-			  << "   [Auditor Query Latency] Avg: " << a_avg / 1000.0
+			  << "   [Auditor Detection Latency] Avg: " << a_avg / 1000.0
 			  << " us | P99: " << a_p99 / 1000.0
 			  << " us | Max: " << a_max / 1000.0 << " us"
 			  << std::endl;
@@ -209,7 +209,7 @@ struct latency_stats {
 			  << "   Avg: " << i_avg / 1000.0 << " us\n"
 			  << "   P99: " << i_p99 / 1000.0 << " us\n"
 			  << "   Max: " << i_max / 1000.0 << " us\n"
-			  << " [Auditor Query Latency]\n"
+			  << " [Auditor Detection Latency]\n"
 			  << "   Avg: " << a_avg / 1000.0 << " us\n"
 			  << "   P99: " << a_p99 / 1000.0 << " us\n"
 			  << "   Max: " << a_max / 1000.0 << " us\n"
