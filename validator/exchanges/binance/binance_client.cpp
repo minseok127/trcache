@@ -205,7 +205,26 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 	CURL* curl;
 	CURLcode res;
 	std::string read_buffer;
-	std::string url = rest_url + "/api/v3/ticker/24hr";
+
+	/*
+	 * Determine the correct API path based on the base URL.
+	 * 1. Spot:            /api/v3/ticker/24hr
+	 * 2. Futures (USD-M): /fapi/v1/ticker/24hr
+	 * 3. Futures (Coin-M): /dapi/v1/ticker/24hr
+	 *
+	 * This prevents 404 errors (HTML response) which cause JSON parsing
+	 * failures (TAPE_ERROR).
+	 */
+	std::string path;
+	if (rest_url.find("fapi") != std::string::npos) {
+		path = "/fapi/v1/ticker/24hr";
+	} else if (rest_url.find("dapi") != std::string::npos) {
+		path = "/dapi/v1/ticker/24hr";
+	} else {
+		path = "/api/v3/ticker/24hr";
+	}
+
+	std::string url = rest_url + path;
 
 	curl = curl_easy_init();
 	if (!curl) return false;
@@ -227,12 +246,20 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 		return false;
 	}
 
+	/* Parse using simdjson */
 	simdjson::dom::parser parser;
 	simdjson::dom::element doc;
 
+	/*
+	 * Parse the response buffer.
+	 * If the URL was incorrect, the server might return HTML (404/5xx),
+	 * causing simdjson to throw a TAPE_ERROR. We catch this here.
+	 */
 	auto error = parser.parse(read_buffer).get(doc);
 	if (error) {
-		std::cerr << "[Binance] JSON Parse Error: " << error << std::endl;
+		std::cerr << "[Binance] JSON Parse Error: " << error << "\n"
+			  << "   (Hint: Check if rest_endpoint matches the target "
+			  << "market type: Spot vs Futures)" << std::endl;
 		return false;
 	}
 
@@ -246,11 +273,13 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 	std::vector<sym_vol> items;
 	items.reserve(1000);
 
+	/* Iterate over the ticker array and extract Symbol & QuoteVolume */
 	for (auto obj : doc) {
 		std::string_view s_sym, s_vol;
 		if (obj["symbol"].get(s_sym) == simdjson::SUCCESS &&
 		    obj["quoteVolume"].get(s_vol) == simdjson::SUCCESS) {
 			
+			/* Binance returns numbers as strings, so we convert them */
 			try {
 				std::string vol_str(s_vol);
 				items.push_back({s_sym, std::stod(vol_str)});
@@ -258,18 +287,21 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 		}
 	}
 
+	/* Sort by Quote Volume (Descending) */
 	std::sort(items.begin(), items.end(), 
 		[](const sym_vol& a, const sym_vol& b) {
 			return a.quote_vol > b.quote_vol;
 		}
 	);
 
+	/* Select top N symbols (USDT pairs only) */
 	this->target_symbols.clear();
 	int count = 0;
 	for (const auto& item : items) {
 		std::string sym(item.symbol);
 		std::transform(sym.begin(), sym.end(), sym.begin(), ::tolower);
 
+		/* Filter: We only want USDT pairs for this benchmark */
 		if (sym.find("usdt") != std::string::npos) {
 			this->target_symbols.push_back(sym);
 			count++;
