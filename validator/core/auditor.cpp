@@ -47,53 +47,143 @@ struct symbol_cursor {
 };
 
 /*
- * Simple fixed-bin histogram for latency measurement.
- * - Unit: 100ns (0.1us)
- * - Range: 0 ~ 1000ms (1,000,000,000ns) -> Increased to 1s to capture spikes
- * - Size: 10,000,000 buckets (Approx. 76MB per instance)
+ * --------------------------------------------------------------------------
+ * Global Histogram (Log-Scaled Bins)
+ * --------------------------------------------------------------------------
+ *
+ * Log-scaled fixed-bin histogram for latency measurement.
+ * - Stores nanoseconds (int64)
+ * - Piecewise precision to keep memory small while preserving tail accuracy.
+ *
+ * Bucket layout:
+ *   [0,    1ms)    step 100ns   -> 10,000 buckets
+ *   [1ms,  10ms)   step 1us     -> 9,000 buckets
+ *   [10ms, 100ms)  step 10us    -> 9,000 buckets
+ *   [100ms, 1s)    step 100us   -> 9,000 buckets
+ *   overflow bucket (>= 1s)
+ *
+ * Total buckets: 37,001 (about 296KB per instance with uint64_t)
  */
-struct SimpleHistogram {
-	static constexpr int64_t UNIT_NS = 100;
-	/* Extended range to 1 second to capture long-tail latency */
-	static constexpr int64_t MAX_NS = 1000LL * 1000 * 1000;
-	static constexpr int BUCKET_COUNT = MAX_NS / UNIT_NS;
+struct LogHistogram {
+	static constexpr int64_t MS1_NS = 1000LL * 1000;
+	static constexpr int64_t MS10_NS = 10LL * 1000 * 1000;
+	static constexpr int64_t MS100_NS = 100LL * 1000 * 1000;
+	static constexpr int64_t S1_NS = 1000LL * 1000 * 1000;
+
+	static constexpr int64_t STEP_100NS = 100;
+	static constexpr int64_t STEP_1US = 1000;
+	static constexpr int64_t STEP_10US = 10LL * 1000;
+	static constexpr int64_t STEP_100US = 100LL * 1000;
+
+	static constexpr int STAGE_COUNT = 4;
+
+	int64_t base_ns[STAGE_COUNT];
+	int64_t limit_ns[STAGE_COUNT];
+	int64_t step_ns[STAGE_COUNT];
+	int bucket_off[STAGE_COUNT];
+	int bucket_cnt[STAGE_COUNT];
 
 	std::vector<uint64_t> buckets;
 	uint64_t total_count;
 	int64_t max_val;
 
-	SimpleHistogram() {
+	LogHistogram()
+		: total_count(0), max_val(0)
+	{
+		init_layout();
+	}
+
+	void init_layout() {
+		base_ns[0] = 0;
+		limit_ns[0] = MS1_NS;
+		step_ns[0] = STEP_100NS;
+
+		base_ns[1] = MS1_NS;
+		limit_ns[1] = MS10_NS;
+		step_ns[1] = STEP_1US;
+
+		base_ns[2] = MS10_NS;
+		limit_ns[2] = MS100_NS;
+		step_ns[2] = STEP_10US;
+
+		base_ns[3] = MS100_NS;
+		limit_ns[3] = S1_NS;
+		step_ns[3] = STEP_100US;
+
+		int off = 0;
+		for (int s = 0; s < STAGE_COUNT; ++s) {
+			int64_t span = limit_ns[s] - base_ns[s];
+			bucket_cnt[s] = (int)(span / step_ns[s]);
+			bucket_off[s] = off;
+			off += bucket_cnt[s];
+		}
+
 		/* +1 for overflow bucket */
-		buckets.resize(BUCKET_COUNT + 1, 0);
-		total_count = 0;
-		max_val = 0;
+		buckets.assign((size_t)off + 1, 0);
 	}
 
 	void record(int64_t val_ns) {
 		if (val_ns < 0) return;
+
 		if (val_ns > max_val) max_val = val_ns;
 
-		int64_t idx = val_ns / UNIT_NS;
-		if (idx >= BUCKET_COUNT) idx = BUCKET_COUNT;
-		
-		buckets[idx]++;
+		int idx = bucket_index(val_ns);
+		buckets[(size_t)idx]++;
 		total_count++;
 	}
 
-	int64_t percentile(double p) {
+	int bucket_index(int64_t val_ns) const {
+		for (int s = 0; s < STAGE_COUNT; ++s) {
+			if (val_ns < limit_ns[s]) {
+				int64_t rel = val_ns - base_ns[s];
+				int bin = (int)(rel / step_ns[s]);
+				if (bin < 0) bin = 0;
+				if (bin >= bucket_cnt[s]) bin = bucket_cnt[s] - 1;
+				return bucket_off[s] + bin;
+			}
+		}
+
+		/* Overflow bucket */
+		return (int)(buckets.size() - 1);
+	}
+
+	int64_t value_from_index(int idx) const {
+		int last = (int)buckets.size() - 1;
+		if (idx >= last) return max_val;
+
+		for (int s = 0; s < STAGE_COUNT; ++s) {
+			int off = bucket_off[s];
+			int cnt = bucket_cnt[s];
+			if (idx >= off && idx < off + cnt) {
+				int rel = idx - off;
+				return base_ns[s] + (int64_t)rel * step_ns[s];
+			}
+		}
+
+		return max_val;
+	}
+
+	int64_t percentile(double p) const {
 		if (total_count == 0) return 0;
-		
-		uint64_t target = (uint64_t)(total_count * (p / 100.0));
-		
-		/* If 100%, return the absolute max seen */
+
 		if (p >= 100.0) return max_val;
+		if (p <= 0.0) return 0;
+
+		double frac = p / 100.0;
+		uint64_t rank = (uint64_t)std::ceil(frac * (double)total_count);
+		if (rank < 1) rank = 1;
 
 		uint64_t accum = 0;
-		for (int i = 0; i < BUCKET_COUNT; i++) {
-			accum += buckets[i];
-			if (accum >= target) return (int64_t)i * UNIT_NS;
+		int last = (int)buckets.size();
+
+		for (int i = 0; i < last; ++i) {
+			accum += buckets[(size_t)i];
+			if (accum >= rank) {
+				return value_from_index(i);
+			}
 		}
-		return max_val; /* Overflow bucket */
+
+		return max_val;
 	}
 };
 
@@ -104,9 +194,9 @@ struct latency_stats {
 	std::vector<double> audit_samples;
 
 	/* 2. Global Data (Accumulate forever) */
-	SimpleHistogram global_feed_hist;
-	SimpleHistogram global_int_hist;
-	SimpleHistogram global_aud_hist;
+	LogHistogram global_feed_hist;
+	LogHistogram global_int_hist;
+	LogHistogram global_aud_hist;
 
 	/* Cumulative Counters */
 	uint64_t total_candles;
@@ -169,7 +259,7 @@ struct latency_stats {
 		return {p50, p99, p999, max};
 	}
 
-	vec_stats get_simple_stats(SimpleHistogram& h) {
+	vec_stats get_simple_stats(LogHistogram& h) {
 		return vec_stats{
 			(double)h.percentile(50.0),
 			(double)h.percentile(99.0),
