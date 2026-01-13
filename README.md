@@ -41,12 +41,10 @@ than trcache's processing capacity.
 - **Static Read** (no concurrent writes):
   - P50: `6.2` μs
   - P99: `9.18` μs
-  - Mean: `6.4` μs
 
 - **Concurrent Read** (1 feed thread, 3 worker threads, feed rate: `14,869,372` trades/sec):
   - P50: `25.5` μs
   - P99: `56.4` μs
-  - Mean: `27.4` μs
 
 ### Scalability
 
@@ -54,23 +52,23 @@ All measurements use **1 concurrent reader thread** (same as Query Latency bench
 
 - **3 worker threads:**
 
-| # of Feed Threads | Feed Rate (trades / sec) | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) | Peak Memory |       Status        |
-|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------------------:|:-----------:|:-------------------:|
-|        1          |        14,869,372        |          27.4            |           25.5          |          56.4           |    3.2 GB   | ✓ Within limit      |
-|        2          |        29,515,833        |          28.7            |           26.6          |          58.6           |    3.4 GB   | ✓ Within limit      |
-|        3          |        38,570,051        |          31.6            |           28.7          |          76.9           |    7.2 GB   | ⚠ Exceeded limit   |
+| # of Feed Threads | Feed Rate (trades / sec) |  Query Latency (p50, μs) | Query Latency (p99, μs) | Peak Memory |       Status        |
+|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------:|:-------------------:|
+|        1          |        14,869,372        |            25.5          |          56.4           |    3.2 GB   | ✓ Within limit      |
+|        2          |        29,515,833        |            26.6          |          58.6           |    3.4 GB   | ✓ Within limit      |
+|        3          |        38,570,051        |            28.7          |          76.9           |    7.2 GB   | ⚠ Exceeded limit   |
 
 † *With 3 feed threads, memory usage reached 7.2GB, exceeding the configured 5GB limit.*
 
 - **6 worker threads:**
 
-| # of Feed Threads | Feed Rate (trades / sec) | Query Latency (Mean, μs) | Query Latency (p50, μs) | Query Latency (p99, μs) | Peak Memory |       Status        |
-|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------------------:|:-----------:|:-------------------:|
-|        1          |        13,215,539        |          30.4            |           27.4          |          68.5           |    4.37 GB  | ✓ Within limit      |
-|        2          |        25,993,349        |          38.4            |           34.4          |          83             |    3.54 GB  | ✓ Within limit      |
-|        3          |        39,593,103        |          44.1            |           40.2          |          92             |    2.96 GB  | ✓ Within limit      |
-|        4          |        49,045,406        |          48              |           44.3          |          97.5           |    3.44 GB  | ✓ Within limit      |
-|        5          |        56,809,017        |          58              |           50            |          283            |    6.16 GB  | ⚠ Exceeded limit   |
+| # of Feed Threads | Feed Rate (trades / sec) |  Query Latency (p50, μs) | Query Latency (p99, μs) | Peak Memory |       Status        |
+|:-----------------:|:------------------------:|:------------------------:|:-----------------------:|:-----------:|:-------------------:|
+|        1          |        13,215,539        |            27.4          |          68.5           |    4.37 GB  | ✓ Within limit      |
+|        2          |        25,993,349        |            34.4          |          83             |    3.54 GB  | ✓ Within limit      |
+|        3          |        39,593,103        |            40.2          |          92             |    2.96 GB  | ✓ Within limit      |
+|        4          |        49,045,406        |            44.3          |          97.5           |    3.44 GB  | ✓ Within limit      |
+|        5          |        56,809,017        |            50            |          283            |    6.16 GB  | ⚠ Exceeded limit   |
 
 † *With 5 feed threads, memory usage reached 6.16GB, exceeding the configured 5GB limit.*
 
