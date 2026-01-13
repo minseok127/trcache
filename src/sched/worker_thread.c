@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
-#include <time.h>
 
 #include "sched/worker_thread.h"
 #include "meta/symbol_table.h"
@@ -26,17 +25,6 @@
 #define BIT_OFFSET(bit) ((bit) % BITS_PER_WORD)
 #define IS_BIT_SET(bitmap, bit) \
 	(bitmap[WORD_OFFSET(bit)] & (1ULL << BIT_OFFSET(bit)))
-
-/*
- * Adaptive Backoff Configuration
- *
- * SPIN_LIMIT:  Number of iterations to busy-wait (low latency).
- * YIELD_LIMIT: Number of iterations to yield before sleeping.
- * SLEEP_MS:    Sleep duration in milisecond when idle (power saving).
- */
-#define BACKOFF_SPIN_LIMIT   (1000)
-#define BACKOFF_YIELD_LIMIT  (2000)
-#define BACKOFF_SLEEP_MS     (1000000)
 
 /**
  * @brief A 32-byte (256-bit) chunk of zeros, cacheline-aligned.
@@ -527,8 +515,6 @@ void *worker_thread_main(void *arg)
 	struct trcache *cache = args->cache;
 	int worker_id = args->worker_id;
 	struct worker_state *state = &cache->worker_state_arr[worker_id];
-	struct timespec sleep_req = {0, BACKOFF_SLEEP_MS};
-	uint64_t idle_count = 0;
 	bool work_done;
 	int old_group = -1;
 
@@ -556,23 +542,10 @@ void *worker_thread_main(void *arg)
 			work_done = worker_run_flush_tasks(cache, state);
 		}
 
-		if (work_done) {
-			/* Reset backoff counter */
-			idle_count = 0;
-		} else {
-			idle_count++;
-
-			if (idle_count < BACKOFF_SPIN_LIMIT) {
-				/* Phase 1: Busy-wait (Low Latency) */
-				__asm__ __volatile__("pause");
-			} else if (idle_count < BACKOFF_YIELD_LIMIT) {
-				/* Phase 2: Yield (Cooperative) */
-				sched_yield();
-			} else {
-				/* Phase 3: Sleep (Power Saving) */
-				nanosleep(&sleep_req, NULL);
-			}
-		}
+		/* Busy-wait (Low Latency) */
+		if (!work_done) {
+			__asm__ __volatile__("pause");
+		} 
 	}
 
 	/*
