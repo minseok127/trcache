@@ -245,8 +245,6 @@ void run_auditor(struct trcache* cache,
 	auto last_report = std::chrono::steady_clock::now();
 
 	while (running_flag) {
-		bool busy = false;
-
 		for (int sym_id = 0; sym_id < max_symbols; ++sym_id) {
 			for (int cfg_idx = 0; cfg_idx < num_configs; ++cfg_idx) {
 				
@@ -320,7 +318,6 @@ void run_auditor(struct trcache* cache,
 					if (batch->key_array[i] <= cur.last_key)
 						continue;
 
-					busy = true;
 					bool has_gap = false;
 					bool has_tick_err = false;
 
@@ -371,11 +368,6 @@ void run_auditor(struct trcache* cache,
 			now - last_report).count() >= 1) {
 			stats.report_interval();
 			last_report = now;
-		}
-
-		if (!busy) {
-			std::this_thread::sleep_for(
-				std::chrono::milliseconds(1));
 		}
 	}
 
