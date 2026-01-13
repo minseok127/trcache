@@ -13,6 +13,8 @@
  * [Statistics Strategy]
  * - Window Stats (Current): std::vector (Exact precision, Reset every interval)
  * - Global Stats (Total): SimpleHistogram (Fixed-bin, Accumulated forever)
+ * - Metric Change: Replaced Average (Mean) with Median (P50) to better
+ * represent typical performance in long-tail distributions.
  */
 
 #include "auditor.h"
@@ -47,12 +49,13 @@ struct symbol_cursor {
 /*
  * Simple fixed-bin histogram for latency measurement.
  * - Unit: 100ns (0.1us)
- * - Range: 0 ~ 1000ms (1,000,000,000ns)
- * - Size: 10,000,000 buckets (Approx. 80MB per instance)
+ * - Range: 0 ~ 1000ms (1,000,000,000ns) -> Increased to 1s to capture spikes
+ * - Size: 10,000,000 buckets (Approx. 76MB per instance)
  */
 struct SimpleHistogram {
 	static constexpr int64_t UNIT_NS = 100;
-	static constexpr int64_t MAX_NS = 1000 * 1000 * 1000; /* 1000ms */
+	/* Extended range to 1 second to capture long-tail latency */
+	static constexpr int64_t MAX_NS = 1000LL * 1000 * 1000;
 	static constexpr int BUCKET_COUNT = MAX_NS / UNIT_NS;
 
 	std::vector<uint64_t> buckets;
@@ -82,6 +85,7 @@ struct SimpleHistogram {
 		
 		uint64_t target = (uint64_t)(total_count * (p / 100.0));
 		
+		/* If 100%, return the absolute max seen */
 		if (p >= 100.0) return max_val;
 
 		uint64_t accum = 0;
@@ -90,20 +94,6 @@ struct SimpleHistogram {
 			if (accum >= target) return (int64_t)i * UNIT_NS;
 		}
 		return max_val; /* Overflow bucket */
-	}
-
-	double mean() {
-		if (total_count == 0) return 0.0;
-		double sum = 0;
-		for (int i = 0; i < BUCKET_COUNT; i++) {
-			if (buckets[i] > 0) {
-				/* Use lower bound of the bucket */
-				sum += (double)buckets[i] * (i * UNIT_NS);
-			}
-		}
-		/* Approximated overflow value */
-		sum += (double)buckets[BUCKET_COUNT] * MAX_NS;
-		return sum / total_count;
 	}
 };
 
@@ -157,32 +147,31 @@ struct latency_stats {
 		if (has_tick_err) total_tick_errors++;
 	}
 
-	/* Helper struct for passing stats */
+	/* Helper struct for passing stats (Replaced avg with p50) */
 	struct vec_stats {
-		double avg;
-		double p99;
-		double p999;
-		double max;
+		double p50;   /* Median */
+		double p99;   /* 99th percentile */
+		double p999;  /* 99.9th percentile */
+		double max;   /* Maximum value */
 	};
 
 	vec_stats calc_vec_stats(std::vector<double>& v) {
 		if (v.empty()) return {0, 0, 0, 0};
 
-		double sum = 0;
-		for (double d : v) sum += d;
-		double avg = sum / v.size();
-
+		/* Sorting is required for percentiles */
 		std::sort(v.begin(), v.end());
+
+		double p50 = v[v.size() * 0.50];
 		double p99 = v[v.size() * 0.99];
 		double p999 = v[v.size() * 0.999];
 		double max = v.back();
 
-		return {avg, p99, p999, max};
+		return {p50, p99, p999, max};
 	}
 
 	vec_stats get_simple_stats(SimpleHistogram& h) {
 		return vec_stats{
-			h.mean(),
+			(double)h.percentile(50.0),
 			(double)h.percentile(99.0),
 			(double)h.percentile(99.9),
 			(double)h.max_val
@@ -203,43 +192,43 @@ struct latency_stats {
 		vec_stats i_glb = get_simple_stats(global_int_hist);
 		vec_stats a_glb = get_simple_stats(global_aud_hist);
 
-		/* Console Output - Dual Line Format */
+		/* Console Output - Replaced Avg with P50 */
 		std::cout << "[Auditor] Candles: " << total_candles
 			  << " | Gaps: " << total_gaps << "\n"
 			  << std::fixed << std::setprecision(3)
 
 			  << "   [Network + Parsing]\n"
-			  << "      Current: Avg " << f_win.avg/1000.0
+			  << "      Current: P50 " << f_win.p50/1000.0
 			  << " | P99 " << f_win.p99/1000.0
 			  << " | P99.9 " << f_win.p999/1000.0
 			  << " | Max " << f_win.max/1000.0 << " us\n"
-			  << "      Total  : Avg " << f_glb.avg/1000.0
+			  << "      Total  : P50 " << f_glb.p50/1000.0
 			  << " | P99 " << f_glb.p99/1000.0
 			  << " | P99.9 " << f_glb.p999/1000.0
 			  << " | Max " << f_glb.max/1000.0 << " us\n"
 
 			  << "   [Engine Internal]\n"
-			  << "      Current: Avg " << i_win.avg/1000.0
+			  << "      Current: P50 " << i_win.p50/1000.0
 			  << " | P99 " << i_win.p99/1000.0
 			  << " | P99.9 " << i_win.p999/1000.0
 			  << " | Max " << i_win.max/1000.0 << " us\n"
-			  << "      Total  : Avg " << i_glb.avg/1000.0
+			  << "      Total  : P50 " << i_glb.p50/1000.0
 			  << " | P99 " << i_glb.p99/1000.0
 			  << " | P99.9 " << i_glb.p999/1000.0
 			  << " | Max " << i_glb.max/1000.0 << " us\n"
 
 			  << "   [Auditor Detection]\n"
-			  << "      Current: Avg " << a_win.avg/1000.0
+			  << "      Current: P50 " << a_win.p50/1000.0
 			  << " | P99 " << a_win.p99/1000.0
 			  << " | P99.9 " << a_win.p999/1000.0
 			  << " | Max " << a_win.max/1000.0 << " us\n"
-			  << "      Total  : Avg " << a_glb.avg/1000.0
+			  << "      Total  : P50 " << a_glb.p50/1000.0
 			  << " | P99 " << a_glb.p99/1000.0
 			  << " | P99.9 " << a_glb.p999/1000.0
 			  << " | Max " << a_glb.max/1000.0 << " us"
 			  << std::endl;
 
-		/* CSV Output */
+		/* CSV Output - Updated columns to use Median */
 		if (csv_file && csv_file->is_open()) {
 			auto now = std::chrono::system_clock::now();
 			std::time_t t_now = std::chrono::system_clock::to_time_t(now);
@@ -252,18 +241,18 @@ struct latency_stats {
 				  << total_candles << ","
 				  << total_gaps << ","
 				  /* Window Stats */
-				  << f_win.avg << "," << f_win.p99 << ","
+				  << f_win.p50 << "," << f_win.p99 << ","
 				  << f_win.p999 << "," << f_win.max << ","
-				  << i_win.avg << "," << i_win.p99 << ","
+				  << i_win.p50 << "," << i_win.p99 << ","
 				  << i_win.p999 << "," << i_win.max << ","
-				  << a_win.avg << "," << a_win.p99 << ","
+				  << a_win.p50 << "," << a_win.p99 << ","
 				  << a_win.p999 << "," << a_win.max << ","
 				  /* Global Stats */
-				  << f_glb.avg << "," << f_glb.p99 << ","
+				  << f_glb.p50 << "," << f_glb.p99 << ","
 				  << f_glb.p999 << "," << f_glb.max << ","
-				  << i_glb.avg << "," << i_glb.p99 << ","
+				  << i_glb.p50 << "," << i_glb.p99 << ","
 				  << i_glb.p999 << "," << i_glb.max << ","
-				  << a_glb.avg << "," << a_glb.p99 << ","
+				  << a_glb.p50 << "," << a_glb.p99 << ","
 				  << a_glb.p999 << "," << a_glb.max
 				  << "\n";
 		}
@@ -294,17 +283,17 @@ struct latency_stats {
 			  << "----------------------------------------\n"
 			  << std::fixed << std::setprecision(3)
 			  << " [Network + Parsing Latency]\n"
-			  << "   Avg: " << f.avg / 1000.0 << " us\n"
+			  << "   P50: " << f.p50 / 1000.0 << " us\n"
 			  << "   P99: " << f.p99 / 1000.0 << " us\n"
 			  << " P99.9: " << f.p999 / 1000.0 << " us\n"
 			  << "   Max: " << f.max / 1000.0 << " us\n"
 			  << " [Engine Internal Latency]\n"
-			  << "   Avg: " << i.avg / 1000.0 << " us\n"
+			  << "   P50: " << i.p50 / 1000.0 << " us\n"
 			  << "   P99: " << i.p99 / 1000.0 << " us\n"
 			  << " P99.9: " << i.p999 / 1000.0 << " us\n"
 			  << "   Max: " << i.max / 1000.0 << " us\n"
 			  << " [Auditor Detection Latency]\n"
-			  << "   Avg: " << a.avg / 1000.0 << " us\n"
+			  << "   P50: " << a.p50 / 1000.0 << " us\n"
 			  << "   P99: " << a.p99 / 1000.0 << " us\n"
 			  << " P99.9: " << a.p999 / 1000.0 << " us\n"
 			  << "   Max: " << a.max / 1000.0 << " us\n"
@@ -368,19 +357,19 @@ void run_auditor(struct trcache* cache,
 			std::cout << "[Auditor] Saving report to: "
 				  << final_path << std::endl;
 
-			/* CSV Header */
+			/* CSV Header - Changed Avg to P50 */
 			csv_file << "Time,Total_Candles,Gaps,"
-				 << "Win_Feed_Avg,Win_Feed_P99,Win_Feed_P999,"
+				 << "Win_Feed_P50,Win_Feed_P99,Win_Feed_P999,"
 				 << "Win_Feed_Max,"
-				 << "Win_Int_Avg,Win_Int_P99,Win_Int_P999,"
+				 << "Win_Int_P50,Win_Int_P99,Win_Int_P999,"
 				 << "Win_Int_Max,"
-				 << "Win_Aud_Avg,Win_Aud_P99,Win_Aud_P999,"
+				 << "Win_Aud_P50,Win_Aud_P99,Win_Aud_P999,"
 				 << "Win_Aud_Max,"
-				 << "Glb_Feed_Avg,Glb_Feed_P99,Glb_Feed_P999,"
+				 << "Glb_Feed_P50,Glb_Feed_P99,Glb_Feed_P999,"
 				 << "Glb_Feed_Max,"
-				 << "Glb_Int_Avg,Glb_Int_P99,Glb_Int_P999,"
+				 << "Glb_Int_P50,Glb_Int_P99,Glb_Int_P999,"
 				 << "Glb_Int_Max,"
-				 << "Glb_Aud_Avg,Glb_Aud_P99,Glb_Aud_P999,"
+				 << "Glb_Aud_P50,Glb_Aud_P99,Glb_Aud_P999,"
 				 << "Glb_Aud_Max"
 				 << "\n";
 		} else {
