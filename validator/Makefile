@@ -13,7 +13,7 @@ TARGET = validator_app
 # Compiler Settings
 CXX = g++
 CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -pthread
-CXXFLAGS += -I./core -I./exchanges
+CXXFLAGS += -I./core -I./exchanges -I../benchmark
 
 # Dependency Paths (Adjust as needed)
 # Corrected path to point to the project root (where trcache.h resides)

@@ -1,21 +1,20 @@
 /*
  * validator/core/auditor.cpp
  *
- * Implementation of the Auditor module.
+ * Implementation of the Auditor module with Hybrid Statistics.
  *
- * This module acts as the quality assurance layer for the validator.
- * It performs two key verification tasks:
- * 1. Internal Integrity: Checks for sequence gaps in candle trades.
- * 2. System Latency: Measures Network+Parsing, Engine, and Audit Latency.
- * 3. Tick Count Integrity: Verifies tick counts for TICK-based candles.
- * 4. CSV Reporting: Saves interval statistics to a file for analysis.
+ * [Statistics Strategy]
+ * - Window Stats (Current): std::vector (Exact precision, Reset every interval)
+ * - Global Stats (Total): hdr_histogram (Memory safe, Accumulated forever)
  */
 
 #include "auditor.h"
 #include "types.h"
+/* Include the single-header library from benchmark directory */
+#include "hdr_histogram.h"
 
 #include <iostream>
-#include <fstream> /* Added for CSV output */
+#include <fstream>
 #include <vector>
 #include <algorithm>
 #include <thread>
@@ -24,6 +23,7 @@
 #include <time.h>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 
 /*
  * --------------------------------------------------------------------------
@@ -40,15 +40,15 @@ struct symbol_cursor {
 };
 
 struct latency_stats {
-	/* Interval Data (Reset every report) */
+	/* 1. Window Data (Reset every report) */
 	std::vector<double> feed_samples;
 	std::vector<double> internal_samples;
 	std::vector<double> audit_samples;
 	
-	/* Global Data (Accumulate all samples for Final P99) */
-	std::vector<double> global_feed_samples;
-	std::vector<double> global_int_samples;
-	std::vector<double> global_aud_samples;
+	/* 2. Global Data (Accumulate forever) */
+	struct hdr_histogram* global_feed_hist;
+	struct hdr_histogram* global_int_hist;
+	struct hdr_histogram* global_aud_hist;
 
 	/* Cumulative Counters */
 	uint64_t total_candles;
@@ -59,31 +59,37 @@ struct latency_stats {
 		total_candles(0), total_gaps(0), total_tick_errors(0)
 	{
 		reserve_vectors();
+
+		/* Initialize Histograms (1ns to 60sec, 3 sig figs) */
+		hdr_histogram_init(1, 60000000000LL, 3, &global_feed_hist);
+		hdr_histogram_init(1, 60000000000LL, 3, &global_int_hist);
+		hdr_histogram_init(1, 60000000000LL, 3, &global_aud_hist);
+	}
+
+	~latency_stats() {
+		if (global_feed_hist) hdr_histogram_close(global_feed_hist);
+		if (global_int_hist)  hdr_histogram_close(global_int_hist);
+		if (global_aud_hist)  hdr_histogram_close(global_aud_hist);
 	}
 
 	void reserve_vectors() {
 		feed_samples.reserve(4096);
 		internal_samples.reserve(4096);
 		audit_samples.reserve(4096);
-		
-		/* Global vectors will grow large, reserve initial chunk */
-		global_feed_samples.reserve(100000);
-		global_int_samples.reserve(100000);
-		global_aud_samples.reserve(100000);
 	}
 
-	void add(double feed, double internal, double audit,
+	void add(double feed_ns, double internal_ns, double audit_ns,
 		 bool has_gap, bool has_tick_err) {
 		
 		/* Interval Samples */
-		feed_samples.push_back(feed);
-		internal_samples.push_back(internal);
-		audit_samples.push_back(audit);
+		feed_samples.push_back(feed_ns);
+		internal_samples.push_back(internal_ns);
+		audit_samples.push_back(audit_ns);
 
-		/* Global Samples (For Final P99) */
-		global_feed_samples.push_back(feed);
-		global_int_samples.push_back(internal);
-		global_aud_samples.push_back(audit);
+		/* Global Histograms (Record as int64 nanoseconds) */
+		hdr_histogram_record_value(global_feed_hist, (int64_t)feed_ns);
+		hdr_histogram_record_value(global_int_hist,  (int64_t)internal_ns);
+		hdr_histogram_record_value(global_aud_hist,  (int64_t)audit_ns);
 
 		/* Cumulative Counters */
 		total_candles++;
@@ -91,107 +97,109 @@ struct latency_stats {
 		if (has_tick_err) total_tick_errors++;
 	}
 
-	double get_avg(const std::vector<double>& v) {
-		if (v.empty()) return 0;
+	/* Helper struct for passing stats */
+	struct vec_stats {
+		double avg;
+		double p99;
+		double p999;
+		double max;
+	};
+
+	vec_stats calc_vec_stats(std::vector<double>& v) {
+		if (v.empty()) return {0, 0, 0, 0};
+		
 		double sum = 0;
 		for (double d : v) sum += d;
-		return sum / v.size();
-	}
+		double avg = sum / v.size();
 
-	double get_p99(std::vector<double>& v) {
-		if (v.empty()) return 0;
 		std::sort(v.begin(), v.end());
-		return v[v.size() * 0.99];
+		double p99 = v[v.size() * 0.99];
+		double p999 = v[v.size() * 0.999];
+		double max = v.back();
+
+		return {avg, p99, p999, max};
 	}
 
-	double get_max(const std::vector<double>& v) {
-		if (v.empty()) return 0;
-		double max_val = 0;
-		for (double d : v) {
-			if (d > max_val) max_val = d;
-		}
-		return max_val;
+	/* Helper to extract stats from HDR Histogram */
+	vec_stats get_hist_stats(struct hdr_histogram* h) {
+		return vec_stats{
+			hdr_histogram_mean(h),
+			(double)hdr_histogram_value_at_percentile(h, 99.0),
+			(double)hdr_histogram_value_at_percentile(h, 99.9),
+			(double)hdr_histogram_max(h)
+		};
 	}
 
 	/* Reports interval latency and writes to CSV if stream is open */
 	void report_interval(std::ofstream* csv_file) {
 		if (feed_samples.empty()) return;
 
-		double f_avg = get_avg(feed_samples);
-		double f_p99 = get_p99(feed_samples); /* Sorts feed_samples */
-		double f_max = feed_samples.back();   /* After sort, last is max */
+		/* 1. Calculate Window Stats (Current) */
+		vec_stats f_win = calc_vec_stats(feed_samples);
+		vec_stats i_win = calc_vec_stats(internal_samples);
+		vec_stats a_win = calc_vec_stats(audit_samples);
 
-		double i_avg = get_avg(internal_samples);
-		double i_p99 = get_p99(internal_samples);
-		double i_max = internal_samples.back();
+		/* 2. Calculate Global Stats (Total) */
+		vec_stats f_glb = get_hist_stats(global_feed_hist);
+		vec_stats i_glb = get_hist_stats(global_int_hist);
+		vec_stats a_glb = get_hist_stats(global_aud_hist);
 
-		double a_avg = get_avg(audit_samples);
-		double a_p99 = get_p99(audit_samples);
-		double a_max = audit_samples.back();
-
-		/* Console Output */
-		std::cout << "[Auditor] Total: " << total_candles
-			  << " | Gaps: " << total_gaps
-			  << " | TickErr: " << total_tick_errors << "\n"
-			  << std::fixed << std::setprecision(3)
-			  << "   [Network + Parsing Latency] Avg: " << f_avg / 1000.0
-			  << " us | P99: " << f_p99 / 1000.0
-			  << " us | Max: " << f_max / 1000.0 << " us\n"
-			  << "   [Engine Internal Latency]   Avg: " << i_avg / 1000.0
-			  << " us | P99: " << i_p99 / 1000.0
-			  << " us | Max: " << i_max / 1000.0 << " us\n"
-			  << "   [Auditor Detection Latency] Avg: " << a_avg / 1000.0
-			  << " us | P99: " << a_p99 / 1000.0
-			  << " us | Max: " << a_max / 1000.0 << " us"
+		/* Console Output - Dual Line Format */
+		std::cout << "[Auditor] Candles: " << total_candles
+			  << " | Gaps: " << total_gaps << "\n"
+			  << std::fixed << std::setprecision(2)
+			  
+			  << "   [Network + Parsing]\n"
+			  << "      Current: Avg " << f_win.avg/1000.0 << " | P99 " << f_win.p99/1000.0 << " | P99.9 " << f_win.p999/1000.0 << " | Max " << f_win.max/1000.0 << " us\n"
+			  << "      Total  : Avg " << f_glb.avg/1000.0 << " | P99 " << f_glb.p99/1000.0 << " | P99.9 " << f_glb.p999/1000.0 << " | Max " << f_glb.max/1000.0 << " us\n"
+			  
+			  << "   [Engine Internal]\n"
+			  << "      Current: Avg " << i_win.avg/1000.0 << " | P99 " << i_win.p99/1000.0 << " | P99.9 " << i_win.p999/1000.0 << " | Max " << i_win.max/1000.0 << " us\n"
+			  << "      Total  : Avg " << i_glb.avg/1000.0 << " | P99 " << i_glb.p99/1000.0 << " | P99.9 " << i_glb.p999/1000.0 << " | Max " << i_glb.max/1000.0 << " us\n"
+			  
+			  << "   [Auditor Detection]\n"
+			  << "      Current: Avg " << a_win.avg/1000.0 << " | P99 " << a_win.p99/1000.0 << " | P99.9 " << a_win.p999/1000.0 << " | Max " << a_win.max/1000.0 << " us\n"
+			  << "      Total  : Avg " << a_glb.avg/1000.0 << " | P99 " << a_glb.p99/1000.0 << " | P99.9 " << a_glb.p999/1000.0 << " | Max " << a_glb.max/1000.0 << " us"
 			  << std::endl;
 
-		/* CSV Output (No flush for performance) */
+		/* CSV Output (Expanded to include both Window and Global) */
 		if (csv_file && csv_file->is_open()) {
 			auto now = std::chrono::system_clock::now();
-			std::time_t t_now = std::chrono::system_clock::
-						to_time_t(now);
+			std::time_t t_now = std::chrono::system_clock::to_time_t(now);
 			struct tm* ptm = std::localtime(&t_now);
 			char time_buf[32];
-			std::strftime(time_buf, sizeof(time_buf), 
-				      "%Y-%m-%d %H:%M:%S", ptm);
+			std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", ptm);
 
 			*csv_file << time_buf << ","
 				  << total_candles << ","
 				  << total_gaps << ","
-				  << f_avg << "," << f_p99 << "," << f_max << ","
-				  << i_avg << "," << i_p99 << "," << i_max << ","
-				  << a_avg << "," << a_p99 << "," << a_max 
+				  /* Window Stats */
+				  << f_win.avg << "," << f_win.p99 << "," << f_win.p999 << "," << f_win.max << ","
+				  << i_win.avg << "," << i_win.p99 << "," << i_win.p999 << "," << i_win.max << ","
+				  << a_win.avg << "," << a_win.p99 << "," << a_win.p999 << "," << a_win.max << ","
+				  /* Global Stats */
+				  << f_glb.avg << "," << f_glb.p99 << "," << f_glb.p999 << "," << f_glb.max << ","
+				  << i_glb.avg << "," << i_glb.p99 << "," << i_glb.p999 << "," << i_glb.max << ","
+				  << a_glb.avg << "," << a_glb.p99 << "," << a_glb.p999 << "," << a_glb.max
 				  << "\n";
 		}
 
-		/* Reset Interval Data Only */
+		/* Reset Window Data Only */
 		feed_samples.clear();
 		internal_samples.clear();
 		audit_samples.clear();
-		
-		/* Re-reserve interval vectors */
-		feed_samples.reserve(4096);
-		internal_samples.reserve(4096);
-		audit_samples.reserve(4096);
+		reserve_vectors();
 	}
 
 	void report_final() {
-		if (global_feed_samples.empty()) return;
+		if (global_feed_hist->total_count == 0) return;
 
-		std::cout << "\n[Auditor] Calculating Final Statistics..." 
+		std::cout << "\n[Auditor] Calculating Final Statistics from Histograms..." 
 			  << std::endl;
 
-		double f_avg = get_avg(global_feed_samples);
-		double f_p99 = get_p99(global_feed_samples);
-		double f_max = global_feed_samples.back();
-
-		double i_avg = get_avg(global_int_samples);
-		double i_p99 = get_p99(global_int_samples);
-		double i_max = global_int_samples.back();
-
-		double a_avg = get_avg(global_aud_samples);
-		double a_p99 = get_p99(global_aud_samples);
-		double a_max = global_aud_samples.back();
+		vec_stats f = get_hist_stats(global_feed_hist);
+		vec_stats i = get_hist_stats(global_int_hist);
+		vec_stats a = get_hist_stats(global_aud_hist);
 
 		std::cout << "\n========================================\n"
 			  << "        VALIDATOR FINAL REPORT          \n"
@@ -202,17 +210,20 @@ struct latency_stats {
 			  << "----------------------------------------\n"
 			  << std::fixed << std::setprecision(3)
 			  << " [Network + Parsing Latency]\n"
-			  << "   Avg: " << f_avg / 1000.0 << " us\n"
-			  << "   P99: " << f_p99 / 1000.0 << " us\n"
-			  << "   Max: " << f_max / 1000.0 << " us\n"
+			  << "   Avg: " << f.avg / 1000.0 << " us\n"
+			  << "   P99: " << f.p99 / 1000.0 << " us\n"
+			  << " P99.9: " << f.p999 / 1000.0 << " us\n"
+			  << "   Max: " << f.max / 1000.0 << " us\n"
 			  << " [Engine Internal Latency]\n"
-			  << "   Avg: " << i_avg / 1000.0 << " us\n"
-			  << "   P99: " << i_p99 / 1000.0 << " us\n"
-			  << "   Max: " << i_max / 1000.0 << " us\n"
+			  << "   Avg: " << i.avg / 1000.0 << " us\n"
+			  << "   P99: " << i.p99 / 1000.0 << " us\n"
+			  << " P99.9: " << i.p999 / 1000.0 << " us\n"
+			  << "   Max: " << i.max / 1000.0 << " us\n"
 			  << " [Auditor Detection Latency]\n"
-			  << "   Avg: " << a_avg / 1000.0 << " us\n"
-			  << "   P99: " << a_p99 / 1000.0 << " us\n"
-			  << "   Max: " << a_max / 1000.0 << " us\n"
+			  << "   Avg: " << a.avg / 1000.0 << " us\n"
+			  << "   P99: " << a.p99 / 1000.0 << " us\n"
+			  << " P99.9: " << a.p999 / 1000.0 << " us\n"
+			  << "   Max: " << a.max / 1000.0 << " us\n"
 			  << "========================================\n"
 			  << std::endl;
 	}
@@ -259,7 +270,6 @@ void run_auditor(struct trcache* cache,
 	if (!config.csv_output_path.empty()) {
 		std::string final_path = config.csv_output_path;
 		if (config.csv_append_timestamp) {
-			/* Insert timestamp before extension */
 			size_t ext_pos = final_path.find_last_of(".");
 			std::string ts = "_" + get_timestamp_string();
 			if (ext_pos != std::string::npos) {
@@ -274,11 +284,15 @@ void run_auditor(struct trcache* cache,
 			std::cout << "[Auditor] Saving report to: " 
 				  << final_path << std::endl;
 			
-			/* Write CSV Header */
+			/* CSV Header (Expanded for Current/Window and Total/Global) */
 			csv_file << "Time,Total_Candles,Gaps,"
-				 << "Feed_Avg_ns,Feed_P99_ns,Feed_Max_ns,"
-				 << "Int_Avg_ns,Int_P99_ns,Int_Max_ns,"
-				 << "Aud_Avg_ns,Aud_P99_ns,Aud_Max_ns\n";
+				 << "Win_Feed_Avg,Win_Feed_P99,Win_Feed_P999,Win_Feed_Max,"
+				 << "Win_Int_Avg,Win_Int_P99,Win_Int_P999,Win_Int_Max,"
+				 << "Win_Aud_Avg,Win_Aud_P99,Win_Aud_P999,Win_Aud_Max,"
+				 << "Glb_Feed_Avg,Glb_Feed_P99,Glb_Feed_P999,Glb_Feed_Max,"
+				 << "Glb_Int_Avg,Glb_Int_P99,Glb_Int_P999,Glb_Int_Max,"
+				 << "Glb_Aud_Avg,Glb_Aud_P99,Glb_Aud_P999,Glb_Aud_Max"
+				 << "\n";
 		} else {
 			std::cerr << "[Auditor] Failed to open CSV file: "
 				  << final_path << std::endl;
@@ -330,14 +344,11 @@ void run_auditor(struct trcache* cache,
 				uint64_t threshold = candle_cfg.threshold;
 				if (threshold == 0) threshold = 1;
 
-				/* 1. Check Latest */
 				int ret = trcache_get_candles_by_symbol_id_and_offset(
 						cache, sym_id, cfg_idx, &req,
 						0, 1, batch);
 				
-				if (ret != 0 || batch->num_candles == 0) {
-					continue;
-				}
+				if (ret != 0 || batch->num_candles == 0) continue;
 
 				uint64_t latest_key = batch->key_array[0];
 				
@@ -353,11 +364,8 @@ void run_auditor(struct trcache* cache,
 					continue;
 				}
 
-				if (latest_key <= cur.last_key) {
-					continue;
-				}
+				if (latest_key <= cur.last_key) continue;
 
-				/* 2. Fetch specific range */
 				uint64_t diff = latest_key - cur.last_key;
 				int count = diff / threshold;
 				
@@ -372,23 +380,16 @@ void run_auditor(struct trcache* cache,
 
 				uint64_t read_ts = get_current_ns();
 				
-				uint64_t* c_ex_ts = (uint64_t*)
-					batch->column_arrays[VAL_COL_EXCHANGE_TS];
-				uint64_t* c_feed_ts = (uint64_t*)
-					batch->column_arrays[VAL_COL_FEED_TS];
-				uint64_t* c_loc_ts = (uint64_t*)
-					batch->column_arrays[VAL_COL_LOCAL_TS];
-				uint64_t* c_start = (uint64_t*)
-					batch->column_arrays[VAL_COL_START_SEQ_ID];
-				uint64_t* c_end = (uint64_t*)
-					batch->column_arrays[VAL_COL_END_SEQ_ID];
-				uint64_t* c_tick_cnt = (uint64_t*)
-					batch->column_arrays[VAL_COL_TICK_COUNT];
+				uint64_t* c_ex_ts = (uint64_t*) batch->column_arrays[VAL_COL_EXCHANGE_TS];
+				uint64_t* c_feed_ts = (uint64_t*) batch->column_arrays[VAL_COL_FEED_TS];
+				uint64_t* c_loc_ts = (uint64_t*) batch->column_arrays[VAL_COL_LOCAL_TS];
+				uint64_t* c_start = (uint64_t*) batch->column_arrays[VAL_COL_START_SEQ_ID];
+				uint64_t* c_end = (uint64_t*) batch->column_arrays[VAL_COL_END_SEQ_ID];
+				uint64_t* c_tick_cnt = (uint64_t*) batch->column_arrays[VAL_COL_TICK_COUNT];
 
 				for (int i = 0; i < batch->num_candles; ++i) {
 					if (!batch->is_closed_array[i]) continue;
-					if (batch->key_array[i] <= cur.last_key)
-						continue;
+					if (batch->key_array[i] <= cur.last_key) continue;
 
 					bool has_gap = false;
 					bool has_tick_err = false;
@@ -409,20 +410,15 @@ void run_auditor(struct trcache* cache,
 						}
 					}
 
-					int64_t lat_feed = (int64_t)c_feed_ts[i] - 
-							   (int64_t)c_ex_ts[i];
-					int64_t lat_int = (int64_t)c_loc_ts[i] - 
-							  (int64_t)c_feed_ts[i];
-					int64_t lat_aud = (int64_t)read_ts - 
-							  (int64_t)c_loc_ts[i];
+					int64_t lat_feed = (int64_t)c_feed_ts[i] - (int64_t)c_ex_ts[i];
+					int64_t lat_int = (int64_t)c_loc_ts[i] - (int64_t)c_feed_ts[i];
+					int64_t lat_aud = (int64_t)read_ts - (int64_t)c_loc_ts[i];
 
 					if (lat_feed < 0) lat_feed = 0;
 					if (lat_int < 0) lat_int = 0;
 					if (lat_aud < 0) lat_aud = 0;
 
-					stats.add((double)lat_feed,
-						  (double)lat_int,
-						  (double)lat_aud,
+					stats.add((double)lat_feed, (double)lat_int, (double)lat_aud,
 						  has_gap, has_tick_err);
 
 					cur.last_key = batch->key_array[i];
@@ -434,13 +430,11 @@ void run_auditor(struct trcache* cache,
 		auto now = std::chrono::steady_clock::now();
 		if (std::chrono::duration_cast<std::chrono::seconds>(
 			now - last_report).count() >= 1) {
-			/* Pass file pointer to reporting function */
 			stats.report_interval(&csv_file);
 			last_report = now;
 		}
 	}
 
-	/* Final Cleanup */
 	if (csv_file.is_open()) {
 		csv_file.flush();
 		csv_file.close();
