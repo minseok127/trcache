@@ -12,13 +12,11 @@
  *
  * [Statistics Strategy]
  * - Window Stats (Current): std::vector (Exact precision, Reset every interval)
- * - Global Stats (Total): hdr_histogram (Memory safe, Accumulated forever)
+ * - Global Stats (Total): SimpleHistogram (Fixed-bin, Accumulated forever)
  */
 
 #include "auditor.h"
 #include "types.h"
-/* Include the single-header library from benchmark directory */
-#include "hdr_histogram.h"
 
 #include <iostream>
 #include <fstream>
@@ -46,6 +44,69 @@ struct symbol_cursor {
 	symbol_cursor() : last_key(0), last_end_seq_id(0), initialized(false) {}
 };
 
+/*
+ * Simple fixed-bin histogram for latency measurement.
+ * - Unit: 100ns (0.1us)
+ * - Range: 0 ~ 100ms (100,000,000ns)
+ * - Size: 1,000,000 buckets (Approx. 8MB per instance)
+ */
+struct SimpleHistogram {
+	static constexpr int64_t UNIT_NS = 100;
+	static constexpr int64_t MAX_NS = 100 * 1000 * 1000; /* 100ms */
+	static constexpr int BUCKET_COUNT = MAX_NS / UNIT_NS;
+
+	std::vector<uint64_t> buckets;
+	uint64_t total_count;
+	int64_t max_val;
+
+	SimpleHistogram() {
+		/* +1 for overflow bucket */
+		buckets.resize(BUCKET_COUNT + 1, 0);
+		total_count = 0;
+		max_val = 0;
+	}
+
+	void record(int64_t val_ns) {
+		if (val_ns < 0) return;
+		if (val_ns > max_val) max_val = val_ns;
+
+		int64_t idx = val_ns / UNIT_NS;
+		if (idx >= BUCKET_COUNT) idx = BUCKET_COUNT;
+		
+		buckets[idx]++;
+		total_count++;
+	}
+
+	int64_t percentile(double p) {
+		if (total_count == 0) return 0;
+		
+		uint64_t target = (uint64_t)(total_count * (p / 100.0));
+		
+		if (p >= 100.0) return max_val;
+
+		uint64_t accum = 0;
+		for (int i = 0; i < BUCKET_COUNT; i++) {
+			accum += buckets[i];
+			if (accum >= target) return (int64_t)i * UNIT_NS;
+		}
+		return max_val; /* Overflow bucket */
+	}
+
+	double mean() {
+		if (total_count == 0) return 0.0;
+		double sum = 0;
+		for (int i = 0; i < BUCKET_COUNT; i++) {
+			if (buckets[i] > 0) {
+				/* Use lower bound of the bucket */
+				sum += (double)buckets[i] * (i * UNIT_NS);
+			}
+		}
+		/* Approximated overflow value */
+		sum += (double)buckets[BUCKET_COUNT] * MAX_NS;
+		return sum / total_count;
+	}
+};
+
 struct latency_stats {
 	/* 1. Window Data (Reset every report) */
 	std::vector<double> feed_samples;
@@ -53,9 +114,9 @@ struct latency_stats {
 	std::vector<double> audit_samples;
 
 	/* 2. Global Data (Accumulate forever) */
-	struct hdr_histogram* global_feed_hist;
-	struct hdr_histogram* global_int_hist;
-	struct hdr_histogram* global_aud_hist;
+	SimpleHistogram global_feed_hist;
+	SimpleHistogram global_int_hist;
+	SimpleHistogram global_aud_hist;
 
 	/* Cumulative Counters */
 	uint64_t total_candles;
@@ -66,18 +127,10 @@ struct latency_stats {
 		total_candles(0), total_gaps(0), total_tick_errors(0)
 	{
 		reserve_vectors();
-
-		/* Initialize Histograms (1ns to 60sec, 3 sig figs) */
-		hdr_histogram_init(1, 60000000000LL, 3, &global_feed_hist);
-		hdr_histogram_init(1, 60000000000LL, 3, &global_int_hist);
-		hdr_histogram_init(1, 60000000000LL, 3, &global_aud_hist);
 	}
 
-	~latency_stats() {
-		if (global_feed_hist) hdr_histogram_close(global_feed_hist);
-		if (global_int_hist)  hdr_histogram_close(global_int_hist);
-		if (global_aud_hist)  hdr_histogram_close(global_aud_hist);
-	}
+	/* SimpleHistogram handles its own memory, no special dtor needed */
+	~latency_stats() {}
 
 	void reserve_vectors() {
 		feed_samples.reserve(4096);
@@ -94,18 +147,9 @@ struct latency_stats {
 		audit_samples.push_back(audit_ns);
 
 		/* Global Histograms (Record as int64 nanoseconds) */
-		int64_t f_val = (int64_t)feed_ns;
-		int64_t i_val = (int64_t)internal_ns;
-		int64_t a_val = (int64_t)audit_ns;
-
-		/* Correction: Ensure min value is 1ns to avoid drop */
-		if (f_val < 1) f_val = 1;
-		if (i_val < 1) i_val = 1;
-		if (a_val < 1) a_val = 1;
-
-		hdr_histogram_record_value(global_feed_hist, f_val);
-		hdr_histogram_record_value(global_int_hist,  i_val);
-		hdr_histogram_record_value(global_aud_hist,  a_val);
+		global_feed_hist.record((int64_t)feed_ns);
+		global_int_hist.record((int64_t)internal_ns);
+		global_aud_hist.record((int64_t)audit_ns);
 
 		/* Cumulative Counters */
 		total_candles++;
@@ -136,13 +180,12 @@ struct latency_stats {
 		return {avg, p99, p999, max};
 	}
 
-	/* Helper to extract stats from HDR Histogram */
-	vec_stats get_hist_stats(struct hdr_histogram* h) {
+	vec_stats get_simple_stats(SimpleHistogram& h) {
 		return vec_stats{
-			hdr_histogram_mean(h),
-			(double)hdr_histogram_value_at_percentile(h, 99.0),
-			(double)hdr_histogram_value_at_percentile(h, 99.9),
-			(double)hdr_histogram_max(h)
+			h.mean(),
+			(double)h.percentile(99.0),
+			(double)h.percentile(99.9),
+			(double)h.max_val
 		};
 	}
 
@@ -156,9 +199,9 @@ struct latency_stats {
 		vec_stats a_win = calc_vec_stats(audit_samples);
 
 		/* 2. Calculate Global Stats (Total) */
-		vec_stats f_glb = get_hist_stats(global_feed_hist);
-		vec_stats i_glb = get_hist_stats(global_int_hist);
-		vec_stats a_glb = get_hist_stats(global_aud_hist);
+		vec_stats f_glb = get_simple_stats(global_feed_hist);
+		vec_stats i_glb = get_simple_stats(global_int_hist);
+		vec_stats a_glb = get_simple_stats(global_aud_hist);
 
 		/* Console Output - Dual Line Format */
 		std::cout << "[Auditor] Candles: " << total_candles
@@ -233,14 +276,14 @@ struct latency_stats {
 	}
 
 	void report_final() {
-		if (global_feed_hist->total_count == 0) return;
+		if (global_feed_hist.total_count == 0) return;
 
 		std::cout << "\n[Auditor] Calculating Final Statistics..."
 			  << std::endl;
 
-		vec_stats f = get_hist_stats(global_feed_hist);
-		vec_stats i = get_hist_stats(global_int_hist);
-		vec_stats a = get_hist_stats(global_aud_hist);
+		vec_stats f = get_simple_stats(global_feed_hist);
+		vec_stats i = get_simple_stats(global_int_hist);
+		vec_stats a = get_simple_stats(global_aud_hist);
 
 		std::cout << "\n========================================\n"
 			  << "        VALIDATOR FINAL REPORT          \n"
@@ -325,14 +368,20 @@ void run_auditor(struct trcache* cache,
 			std::cout << "[Auditor] Saving report to: "
 				  << final_path << std::endl;
 
-			/* CSV Header (Expanded for Current/Window and Total/Global) */
+			/* CSV Header */
 			csv_file << "Time,Total_Candles,Gaps,"
-				 << "Win_Feed_Avg,Win_Feed_P99,Win_Feed_P999,Win_Feed_Max,"
-				 << "Win_Int_Avg,Win_Int_P99,Win_Int_P999,Win_Int_Max,"
-				 << "Win_Aud_Avg,Win_Aud_P99,Win_Aud_P999,Win_Aud_Max,"
-				 << "Glb_Feed_Avg,Glb_Feed_P99,Glb_Feed_P999,Glb_Feed_Max,"
-				 << "Glb_Int_Avg,Glb_Int_P99,Glb_Int_P999,Glb_Int_Max,"
-				 << "Glb_Aud_Avg,Glb_Aud_P99,Glb_Aud_P999,Glb_Aud_Max"
+				 << "Win_Feed_Avg,Win_Feed_P99,Win_Feed_P999,"
+				 << "Win_Feed_Max,"
+				 << "Win_Int_Avg,Win_Int_P99,Win_Int_P999,"
+				 << "Win_Int_Max,"
+				 << "Win_Aud_Avg,Win_Aud_P99,Win_Aud_P999,"
+				 << "Win_Aud_Max,"
+				 << "Glb_Feed_Avg,Glb_Feed_P99,Glb_Feed_P999,"
+				 << "Glb_Feed_Max,"
+				 << "Glb_Int_Avg,Glb_Int_P99,Glb_Int_P999,"
+				 << "Glb_Int_Max,"
+				 << "Glb_Aud_Avg,Glb_Aud_P99,Glb_Aud_P999,"
+				 << "Glb_Aud_Max"
 				 << "\n";
 		} else {
 			std::cerr << "[Auditor] Failed to open CSV file: "
@@ -371,8 +420,6 @@ void run_auditor(struct trcache* cache,
 	latency_stats stats;
 
 	auto last_report = std::chrono::steady_clock::now();
-	auto first_report = std::chrono::steady_clock::now();
-	bool add_stat = false;
 
 	while (running_flag) {
 		for (int sym_id = 0; sym_id < max_symbols; ++sym_id) {
@@ -477,12 +524,10 @@ void run_auditor(struct trcache* cache,
 					if (lat_int < 0) lat_int = 0;
 					if (lat_aud < 0) lat_aud = 0;
 
-					if (add_stat) {
-						stats.add((double)lat_feed,
-							  (double)lat_int,
-							  (double)lat_aud,
-							  has_gap, has_tick_err);
-					}
+					stats.add((double)lat_feed,
+						  (double)lat_int,
+						  (double)lat_aud,
+						  has_gap, has_tick_err);
 
 					cur.last_key = batch->key_array[i];
 					cur.last_end_seq_id = c_end[i];
@@ -495,11 +540,6 @@ void run_auditor(struct trcache* cache,
 			now - last_report).count() >= 1) {
 			stats.report_interval(&csv_file);
 			last_report = now;
-		}
-
-		if (std::chrono::duration_cast<std::chrono::seconds>(
-			now - first_report).count() >= 5) {
-			add_stat = true;
 		}
 	}
 
