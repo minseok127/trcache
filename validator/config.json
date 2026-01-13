@@ -21,6 +21,10 @@
     "ws_url": "wss://fstream.binance.com/ws",
     "rest_url": "https://fapi.binance.com"
   },
+  "reporting": {
+    "csv_output_path": "result.csv",
+    "append_timestamp": true
+  },
   "options": {
     "note": "Optional: Add API keys here if needed in future"
   }

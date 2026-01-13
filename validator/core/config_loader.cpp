@@ -133,7 +133,27 @@ bool load_config(const std::string& path, struct validator_config* config)
 				"https://api.binance.com";
 		}
 
-		/* 6. Options */
+		/* 6. Reporting Settings (New) */
+		simdjson::dom::element rpt;
+		if (doc["reporting"].get(rpt) == simdjson::SUCCESS) {
+			std::string_view sv;
+			/* CSV Output Path */
+			if (rpt["csv_output_path"].get(sv) ==
+			    simdjson::SUCCESS) {
+				config->csv_output_path = std::string(sv);
+			}
+
+			/* Append Timestamp Flag */
+			bool b;
+			if (rpt["append_timestamp"].get(b) ==
+			    simdjson::SUCCESS) {
+				config->csv_append_timestamp = b;
+			} else {
+				config->csv_append_timestamp = false;
+			}
+		}
+
+		/* 7. Options */
 		simdjson::dom::element opts;
 		if (doc["options"].get(opts) == simdjson::SUCCESS &&
 		    opts.is_object()) {
@@ -142,7 +162,6 @@ bool load_config(const std::string& path, struct validator_config* config)
 				std::string key(field.key);
 				std::string val_str;
 
-				/* Handle type differences explicitly */
 				switch (field.value.type()) {
 				case simdjson::dom::element_type::STRING:
 					val_str = std::string(

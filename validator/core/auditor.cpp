@@ -8,12 +8,14 @@
  * 1. Internal Integrity: Checks for sequence gaps in candle trades.
  * 2. System Latency: Measures Feed, Internal, and Audit Latency.
  * 3. Tick Count Integrity: Verifies tick counts for TICK-based candles.
+ * 4. CSV Reporting: Saves interval statistics to a file for analysis.
  */
 
 #include "auditor.h"
 #include "types.h"
 
 #include <iostream>
+#include <fstream> /* Added for CSV output */
 #include <vector>
 #include <algorithm>
 #include <thread>
@@ -21,6 +23,7 @@
 #include <cstring>
 #include <time.h>
 #include <iomanip>
+#include <sstream>
 
 /*
  * --------------------------------------------------------------------------
@@ -42,26 +45,18 @@ struct latency_stats {
 	std::vector<double> internal_samples;
 	std::vector<double> audit_samples;
 	
-	/* Cumulative Counters (Never reset) */
+	/* Global Data (Accumulate all samples for Final P99) */
+	std::vector<double> global_feed_samples;
+	std::vector<double> global_int_samples;
+	std::vector<double> global_aud_samples;
+
+	/* Cumulative Counters */
 	uint64_t total_candles;
 	uint64_t total_gaps;
 	uint64_t total_tick_errors;
 
-	/* Global Stats for Final Report */
-	double global_feed_sum;
-	double global_feed_max;
-	double global_int_sum;
-	double global_int_max;
-	double global_aud_sum;
-	double global_aud_max;
-	uint64_t global_count;
-
 	latency_stats() : 
-		total_candles(0), total_gaps(0), total_tick_errors(0),
-		global_feed_sum(0), global_feed_max(0),
-		global_int_sum(0), global_int_max(0),
-		global_aud_sum(0), global_aud_max(0),
-		global_count(0)
+		total_candles(0), total_gaps(0), total_tick_errors(0)
 	{
 		reserve_vectors();
 	}
@@ -70,6 +65,11 @@ struct latency_stats {
 		feed_samples.reserve(4096);
 		internal_samples.reserve(4096);
 		audit_samples.reserve(4096);
+		
+		/* Global vectors will grow large, reserve initial chunk */
+		global_feed_samples.reserve(100000);
+		global_int_samples.reserve(100000);
+		global_aud_samples.reserve(100000);
 	}
 
 	void add(double feed, double internal, double audit,
@@ -80,22 +80,15 @@ struct latency_stats {
 		internal_samples.push_back(internal);
 		audit_samples.push_back(audit);
 
+		/* Global Samples (For Final P99) */
+		global_feed_samples.push_back(feed);
+		global_int_samples.push_back(internal);
+		global_aud_samples.push_back(audit);
+
 		/* Cumulative Counters */
 		total_candles++;
 		if (has_gap) total_gaps++;
 		if (has_tick_err) total_tick_errors++;
-
-		/* Global Stats Update */
-		global_count++;
-		
-		global_feed_sum += feed;
-		if (feed > global_feed_max) global_feed_max = feed;
-
-		global_int_sum += internal;
-		if (internal > global_int_max) global_int_max = internal;
-
-		global_aud_sum += audit;
-		if (audit > global_aud_max) global_aud_max = audit;
 	}
 
 	double get_avg(const std::vector<double>& v) {
@@ -111,30 +104,32 @@ struct latency_stats {
 		return v[v.size() * 0.99];
 	}
 
-	double get_max(std::vector<double>& v) {
+	double get_max(const std::vector<double>& v) {
 		if (v.empty()) return 0;
-		return v.back();
+		double max_val = 0;
+		for (double d : v) {
+			if (d > max_val) max_val = d;
+		}
+		return max_val;
 	}
 
-	/* Reports interval latency but cumulative counts */
-	void report_interval() {
+	/* Reports interval latency and writes to CSV if stream is open */
+	void report_interval(std::ofstream* csv_file) {
 		if (feed_samples.empty()) return;
 
 		double f_avg = get_avg(feed_samples);
-		double f_p99 = get_p99(feed_samples);
-		double f_max = get_max(feed_samples);
+		double f_p99 = get_p99(feed_samples); /* Sorts feed_samples */
+		double f_max = feed_samples.back();   /* After sort, last is max */
 
 		double i_avg = get_avg(internal_samples);
 		double i_p99 = get_p99(internal_samples);
-		double i_max = get_max(internal_samples);
+		double i_max = internal_samples.back();
 
 		double a_avg = get_avg(audit_samples);
 		double a_p99 = get_p99(audit_samples);
-		double a_max = get_max(audit_samples);
+		double a_max = audit_samples.back();
 
-		/* * Print Cumulative Counts first to see progress.
-		 * Then print Interval Latency to see current health.
-		 */
+		/* Console Output */
 		std::cout << "[Auditor] Total: " << total_candles
 			  << " | Gaps: " << total_gaps
 			  << " | TickErr: " << total_tick_errors << "\n"
@@ -150,19 +145,53 @@ struct latency_stats {
 			  << " us | Max: " << a_max / 1000.0 << " us"
 			  << std::endl;
 
+		/* CSV Output (No flush for performance) */
+		if (csv_file && csv_file->is_open()) {
+			auto now = std::chrono::system_clock::now();
+			std::time_t t_now = std::chrono::system_clock::
+						to_time_t(now);
+			struct tm* ptm = std::localtime(&t_now);
+			char time_buf[32];
+			std::strftime(time_buf, sizeof(time_buf), 
+				      "%Y-%m-%d %H:%M:%S", ptm);
+
+			*csv_file << time_buf << ","
+				  << total_candles << ","
+				  << total_gaps << ","
+				  << f_avg << "," << f_p99 << "," << f_max << ","
+				  << i_avg << "," << i_p99 << "," << i_max << ","
+				  << a_avg << "," << a_p99 << "," << a_max 
+				  << "\n";
+		}
+
 		/* Reset Interval Data Only */
 		feed_samples.clear();
 		internal_samples.clear();
 		audit_samples.clear();
-		reserve_vectors();
+		
+		/* Re-reserve interval vectors */
+		feed_samples.reserve(4096);
+		internal_samples.reserve(4096);
+		audit_samples.reserve(4096);
 	}
 
 	void report_final() {
-		if (global_count == 0) return;
+		if (global_feed_samples.empty()) return;
 
-		double f_avg = global_feed_sum / global_count;
-		double i_avg = global_int_sum / global_count;
-		double a_avg = global_aud_sum / global_count;
+		std::cout << "\n[Auditor] Calculating Final Statistics..." 
+			  << std::endl;
+
+		double f_avg = get_avg(global_feed_samples);
+		double f_p99 = get_p99(global_feed_samples);
+		double f_max = global_feed_samples.back();
+
+		double i_avg = get_avg(global_int_samples);
+		double i_p99 = get_p99(global_int_samples);
+		double i_max = global_int_samples.back();
+
+		double a_avg = get_avg(global_aud_samples);
+		double a_p99 = get_p99(global_aud_samples);
+		double a_max = global_aud_samples.back();
 
 		std::cout << "\n========================================\n"
 			  << "        VALIDATOR FINAL REPORT          \n"
@@ -172,12 +201,18 @@ struct latency_stats {
 			  << " Total Tick Count Errors : " << total_tick_errors << "\n"
 			  << "----------------------------------------\n"
 			  << std::fixed << std::setprecision(3)
-			  << " [Feed Latency] Avg: " << f_avg / 1000.0
-			  << " us | Max: " << global_feed_max / 1000.0 << " us\n"
-			  << " [Int  Latency] Avg: " << i_avg / 1000.0
-			  << " us | Max: " << global_int_max / 1000.0 << " us\n"
-			  << " [Aud  Latency] Avg: " << a_avg / 1000.0
-			  << " us | Max: " << global_aud_max / 1000.0 << " us\n"
+			  << " [Feed Latency]\n"
+			  << "   Avg: " << f_avg / 1000.0 << " us\n"
+			  << "   P99: " << f_p99 / 1000.0 << " us\n"
+			  << "   Max: " << f_max / 1000.0 << " us\n"
+			  << " [Internal Latency]\n"
+			  << "   Avg: " << i_avg / 1000.0 << " us\n"
+			  << "   P99: " << i_p99 / 1000.0 << " us\n"
+			  << "   Max: " << i_max / 1000.0 << " us\n"
+			  << " [Audit Latency]\n"
+			  << "   Avg: " << a_avg / 1000.0 << " us\n"
+			  << "   P99: " << a_p99 / 1000.0 << " us\n"
+			  << "   Max: " << a_max / 1000.0 << " us\n"
 			  << "========================================\n"
 			  << std::endl;
 	}
@@ -189,12 +224,21 @@ struct latency_stats {
  * --------------------------------------------------------------------------
  */
 
-/* Get current time in nanoseconds */
 static inline uint64_t get_current_ns()
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static std::string get_timestamp_string()
+{
+	auto now = std::chrono::system_clock::now();
+	std::time_t t_now = std::chrono::system_clock::to_time_t(now);
+	struct tm* ptm = std::localtime(&t_now);
+	char buf[32];
+	std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", ptm);
+	return std::string(buf);
 }
 
 /*
@@ -210,11 +254,41 @@ void run_auditor(struct trcache* cache,
 	std::cout << "[Auditor] Thread started. Allocating batch buffers..."
 		  << std::endl;
 
+	/* 1. CSV Initialization */
+	std::ofstream csv_file;
+	if (!config.csv_output_path.empty()) {
+		std::string final_path = config.csv_output_path;
+		if (config.csv_append_timestamp) {
+			/* Insert timestamp before extension */
+			size_t ext_pos = final_path.find_last_of(".");
+			std::string ts = "_" + get_timestamp_string();
+			if (ext_pos != std::string::npos) {
+				final_path.insert(ext_pos, ts);
+			} else {
+				final_path += ts;
+			}
+		}
+
+		csv_file.open(final_path);
+		if (csv_file.is_open()) {
+			std::cout << "[Auditor] Saving report to: " 
+				  << final_path << std::endl;
+			
+			/* Write CSV Header */
+			csv_file << "Time,Total_Candles,Gaps,"
+				 << "Feed_Avg_ns,Feed_P99_ns,Feed_Max_ns,"
+				 << "Int_Avg_ns,Int_P99_ns,Int_Max_ns,"
+				 << "Aud_Avg_ns,Aud_P99_ns,Aud_Max_ns\n";
+		} else {
+			std::cerr << "[Auditor] Failed to open CSV file: "
+				  << final_path << std::endl;
+		}
+	}
+
 	int num_configs = config.candles.size();
 	int max_symbols = config.top_n + 50;
 	int total_streams = max_symbols * num_configs;
 
-	/* Prepare Field Request - Include FEED_TS */
 	int req_indices[] = {
 		VAL_COL_EXCHANGE_TS,
 		VAL_COL_FEED_TS,
@@ -228,7 +302,6 @@ void run_auditor(struct trcache* cache,
 		sizeof(req_indices) / sizeof(int)
 	};
 
-	/* Allocate Batches (One per config type) */
 	std::vector<trcache_candle_batch*> batches(num_configs);
 	for (int i = 0; i < num_configs; ++i) {
 		batches[i] = trcache_batch_alloc_on_heap(cache, i, 128, &req);
@@ -268,7 +341,6 @@ void run_auditor(struct trcache* cache,
 
 				uint64_t latest_key = batch->key_array[0];
 				
-				/* Initialization */
 				if (!cur.initialized) {
 					if (batch->is_closed_array[0]) {
 						uint64_t* end_ids = (uint64_t*)
@@ -321,10 +393,8 @@ void run_auditor(struct trcache* cache,
 					bool has_gap = false;
 					bool has_tick_err = false;
 
-					/* Gap Check */
 					if (c_start[i] != cur.last_end_seq_id + 1) {
 						has_gap = true;
-						/* Print gap warning only once in a while */
 						if (stats.total_gaps % 100 == 0) {
 							std::cerr << "[Auditor] GAP | "
 								  << "Exp: " << cur.last_end_seq_id + 1
@@ -333,14 +403,12 @@ void run_auditor(struct trcache* cache,
 						}
 					}
 
-					/* Tick Count Check */
 					if (is_tick_candle) {
 						if (c_tick_cnt[i] != threshold) {
 							has_tick_err = true;
 						}
 					}
 
-					/* Latency Calc */
 					int64_t lat_feed = (int64_t)c_feed_ts[i] - 
 							   (int64_t)c_ex_ts[i];
 					int64_t lat_int = (int64_t)c_loc_ts[i] - 
@@ -366,12 +434,19 @@ void run_auditor(struct trcache* cache,
 		auto now = std::chrono::steady_clock::now();
 		if (std::chrono::duration_cast<std::chrono::seconds>(
 			now - last_report).count() >= 1) {
-			stats.report_interval();
+			/* Pass file pointer to reporting function */
+			stats.report_interval(&csv_file);
 			last_report = now;
 		}
 	}
 
-	/* Final Summary on Exit */
+	/* Final Cleanup */
+	if (csv_file.is_open()) {
+		csv_file.flush();
+		csv_file.close();
+		std::cout << "[Auditor] CSV report saved." << std::endl;
+	}
+
 	stats.report_final();
 
 	for (auto* b : batches) {
