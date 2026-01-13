@@ -11,6 +11,7 @@
  */
 
 #include "binance_client.h"
+#include "../core/latency_codec.h"
 
 #include <iostream>
 #include <vector>
@@ -24,6 +25,7 @@
 #include <netinet/tcp.h>
 #include <thread>
 #include <chrono>
+#include <time.h>
 
 /* HTTP Request */
 #include <curl/curl.h>
@@ -42,6 +44,14 @@
  */
 
 #define WS_BUFFER_SIZE 65536
+
+/* [Codec] Helper to get current nanoseconds */
+static inline uint64_t get_current_ns()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
 
 enum WSOpcode {
 	WS_OP_CONTINUATION = 0x0,
@@ -219,7 +229,8 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 	simdjson::dom::parser parser;
 	simdjson::dom::element doc;
 
-	/* * Note: parser.parse() might require padding if using raw pointer,
+	/*
+	 * Note: parser.parse() might require padding if using raw pointer,
 	 * but std::string input is handled safely.
 	 */
 	auto error = parser.parse(read_buffer).get(doc);
@@ -230,7 +241,8 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 
 	if (!doc.is_array()) return false;
 
-	/* * Store relevant data in a temporary vector to sort.
+	/*
+	 * Store relevant data in a temporary vector to sort.
 	 * Simdjson DOM is read-only, so we cannot sort in-place easily.
 	 */
 	struct sym_vol {
@@ -248,7 +260,8 @@ bool binance_client::fetch_top_symbols(int n, const std::string& rest_url)
 			
 			/* Binance returns numbers as strings */
 			try {
-				/* * Fast float conversion. 
+				/*
+				 * Fast float conversion. 
 				 * We can use std::stod on string_view by creating
 				 * a temporary string or using fast_float lib.
 				 * Here checking strict types, assume valid string.
@@ -470,7 +483,8 @@ void binance_client::parse_and_feed(const char* json_str, size_t len,
 {
 	try {
 		simdjson::dom::element doc;
-		/* * Use parse() with length. 
+		/*
+		 * Use parse() with length. 
 		 * NOTE: simdjson requires padding. In this loop, 'buf' is 
 		 * WS_BUFFER_SIZE (64KB), and payload_len is checked against it.
 		 * Since we null-terminated at payload_len, we have at least 1
@@ -504,7 +518,16 @@ void binance_client::parse_and_feed(const char* json_str, size_t len,
 		if (sym_id < 0) return;
 
 		struct trcache_trade_data trade;
-		trade.timestamp = ts;
+		/*
+		 * [Codec] Prepare timestamps.
+		 * Binance 'T' is milliseconds. Convert to ns.
+		 */
+		uint64_t exch_ts_ns = ts * 1000000ULL;
+		uint64_t feed_ts_ns = get_current_ns();
+		
+		/* Pack timestamps into the 64-bit timestamp field */
+		trade.timestamp = LatencyCodec::encode(exch_ts_ns, feed_ts_ns);
+		
 		trade.trade_id = tid;
 		
 		/* Convert strings to double */

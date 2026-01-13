@@ -8,11 +8,13 @@
 
 #include "engine.h"
 #include "types.h"
+#include "latency_codec.h"
 
 #include <iostream>
 #include <vector>
 #include <cstring>
 #include <cmath>
+#include <time.h>
 
 /* --------------------------------------------------------------------------
  * Internal Constants & Globals
@@ -28,8 +30,21 @@
 static struct val_candle_config g_slot_configs[MAX_CANDLE_SLOTS];
 
 /* --------------------------------------------------------------------------
+ * 0. Helper Functions
+ * --------------------------------------------------------------------------
+ */
+
+static inline uint64_t get_current_ns()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/* --------------------------------------------------------------------------
  * 1. Callback Implementations (Logic)
- * -------------------------------------------------------------------------- */
+ * --------------------------------------------------------------------------
+ */
 
 /*
  * init_common - Shared initialization logic for all candle types.
@@ -46,8 +61,9 @@ static void init_common(trcache_candle_base* c, trcache_trade_data* d,
 	candle->close = price;
 	candle->volume = d->volume.as_double;
 
-	/* Metrics */
+	/* Metrics - Will be overwritten by specific logic if codec is used */
 	candle->exchange_ts = d->timestamp;
+	candle->feed_ts = 0;
 	candle->local_ts = 0;
 
 	/* Integrity */
@@ -110,6 +126,16 @@ void init_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 	init_common(c, d, candle);
 	/* Key Alignment: 3 -> 0 if threshold is 10 */
 	c->key.trade_id = d->trade_id - (d->trade_id % threshold);
+
+	/* [Codec] Decode and record timestamps for the start of candle */
+	uint64_t now_ns = get_current_ns();
+	uint64_t exch_ts, feed_ts;
+
+	LatencyCodec::decode_and_restore(d->timestamp, now_ns,
+					 &exch_ts, &feed_ts);
+	
+	candle->exchange_ts = exch_ts;
+	candle->feed_ts = feed_ts;
 }
 
 template <int SLOT>
@@ -127,10 +153,7 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 		c->is_closed = true;
 		
 		/* Capture close time (Latency for partial candle) */
-		struct timespec ts;
-		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
-				   (uint64_t)ts.tv_nsec;
+		candle->local_ts = get_current_ns();
 
 		/* Return false: Do NOT consume this trade, use it for next */
 		return false; 
@@ -138,14 +161,21 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 
 	update_common(candle, d);
 
+	/* [Codec] Decode timestamps to keep the latest trade info */
+	uint64_t now_ns = get_current_ns();
+	uint64_t exch_ts, feed_ts;
+
+	LatencyCodec::decode_and_restore(d->timestamp, now_ns,
+					 &exch_ts, &feed_ts);
+
+	candle->exchange_ts = exch_ts;
+	candle->feed_ts = feed_ts;
+
 	/* Close Condition: (ID + 1) % threshold == 0 */
 	if ((d->trade_id + 1) % threshold == 0) {
 		c->is_closed = true;
 		/* Capture latency timestamp */
-		struct timespec ts;
-		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
-				   (uint64_t)ts.tv_nsec;
+		candle->local_ts = get_current_ns();
 	}
 	return true; /* Include this trade */
 }
@@ -157,9 +187,29 @@ void init_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
+	/*
+	 * [Codec] Decode first!
+	 * TIME_FIXED needs the real timestamp for key calculation.
+	 */
+	uint64_t now_ns = get_current_ns();
+	uint64_t exch_ts_ns, feed_ts_ns;
+
+	LatencyCodec::decode_and_restore(d->timestamp, now_ns,
+					 &exch_ts_ns, &feed_ts_ns);
+
 	init_common(c, d, candle);
-	/* Key Alignment: Floor timestamp */
-	c->key.timestamp = d->timestamp - (d->timestamp % threshold);
+
+	/*
+	 * Key Alignment:
+	 * We must convert NS back to MS because 'threshold' is typically in MS
+	 * (e.g., 60000 for 1 minute).
+	 */
+	uint64_t exch_ts_ms = exch_ts_ns / 1000000ULL;
+	c->key.timestamp = exch_ts_ms - (exch_ts_ms % threshold);
+
+	/* Overwrite timestamps with correct decoded values */
+	candle->exchange_ts = exch_ts_ns;
+	candle->feed_ts = feed_ts_ns;
 }
 
 template <int SLOT>
@@ -168,17 +218,29 @@ bool update_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
-	/* Check bounds first */
-	if (d->timestamp >= c->key.timestamp + threshold) {
+	/* [Codec] Decode first to check bounds */
+	uint64_t now_ns = get_current_ns();
+	uint64_t exch_ts_ns, feed_ts_ns;
+
+	LatencyCodec::decode_and_restore(d->timestamp, now_ns,
+					 &exch_ts_ns, &feed_ts_ns);
+
+	/* Convert to MS for comparison */
+	uint64_t exch_ts_ms = exch_ts_ns / 1000000ULL;
+
+	/* Check bounds using the real timestamp */
+	if (exch_ts_ms >= c->key.timestamp + threshold) {
 		c->is_closed = true;
-		struct timespec ts;
-		clock_gettime(CLOCK_REALTIME, &ts);
-		candle->local_ts = (uint64_t)ts.tv_sec * 1000000000ULL +
-				   (uint64_t)ts.tv_nsec;
+		candle->local_ts = get_current_ns();
 		return false; /* Trade belongs to next candle */
 	}
 
 	update_common(candle, d);
+
+	/* Update with correct timestamps */
+	candle->exchange_ts = exch_ts_ns;
+	candle->feed_ts = feed_ts_ns;
+
 	return true; /* Include this trade */
 }
 
@@ -258,7 +320,8 @@ struct trcache* engine_init(const struct validator_config& config)
 			return nullptr;
 		}
 
-		/* * Initialize trcache_candle_config using aggregate init.
+		/*
+		 * Initialize trcache_candle_config using aggregate init.
 		 * This is required because update_ops and flush_ops are const.
 		 */
 		trcache_candle_config c_conf = {
