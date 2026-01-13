@@ -371,6 +371,8 @@ void run_auditor(struct trcache* cache,
 	latency_stats stats;
 
 	auto last_report = std::chrono::steady_clock::now();
+	auto first_report = std::chrono::steady_clock::now();
+	bool add_stat = false;
 
 	while (running_flag) {
 		for (int sym_id = 0; sym_id < max_symbols; ++sym_id) {
@@ -475,10 +477,12 @@ void run_auditor(struct trcache* cache,
 					if (lat_int < 0) lat_int = 0;
 					if (lat_aud < 0) lat_aud = 0;
 
-					stats.add((double)lat_feed,
-						  (double)lat_int,
-						  (double)lat_aud,
-						  has_gap, has_tick_err);
+					if (add_stat) {
+						stats.add((double)lat_feed,
+							  (double)lat_int,
+							  (double)lat_aud,
+							  has_gap, has_tick_err);
+					}
 
 					cur.last_key = batch->key_array[i];
 					cur.last_end_seq_id = c_end[i];
@@ -491,6 +495,11 @@ void run_auditor(struct trcache* cache,
 			now - last_report).count() >= 1) {
 			stats.report_interval(&csv_file);
 			last_report = now;
+		}
+
+		if (std::chrono::duration_cast<std::chrono::seconds>(
+			now - first_report).count() >= 5) {
+			add_stat = true;
 		}
 	}
 
