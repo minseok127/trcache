@@ -6,7 +6,7 @@
  * This module acts as the quality assurance layer for the validator.
  * It performs two key verification tasks:
  * 1. Internal Integrity: Checks for sequence gaps in candle trades.
- * 2. System Latency: Measures Feed, Internal, and Audit Latency.
+ * 2. System Latency: Measures Network+Parsing, Engine, and Audit Latency.
  * 3. Tick Count Integrity: Verifies tick counts for TICK-based candles.
  * 4. CSV Reporting: Saves interval statistics to a file for analysis.
  */
@@ -134,13 +134,13 @@ struct latency_stats {
 			  << " | Gaps: " << total_gaps
 			  << " | TickErr: " << total_tick_errors << "\n"
 			  << std::fixed << std::setprecision(3)
-			  << "   [Feed Latency] Avg: " << f_avg / 1000.0
+			  << "   [Network + Parsing Latency] Avg: " << f_avg / 1000.0
 			  << " us | P99: " << f_p99 / 1000.0
 			  << " us | Max: " << f_max / 1000.0 << " us\n"
-			  << "   [Int  Latency] Avg: " << i_avg / 1000.0
+			  << "   [Engine Internal  Latency] Avg: " << i_avg / 1000.0
 			  << " us | P99: " << i_p99 / 1000.0
 			  << " us | Max: " << i_max / 1000.0 << " us\n"
-			  << "   [Aud  Latency] Avg: " << a_avg / 1000.0
+			  << "   [Auditor Query  Latency] Avg: " << a_avg / 1000.0
 			  << " us | P99: " << a_p99 / 1000.0
 			  << " us | Max: " << a_max / 1000.0 << " us"
 			  << std::endl;
@@ -201,15 +201,15 @@ struct latency_stats {
 			  << " Total Tick Count Errors : " << total_tick_errors << "\n"
 			  << "----------------------------------------\n"
 			  << std::fixed << std::setprecision(3)
-			  << " [Feed Latency]\n"
+			  << " [Network + Parsing Latency]\n"
 			  << "   Avg: " << f_avg / 1000.0 << " us\n"
 			  << "   P99: " << f_p99 / 1000.0 << " us\n"
 			  << "   Max: " << f_max / 1000.0 << " us\n"
-			  << " [Internal Latency]\n"
+			  << " [Engine Internal Latency]\n"
 			  << "   Avg: " << i_avg / 1000.0 << " us\n"
 			  << "   P99: " << i_p99 / 1000.0 << " us\n"
 			  << "   Max: " << i_max / 1000.0 << " us\n"
-			  << " [Audit Latency]\n"
+			  << " [Auditor Query Latency]\n"
 			  << "   Avg: " << a_avg / 1000.0 << " us\n"
 			  << "   P99: " << a_p99 / 1000.0 << " us\n"
 			  << "   Max: " << a_max / 1000.0 << " us\n"
