@@ -185,6 +185,40 @@ struct LogHistogram {
 
 		return max_val;
 	}
+
+	void save_to_csv(const std::string& filename)
+	{
+		std::ofstream file(filename);
+		if (!file.is_open()) {
+			std::cerr << "[Auditor] Failed to open dump file: "
+				  << filename << std::endl;
+			return;
+		}
+
+		/* Header: Start of the bucket in nanoseconds, Count */
+		file << "bucket_start_ns,count\n";
+
+		size_t n = buckets.size();
+		for (size_t i = 0; i < n; ++i) {
+			int64_t val;
+			
+			/*
+			 * For the last bucket (overflow), use the final limit.
+			 * Otherwise, use the calculated start value.
+			 */
+			if (i == n - 1) {
+				val = limit_ns[STAGE_COUNT - 1];
+			} else {
+				val = value_from_index((int)i);
+			}
+
+			file << val << "," << buckets[i] << "\n";
+		}
+		
+		file.close();
+		std::cout << "[Auditor] Histogram dumped to " 
+			  << filename << std::endl;
+	}
 };
 
 struct latency_stats {
@@ -211,6 +245,18 @@ struct latency_stats {
 
 	/* SimpleHistogram handles its own memory, no special dtor needed */
 	~latency_stats() {}
+
+	void save_histograms(const std::string& prefix)
+	{
+		std::cout << "[Auditor] Saving histogram dumps..." << std::endl;
+
+		std::string pfx = prefix;
+		if (pfx.empty()) pfx = "hist";
+
+		global_feed_hist.save_to_csv(pfx + "_network_parsing.csv");
+		global_int_hist.save_to_csv(pfx + "_engine_internal.csv");
+		global_aud_hist.save_to_csv(pfx + "_auditor_detection.csv");
+	}
 
 	void reserve_vectors() {
 		feed_samples.reserve(4096);
@@ -631,6 +677,15 @@ void run_auditor(struct trcache* cache,
 	}
 
 	stats.report_final();
+
+	/* Dump full histogram data for visualization */
+	std::string hist_prefix = "hist_dump";
+	if (!config.csv_output_path.empty() && 
+	    config.csv_append_timestamp) {
+		/* Reuse timestamp logic if possible, or generate new */
+		hist_prefix += "_" + get_timestamp_string();
+	}
+	stats.save_histograms(hist_prefix);
 
 	for (auto* b : batches) {
 		trcache_batch_free(b);
