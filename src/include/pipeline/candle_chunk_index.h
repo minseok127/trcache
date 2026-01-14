@@ -145,11 +145,12 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx);
  *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   target_seq: Target sequence number to search.
+ * @param   head:       Safe lower bound of index entry.
  *
  * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
-	struct candle_chunk_index *idx, uint64_t target_seq);
+	struct candle_chunk_index *idx, uint64_t target_seq, uint64_t head);
 
 /**
  * @brief   Find the chunk that contains a candle with the given key.
@@ -158,10 +159,11 @@ struct candle_chunk *candle_chunk_index_find_seq(
  *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   target_key: Target key to search.
+ * @param   head:       Safe lower bound of index entry.
  *
  * @return  Pointer to the chunk, or NULL if @key is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_key(
-	struct candle_chunk_index *idx, uint64_t target_key);
+	struct candle_chunk_index *idx, uint64_t target_key, uint64_t head);
 
 #endif /* CANDLE_CHUNK_INDEX_H */

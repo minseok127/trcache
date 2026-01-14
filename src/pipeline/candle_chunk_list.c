@@ -958,7 +958,7 @@ int candle_chunk_list_copy_backward_by_seq(struct candle_chunk_list *list,
 	 * Search the last chunk FIRST to ensure seq_end is valid and reachable.
 	 * If seq_end is found, it guarantees seq_end >= head_chunk->seq_first.
 	 */
-	chunk = candle_chunk_index_find_seq(idx, seq_end);
+	chunk = candle_chunk_index_find_seq(idx, seq_end, head_chunk->idx_seq);
 	if (chunk == NULL) {
 		errmsg(stderr,
 			"Target sequence is out of range (seq_end=%" PRIu64 ")\n",
@@ -1034,7 +1034,7 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	head_chunk = head_ver->head_node;
 
 	/* Search the last chunk FIRST */
-	chunk = candle_chunk_index_find_key(idx, key);
+	chunk = candle_chunk_index_find_key(idx, key, head_chunk->idx_seq);
 
 	if (chunk == NULL) {
 		errmsg(stderr,

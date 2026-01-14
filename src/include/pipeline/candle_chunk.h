@@ -52,6 +52,7 @@ struct candle_row_page {
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
  * @column_batch:         Structure of Arrays (SoA) buffer
  * @seq_first:            First sequence number of the chunk.
+ * @idx_seq:              Logical sequence number in the #candle_chunk_index.
  * @trc:                  Back-pointer to the main trcache instance for
  *                        metadata.
  * @chunk_pool:           Pointer to the scq pool this chunk belongs to.
@@ -112,6 +113,7 @@ struct candle_chunk {
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
+	uint64_t idx_seq;
 	struct trcache *trc;
 	struct scalable_queue *chunk_pool;
 	struct scalable_queue *row_page_pool;

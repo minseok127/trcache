@@ -285,6 +285,7 @@ int candle_chunk_index_append(struct candle_chunk_index *idx,
 	entry->chunk_ptr = chunk;
 	entry->seq_first = seq_first;
 	entry->key_first = key_first;
+	chunk->idx_seq = new_tail;	
 
 	atomic_store_explicit(&idx->tail, new_tail, memory_order_release);
 	atomsnap_release_version(snap_ver);
@@ -330,13 +331,13 @@ void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
  *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   target_seq: Target sequence number to search.
+ * @param   head:       Safe lower bound of index entry.
  *
  * @return  Pointer to the chunk, or NULL if @seq is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_seq(
-	struct candle_chunk_index *idx, uint64_t target_seq)
+	struct candle_chunk_index *idx, uint64_t target_seq, uint64_t head)
 {
-	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
 	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
 	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
 	struct candle_chunk_index_version *idx_ver;
@@ -380,13 +381,13 @@ struct candle_chunk *candle_chunk_index_find_seq(
  *
  * @param   idx:        Pointer of the #candle_chunk_index.
  * @param   target_key: Target key to search.
+ * @param   head:       Safe lower bound of index entry.
  *
  * @return  Pointer to the chunk, or NULL if @key is outside the index.
  */
 struct candle_chunk *candle_chunk_index_find_key(
-	struct candle_chunk_index *idx, uint64_t target_key)
+	struct candle_chunk_index *idx, uint64_t target_key, uint64_t head)
 {
-	uint64_t head = atomic_load_explicit(&idx->head, memory_order_acquire);
 	uint64_t tail = atomic_load_explicit(&idx->tail, memory_order_acquire);
 	struct atomsnap_version *snap_ver = atomsnap_acquire_version(idx->gate);
 	struct candle_chunk_index_version *idx_ver;
