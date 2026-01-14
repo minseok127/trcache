@@ -270,11 +270,11 @@ static inline bool process_in_memory_word(struct trcache *cache,
 	const int num_types = cache->num_candle_configs;
 	const int num_tasks = num_types * max_syms;
 
-	int expected_free = -1; /* Local var for CAS comparison */
 	const int taken_value = 1;
 	bool work_done = false;
 
 	while (work_word != 0) {
+		int expected_free = -1; /* Local var for CAS comparison */
 		int bit_offset = get_next_bit_offset(work_word);
 		int global_bit_idx = (word_idx * BITS_PER_WORD) + bit_offset;
 		int task_idx = global_bit_idx / 2;
@@ -348,11 +348,11 @@ static inline bool process_flush_word(struct trcache *cache,
 	const int num_types = cache->num_candle_configs;
 	const int num_tasks = num_types * max_syms;
 
-	int expected_free = -1; /* Local var for CAS comparison */
 	const int taken_value = 1;
 	bool work_done = false;
 
 	while (work_word != 0) {
+		int expected_free = -1; /* Local var for CAS comparison */
 		int bit_offset = get_next_bit_offset(work_word);
 		int task_idx = (word_idx * BITS_PER_WORD) + bit_offset;
 
