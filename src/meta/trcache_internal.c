@@ -270,6 +270,8 @@ static void trcache_per_thread_destructor(void *value)
 	pthread_mutex_unlock(&tc->tls_id_mutex);
 }
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Initialize trcache, set up TLS key and symbol table.
  *
@@ -279,7 +281,8 @@ static void trcache_per_thread_destructor(void *value)
  */
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
-	struct trcache *tc = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trcache));
+	struct trcache *tc = aligned_alloc(CACHE_LINE_SIZE, 
+		ALIGN_UP(sizeof(struct trcache), CACHE_LINE_SIZE));
 	size_t min_required_memory;
 	int ret;
 

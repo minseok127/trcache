@@ -459,6 +459,8 @@ static uint32_t setup_arena_stack(struct memory_arena *arena, size_t arena_idx)
 	return next_in_stack;
 }
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Initialize a new arena (or reuse a reclaimed one).
  *
@@ -490,7 +492,8 @@ static int init_arena(struct thread_context *ctx)
 			return -1;
 		}
 
-		arena = aligned_alloc(PAGE_SIZE, sizeof(struct memory_arena));
+		arena = aligned_alloc(PAGE_SIZE,
+			ALIGN_UP(sizeof(struct memory_arena), PAGE_SIZE));
 		if (!arena) {
 			errmsg("Memory allocation failed for new arena\n");
 			return -1;

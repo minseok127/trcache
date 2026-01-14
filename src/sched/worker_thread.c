@@ -17,6 +17,8 @@
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /*
  * Bit manipulation helpers for 64-bit bitmaps.
  */
@@ -194,14 +196,14 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* Allocate cacheline-aligned bitmaps */
 	state->in_memory_bitmap = aligned_alloc(
-		CACHE_LINE_SIZE, in_memory_bitmap_bytes);
+		CACHE_LINE_SIZE, ALIGN_UP(in_memory_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->in_memory_bitmap == NULL) {
 		errmsg(stderr, "in_memory_bitmap allocation failed\n");
 		return -1;
 	}
 
 	state->flush_bitmap = aligned_alloc(
-		CACHE_LINE_SIZE, flush_bitmap_bytes);
+		CACHE_LINE_SIZE, ALIGN_UP(flush_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->flush_bitmap == NULL) {
 		errmsg(stderr, "flush_bitmap allocation failed\n");
 		free(state->in_memory_bitmap);

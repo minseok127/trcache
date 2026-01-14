@@ -23,6 +23,8 @@
 #include "utils/tsc_clock.h"
 #include "utils/memstat.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /*
  * Bit manipulation helpers for 64-bit bitmaps.
  */
@@ -96,13 +98,13 @@ int admin_state_init(struct trcache *tc)
 	flush_bitmap_alloc_size = num_workers * flush_words * sizeof(uint64_t);
 
 	state->next_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
-		im_bitmap_alloc_size);
+		ALIGN_UP(im_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->next_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
-		flush_bitmap_alloc_size);
+		ALIGN_UP(flush_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->current_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
-		im_bitmap_alloc_size);
+		ALIGN_UP(im_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->current_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
-		flush_bitmap_alloc_size);
+		ALIGN_UP(flush_bitmap_alloc_size, CACHE_LINE_SIZE));
 	
 	if (state->next_im_bitmaps == NULL || state->next_flush_bitmaps == NULL ||
 		state->current_im_bitmaps == NULL || state->current_flush_bitmaps == NULL)

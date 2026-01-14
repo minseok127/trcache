@@ -18,6 +18,8 @@
 
 #include "trcache.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Create a new symbol_table.
  *
@@ -75,7 +77,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	flush_size = num_tasks * sizeof(_Atomic int);
 
 	table->in_memory_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE, in_mem_size);
+		CACHE_LINE_SIZE, ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));
 	if (table->in_memory_ownership_flags == NULL) {
 		errmsg(stderr, "in_memory_ownership_flags allocation failed\n");
 		free(table->symbol_entries);
@@ -88,7 +90,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	memset(table->in_memory_ownership_flags, -1, in_mem_size);
 
 	table->flush_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE, flush_size);
+		CACHE_LINE_SIZE, ALIGN_UP(flush_size, CACHE_LINE_SIZE));
 	if (table->flush_ownership_flags == NULL) {
 		errmsg(stderr, "flush_ownership_flags allocation failed\n");
 		free(table->in_memory_ownership_flags);

@@ -18,6 +18,8 @@
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Allocate an candle chunk list's head version object.
  *
@@ -203,7 +205,8 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
-	list = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk_list));
+	list = aligned_alloc(CACHE_LINE_SIZE, 
+		ALIGN_UP(sizeof(struct candle_chunk_list), CACHE_LINE_SIZE));
 	if (list == NULL) {
 		errmsg(stderr, "#candle_chunk_list allocation failed\n");
 		return NULL;

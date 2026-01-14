@@ -19,6 +19,8 @@
 #include "utils/list_head.h"
 #include "utils/log.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Create and initialize a trade_data_buffer.
  *
@@ -39,7 +41,8 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 		return NULL;
 	}
 
-	buf = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trade_data_buffer));
+	buf = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(sizeof(struct trade_data_buffer), CACHE_LINE_SIZE));
 
 	if (buf == NULL) {
 		errmsg(stderr, "#trade_data_buffer allocation failed\n");
@@ -52,7 +55,8 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	atomic_init(&buf->memory_usage.value, 0);
 	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
 
-	chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct trade_data_chunk));
+	chunk = aligned_alloc(CACHE_LINE_SIZE, 
+		ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE));
 
 	if (chunk == NULL) {
 		errmsg(stderr, "#trade_data_chunk allocation failed\n");
@@ -192,7 +196,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			}
 
 			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
-				sizeof(struct trade_data_chunk));
+				ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE));
 
 			if (new_chunk == NULL) {
 				errmsg(stderr, "#trade_data_chunk allocation failed\n");

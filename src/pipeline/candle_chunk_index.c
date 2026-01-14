@@ -23,6 +23,8 @@
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
 
+#define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
+
 /**
  * @brief   Allocate the index version object.
  *
@@ -49,8 +51,7 @@ static struct candle_chunk_index_version *alloc_index_version_object(
 
 	idx_ver->array = NULL;
 	array_size = newcap * sizeof(struct candle_chunk_index_entry);
-	array_size = (array_size + TRCACHE_SIMD_ALIGN - 1) &
-		~(TRCACHE_SIMD_ALIGN - 1);
+	array_size = ALIGN_UP(array_size, TRCACHE_SIMD_ALIGN);
 
 	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN, array_size);
 	if (idx_ver->array == NULL) {

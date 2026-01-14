@@ -163,7 +163,8 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	/* 2. Pool empty or memory pressure, allocate new one */
 	if (chunk == NULL) {
 		allocated_new = true;
-		chunk = aligned_alloc(CACHE_LINE_SIZE, sizeof(struct candle_chunk));
+		chunk = aligned_alloc(CACHE_LINE_SIZE, 
+			align_up(sizeof(struct candle_chunk), CACHE_LINE_SIZE));
 		if (chunk == NULL) {
 			errmsg(stderr, "#candle_chunk allocation failed\n");
 			return NULL;
@@ -218,9 +219,11 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	chunk_total_size = sizeof(struct candle_chunk) + batch_total_size;
 	
 	chunk->chunk_mem_size = chunk_total_size;
-	chunk->row_page_mem_size = sizeof(struct candle_row_page) +
-		(TRCACHE_ROWS_PER_PAGE *
-			trc->candle_configs[candle_idx].user_candle_size);
+	chunk->row_page_mem_size = align_up(
+		sizeof(struct candle_row_page) + 
+			(TRCACHE_ROWS_PER_PAGE * 
+				trc->candle_configs[candle_idx].user_candle_size),
+		TRCACHE_SIMD_ALIGN);
 
 	if (allocated_new) {
 		mem_add_atomic(&chunk_pool->object_memory_usage.value,
