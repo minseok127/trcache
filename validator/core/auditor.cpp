@@ -284,7 +284,8 @@ struct latency_stats {
 
 		/* Console Output - Replaced Avg with P50 */
 		std::cout << "[Auditor] Candles: " << total_candles
-			  << " | Gaps: " << total_gaps << "\n"
+			  << " | Gaps: " << total_gaps 
+			  << " | Tick Errors: " << total_tick_errors << "\n"
 			  << std::fixed << std::setprecision(3)
 
 			  << "   [Network + Parsing]\n"
