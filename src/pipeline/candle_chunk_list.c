@@ -372,15 +372,15 @@ static int init_first_candle(struct candle_chunk_list *list,
 
 	new_chunk->seq_first = 0;
 
-	/* Register atomsnap version of head */
-	atomsnap_exchange_version(list->head_gate, head_snap_version);
-
-	/* Add the new chunk into the index */
+	/* Add the new chunk into the index BEFORE register */
 	if (candle_chunk_index_append(list->chunk_index, new_chunk,
 			new_chunk->seq_first, first_key) == -1) {
 		errmsg(stderr, "Failure on candle_chunk_index_append()\n");
 		return -1;
 	}
+
+	/* Register atomsnap version of head */
+	atomsnap_exchange_version(list->head_gate, head_snap_version);
 
 	return 0;
 }
