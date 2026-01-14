@@ -22,7 +22,7 @@ CXXFLAGS += -I$(TRCACHE_ROOT) -I$(TRCACHE_ROOT)/src/include
 
 # Libraries
 # Added -Wl,-rpath=$(TRCACHE_ROOT) to embed library path into the binary
-LDFLAGS = -L$(TRCACHE_ROOT) -Wl,-rpath=$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto -lcurl -lsimdjson
+LDFLAGS = -rdynamic -L$(TRCACHE_ROOT) -Wl,-rpath=$(TRCACHE_ROOT) -ltrcache -lssl -lcrypto -lcurl -lsimdjson
 
 # Source Files
 SRCS = main.cpp \

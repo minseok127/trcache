@@ -11,6 +11,8 @@
 #include <atomic>
 #include <csignal>
 #include <cstring>
+#include <unistd.h>
+#include <execinfo.h>
 
 /* Core headers */
 #include "trcache.h"
@@ -30,6 +32,27 @@
 
 /* Global running flag for graceful shutdown */
 std::atomic<bool> g_running(true);
+
+/*
+ * segfault_handler - Handles SIGSEGV and prints the call stack.
+ * Uses async-signal-safe functions where possible.
+ */
+void segfault_handler(int signum)
+{
+	(void)signum;
+	void* callstack[128];
+	int frames = backtrace(callstack, 128);
+
+	/* Write directly to stderr to avoid malloc in signal handler */
+	const char* msg = "\n[System] Segmentation Fault detected! Call stack:\n";
+
+	if (write(STDERR_FILENO, msg, strlen(msg)) < 0) {}
+
+	/* backtrace_symbols_fd writes directly to the fd without malloc */
+	backtrace_symbols_fd(callstack, frames, STDERR_FILENO);
+
+	_exit(1);
+}
 
 /*
  * signal_handler - Handles SIGINT (Ctrl+C).
