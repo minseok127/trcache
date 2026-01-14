@@ -203,7 +203,7 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 	struct candle_chunk_index_version *new_idx_ver = NULL;
 	struct atomsnap_version *new_snap = atomsnap_make_version(idx->gate);
 
-	if (new_snap == NULL ) {
+	if (new_snap == NULL) {
 		errmsg(stderr,
 			"Failure on atomsnap_make_version() (new_cap=%" PRIu64 ", "
 			"head=%" PRIu64 ")\n",
@@ -232,7 +232,8 @@ static int candle_chunk_index_grow(struct candle_chunk_index *idx,
 		count1 * sizeof(struct candle_chunk_index_entry));
 
 	if (count2 != 0) {
-		memcpy(&new_idx_ver->array[old_cap & new_mask], cur_idx_ver->array,
+		memcpy(&new_idx_ver->array[(head + count1) & new_mask],
+			cur_idx_ver->array,
 			count2 * sizeof(struct candle_chunk_index_entry));
 	}
 

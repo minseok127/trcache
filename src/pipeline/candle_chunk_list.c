@@ -776,12 +776,16 @@ int candle_chunk_list_flush(struct candle_chunk_list *list)
 	/* If asynchronous flush is used, check whether the flush has completed */
 	while (flush_done_count < flush_batch_count) {
 		chunk = head_version->head_node;
-		do {
+		while (true) {
 			if (candle_chunk_flush_poll(chunk, flush_ops) == 1) {
 				flush_done_count += 1;
 			}
+			
+			if (chunk == last_chunk) {
+				break;
+			}
 			chunk = chunk->next;
-		} while (chunk != last_chunk);
+		}
 	}
 
 	atomic_fetch_sub_explicit(&list->unflushed_batch_count, flush_done_count,

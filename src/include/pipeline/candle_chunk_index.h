@@ -56,14 +56,9 @@ struct candle_chunk_index_version {
  * -------------------
  * The *entry array* itself is **immutable** once published.  
  * When the ring becomes full, the writer allocates a new array
- * (capacity × 2), copies live entries in two blocks
- *
- *   1) 'head ... old_cap-1'  ->  same index  
- *   2) '0 ... head-1'        ->  'old_cap ... old_cap+head-1'
- *
- * and then publishes the new <pointer,mask> as a fresh atomsnap version.
- * The old array is retired only after the atomsnap grace period ends,
- * guaranteeing reader safety.
+ * (capacity × 2), copies live entries into the new array, then publishes the
+ * new <pointer,mask> as a fresh atomsnap version. The old array is retired only
+ * after the atomsnap grace period ends, guaranteeing reader safety.
  *
  * Order matters for readers.
  * --------------------------
