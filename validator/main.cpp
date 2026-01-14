@@ -103,6 +103,7 @@ int main(int argc, char *argv[])
 
 	/* 3. Setup Signal Handler */
 	std::signal(SIGINT, signal_handler);
+	std::signal(SIGSEGV, segfault_handler);
 
 	/* 
 	 * 4. Initialize trcache Engine (Wrapper)
