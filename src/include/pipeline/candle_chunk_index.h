@@ -39,7 +39,7 @@ struct candle_chunk_index_version {
  *
  * @gate:                    Atomsnap gate that publishes {entry_array*, mask}.
  * @head:                    Logical position of the oldest live entry.
- * @tail:                    Logical position one past the newest live entry.
+ * @tail:                    Logical position of the newest live entry.
  * @batch_candle_count:      Number of candles per chunk.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
  * @trc:                     Back-pointer to the main trcache instance.
