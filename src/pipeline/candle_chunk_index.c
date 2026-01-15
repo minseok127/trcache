@@ -38,6 +38,7 @@ static struct candle_chunk_index_version *alloc_index_version_object(
 {
 	struct candle_chunk_index_version *idx_ver = NULL;
 	size_t array_size, total_size;
+	uint64_t mask = newcap - 1;
 
 	idx_ver = malloc(sizeof(struct candle_chunk_index_version));
 
@@ -68,7 +69,9 @@ static struct candle_chunk_index_version *alloc_index_version_object(
 
 	mem_add_atomic(&idx->memory_usage.value, total_size);
 
-	idx_ver->mask = newcap - 1;
+	assert((mask & (mask + 1)) == 0);
+
+	atomic_store(&idx_ver->mask, mask);
 
 	return idx_ver;
 }
@@ -355,9 +358,11 @@ struct candle_chunk *candle_chunk_index_find_seq(
 	
 	idx_ver = (struct candle_chunk_index_version *)
 		atomsnap_get_object(snap_ver);
-	mask = idx_ver->mask;
 	batch = idx->batch_candle_count;
 	pow2 = idx->batch_candle_count_pow2;
+
+	mask = idx_ver->mask;
+	assert((mask & (mask + 1)) == 0);
 
 	first_seq = idx_ver->array[head & mask].seq_first;
 	last_seq = idx_ver->array[tail & mask].seq_first + batch - 1;
@@ -406,7 +411,9 @@ struct candle_chunk *candle_chunk_index_find_key(
 	
 	idx_ver = (struct candle_chunk_index_version *)
 		atomsnap_get_object(snap_ver);
+
 	mask = idx_ver->mask;
+	assert((mask & (mask + 1)) == 0);
 	
 	if (idx_ver->array[head & mask].key_first > target_key) {
 		errmsg(stderr,
