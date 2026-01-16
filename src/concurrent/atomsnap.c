@@ -143,7 +143,7 @@ typedef union {
  * 28-32: self_handle / next_handle (4B)
  */
 struct atomsnap_version {
-	void *object;
+	_Atomic void *object;
 	void *free_context;
 	struct atomsnap_gate *gate;
 	_Atomic uint32_t inner_ref_cnt;
@@ -850,12 +850,16 @@ struct atomsnap_version *atomsnap_make_version(struct atomsnap_gate *gate)
  */
 void atomsnap_free_version(struct atomsnap_version *version)
 {
+	void *obj;
+
 	if (version == NULL) {
 		return;
 	}
 
-	if (version->object && version->gate && version->gate->free_impl) {
-		version->gate->free_impl(version->object, version->free_context);
+	obj = atomic_load_explicit(&version->object, memory_order_relaxed);
+
+	if (version->gate && version->gate->free_impl) {
+		version->gate->free_impl(obj, version->free_context);
 	}
 
 	free_slot(version);
@@ -872,8 +876,8 @@ void atomsnap_set_object(struct atomsnap_version *ver, void *object,
 	void *free_context)
 {
 	if (ver) {
-		ver->object = object;
 		ver->free_context = free_context;
+		atomic_store_explicit(&ver->object, object, memory_order_release);
 	}
 }
 
@@ -886,7 +890,10 @@ void atomsnap_set_object(struct atomsnap_version *ver, void *object,
  */
 void *atomsnap_get_object(const struct atomsnap_version *ver)
 {
-	return ver ? ver->object : NULL;
+	if (ver) {
+		return atomic_load_explicit(&ver->object, memory_order_acquire);
+	}
+	return NULL;
 }
 
 static inline _Atomic uint64_t *get_cb_slot(struct atomsnap_gate *gate, int idx)
@@ -931,6 +938,7 @@ struct atomsnap_version *atomsnap_acquire_version_slot(
 void atomsnap_release_version(struct atomsnap_version *ver)
 {
 	uint32_t rc;
+	void *obj;
 
 	if (ver == NULL) {
 		return;
@@ -947,9 +955,11 @@ void atomsnap_release_version(struct atomsnap_version *ver)
 		memory_order_acq_rel) + 1;
 
 	if (rc == 0) {
+		obj = atomic_load_explicit(&ver->object, memory_order_relaxed);
+
 		/* Invoke user-defined cleanup */
 		if (ver->gate && ver->gate->free_impl) {
-			ver->gate->free_impl(ver->object, ver->free_context);
+			ver->gate->free_impl(obj, ver->free_context);
 		}
 
 		/* Return slot to free list */
@@ -972,6 +982,7 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 	uint64_t old_val;
 	uint32_t old_handle, old_refs, rc;
 	struct atomsnap_version *old_ver;
+	void *obj;
 
 	/*
 	 * Swap the handle in the control block.
@@ -992,9 +1003,12 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 			(uint32_t)old_refs, memory_order_acq_rel) - (uint32_t)old_refs;
 
 		if (rc == 0) {
+			obj = atomic_load_explicit(&old_ver->object, memory_order_relaxed);
+
 			if (gate->free_impl) {
-				gate->free_impl(old_ver->object, old_ver->free_context);
+				gate->free_impl(obj, old_ver->free_context);
 			}
+
 			free_slot(old_ver);
 		}
 	}
@@ -1020,6 +1034,7 @@ bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
 	uint64_t current_val, next_val;
 	uint32_t cur_handle, old_refs, rc;
 	struct atomsnap_version *old_ver;
+	void *obj;
 
 	current_val = atomic_load_explicit(cb, memory_order_acquire);
 	cur_handle = (uint32_t)(current_val & HANDLE_MASK_64);
@@ -1056,9 +1071,12 @@ bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
 			(uint32_t)old_refs, memory_order_acq_rel) - (uint32_t)old_refs;
 
 		if (rc == 0) {
+			obj = atomic_load_explicit(&old_ver->object, memory_order_relaxed);
+
 			if (gate->free_impl) {
-				gate->free_impl(old_ver->object, old_ver->free_context);
+				gate->free_impl(obj, old_ver->free_context);
 			}
+
 			free_slot(old_ver);
 		}
 	}
