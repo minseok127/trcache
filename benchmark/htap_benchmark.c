@@ -106,7 +106,7 @@ struct padded_counter {
 /* Reader thread state */
 struct reader_state {
 	pthread_t thread;
-	_Atomic bool active;
+	_Atomic(bool) active;
 	struct hdr_histogram *latency_hist;
 	struct padded_counter query_count;
 	struct padded_counter failed_count;
@@ -127,14 +127,14 @@ struct phase_summary_stats {
 /* Global State */
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
-static _Atomic bool g_running = true;
+static _Atomic(bool) g_running = true;
 static int g_symbol_ids[NUM_SYMBOLS];
 static FILE *g_csv_file = NULL;
 static pthread_mutex_t g_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct padded_counter *g_feed_counters = NULL;
 static struct reader_state *g_reader_states = NULL;
 static int g_max_readers = 0;
-static _Atomic int g_current_phase = PHASE_OLTP_ONLY_BASELINE;
+static _Atomic(int) g_current_phase = PHASE_OLTP_ONLY_BASELINE;
 
 /* Holds the summary data for each phase, initialized to zero in main() */
 static struct phase_summary_stats g_phase_summary[NUM_PHASES];

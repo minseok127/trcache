@@ -78,8 +78,8 @@ struct candle_chunk_index_version {
  */
 struct candle_chunk_index {
 	struct atomsnap_gate *gate;
-	_Atomic uint64_t head;
-	_Atomic uint64_t tail;
+	_Atomic(uint64_t) head;
+	_Atomic(uint64_t) tail;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
 	struct trcache *trc;

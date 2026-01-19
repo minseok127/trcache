@@ -81,7 +81,7 @@ struct trcache {
 	____cacheline_aligned
 	pthread_key_t pthread_trcache_key;
 	pthread_mutex_t tls_id_mutex;
-	_Atomic int tls_id_assigned_flag[MAX_NUM_THREADS];
+	_Atomic (int) tls_id_assigned_flag[MAX_NUM_THREADS];
 	struct trcache_tls_data *tls_data_ptr_arr[MAX_NUM_THREADS];
 
 	/*

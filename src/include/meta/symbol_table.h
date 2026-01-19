@@ -36,8 +36,8 @@ struct symbol_entry {
  * @convert_taken: Ownership flag for the CONVERT stage (-1 = free, 1 = taken).
  */
 struct in_memory_owner {
-	_Atomic int apply_taken;
-	_Atomic int convert_taken;
+	_Atomic(int) apply_taken;
+	_Atomic(int) convert_taken;
 };
 
 /*
@@ -58,10 +58,10 @@ struct symbol_table {
 	pthread_mutex_t ht_hash_table_mutex;
 	struct ht_hash_table *symbol_id_map;
 	struct symbol_entry *symbol_entries;
-	int num_symbols;
+	_Atomic(int) num_symbols;
 	int capacity;
 	struct in_memory_owner *in_memory_ownership_flags;
-	_Atomic int *flush_ownership_flags;
+	_Atomic(int) *flush_ownership_flags;
 };
 
 /**

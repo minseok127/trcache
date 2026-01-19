@@ -143,13 +143,13 @@ typedef union {
  * 28-32: self_handle / next_handle (4B)
  */
 struct atomsnap_version {
-	_Atomic void *object;
+	_Atomic(void *)object;
 	void *free_context;
 	struct atomsnap_gate *gate;
-	_Atomic uint32_t inner_ref_cnt;
+	_Atomic(uint32_t) inner_ref_cnt;
 	union {
 		uint32_t self_handle;
-		_Atomic uint32_t next_handle;
+		_Atomic(uint32_t) next_handle;
 	};
 };
 
@@ -160,7 +160,7 @@ struct atomsnap_version {
  * @slots:      Array of version structures. Slot 0 is the Sentinel.
  */
 struct memory_arena {
-	_Atomic uint64_t top_handle;
+	_Atomic(uint64_t) top_handle;
 	struct atomsnap_version slots[SLOTS_PER_ARENA];
 };
 
@@ -194,20 +194,20 @@ struct thread_context {
  * @num_extra_slots:      Number of extra slots.
  */
 struct atomsnap_gate {
-	_Atomic uint64_t control_block;
+	_Atomic(uint64_t) control_block;
 	atomsnap_free_func free_impl;
-	_Atomic uint64_t *extra_control_blocks;
+	_Atomic(uint64_t) *extra_control_blocks;
 	int num_extra_slots;
 };
 
 /*
  * Global Variables
  */
-static struct memory_arena *g_arena_table[MAX_ARENAS];
-static _Atomic size_t g_global_arena_cnt = 0;
+static _Atomic(struct memory_arena *)g_arena_table[MAX_ARENAS];
+static _Atomic(size_t) g_global_arena_cnt = 0;
 
 static struct thread_context *g_thread_contexts[MAX_THREADS];
-static _Atomic bool g_tid_used[MAX_THREADS];
+static _Atomic(bool) g_tid_used[MAX_THREADS];
 
 static pthread_key_t g_tls_key;
 static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
@@ -240,7 +240,7 @@ static inline struct atomsnap_version *resolve_handle(uint32_t handle_raw)
 		return NULL;
 	}
 
-	arena = g_arena_table[h.arena_idx];
+	arena = atomic_load(&g_arena_table[h.arena_idx]);
 
 	if (__builtin_expect(arena == NULL, 0)) {
 		return NULL;
@@ -501,7 +501,7 @@ static int init_arena(struct thread_context *ctx)
 		memset(arena, 0, sizeof(struct memory_arena));
 
 		/* Register in global table */
-		g_arena_table[arena_idx] = arena;
+		atomic_store(&g_arena_table[arena_idx], arena);
 
 		/* Ensure vector capacity */
 		if (ensure_vector_capacity(ctx) != 0) {
@@ -767,7 +767,7 @@ struct atomsnap_gate *atomsnap_init_gate(struct atomsnap_init_context *ctx)
 
 	if (gate->num_extra_slots > 0) {
 		gate->extra_control_blocks = calloc(gate->num_extra_slots,
-			sizeof(_Atomic uint64_t));
+			sizeof(_Atomic(uint64_t)));
 		
 		if (gate->extra_control_blocks == NULL) {
 			errmsg("Extra blocks allocation failed\n");
@@ -896,7 +896,7 @@ void *atomsnap_get_object(const struct atomsnap_version *ver)
 	return NULL;
 }
 
-static inline _Atomic uint64_t *get_cb_slot(struct atomsnap_gate *gate, int idx)
+static inline _Atomic(uint64_t) *get_cb_slot(struct atomsnap_gate *gate, int idx)
 {
 	return (idx == 0) ? &gate->control_block :
 		&gate->extra_control_blocks[idx - 1];
@@ -915,7 +915,7 @@ static inline _Atomic uint64_t *get_cb_slot(struct atomsnap_gate *gate, int idx)
 struct atomsnap_version *atomsnap_acquire_version_slot(
 	struct atomsnap_gate *gate, int slot_idx)
 {
-	_Atomic uint64_t *cb = get_cb_slot(gate, slot_idx);
+	_Atomic(uint64_t) *cb = get_cb_slot(gate, slot_idx);
 	uint64_t val;
 	uint32_t handle;
 
@@ -978,7 +978,7 @@ void atomsnap_exchange_version_slot(struct atomsnap_gate *gate, int slot_idx,
 	struct atomsnap_version *new_ver)
 {
 	uint32_t new_handle = new_ver ? new_ver->self_handle : HANDLE_NULL;
-	_Atomic uint64_t *cb = get_cb_slot(gate, slot_idx);
+	_Atomic(uint64_t) *cb = get_cb_slot(gate, slot_idx);
 	uint64_t old_val;
 	uint32_t old_handle, old_refs, rc;
 	struct atomsnap_version *old_ver;
@@ -1030,7 +1030,7 @@ bool atomsnap_compare_exchange_version_slot(struct atomsnap_gate *gate,
 {
 	uint32_t new_handle = new_ver ? new_ver->self_handle : HANDLE_NULL;
 	uint32_t exp_handle = expected ? expected->self_handle : HANDLE_NULL;
-	_Atomic uint64_t *cb = get_cb_slot(gate, slot_idx);
+	_Atomic(uint64_t) *cb = get_cb_slot(gate, slot_idx);
 	uint64_t current_val, next_val;
 	uint32_t cur_handle, old_refs, rc;
 	struct atomsnap_version *old_ver;

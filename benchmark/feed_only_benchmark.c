@@ -87,7 +87,7 @@ struct padded_counter {
 /* Global State */
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
-static _Atomic bool g_running = true;
+static _Atomic(bool) g_running = true;
 static int g_symbol_ids[NUM_SYMBOLS];
 static FILE *g_csv_file = NULL;
 static pthread_mutex_t g_csv_mutex = PTHREAD_MUTEX_INITIALIZER;

@@ -87,12 +87,12 @@ struct candle_chunk_list {
 	____cacheline_aligned
 	struct candle_chunk *candle_mutable_chunk;
 	_Atomic(struct candle_chunk *)tail;
-	_Atomic uint64_t mutable_seq;
-	_Atomic uint64_t ema_cycles_per_apply;
+	_Atomic(uint64_t) mutable_seq;
+	_Atomic(uint64_t) ema_cycles_per_apply;
 
 	struct candle_chunk *converting_chunk;
-	_Atomic uint64_t last_seq_converted;
-	_Atomic uint64_t ema_cycles_per_convert;
+	_Atomic(uint64_t) last_seq_converted;
+	_Atomic(uint64_t) ema_cycles_per_convert;
 
 	/*
 	 * Group 2: 'I/O' Worker (Flush) hot data.
@@ -100,14 +100,14 @@ struct candle_chunk_list {
 	 */
 	____cacheline_aligned
 	struct atomsnap_gate *head_gate;
-	_Atomic uint64_t ema_cycles_per_flush;
+	_Atomic(uint64_t) ema_cycles_per_flush;
 
 	/*
 	 * Group 3: Shared counter (True Sharing).
 	 * Written by CONVERT (add) and FLUSH (sub) workers.
 	 */
 	____cacheline_aligned
-	_Atomic int unflushed_batch_count;
+	_Atomic(int) unflushed_batch_count;
 
 	/*
 	 * Group 4: Read-mostly / Cold data.

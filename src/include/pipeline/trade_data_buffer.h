@@ -40,14 +40,14 @@ struct trade_data_chunk {
 	 */
 	____cacheline_aligned
 	struct list_head list_node;
-	_Atomic int write_idx;
+	_Atomic(int) write_idx;
 
 	/*
 	 * Group 2: Consumer (Apply Thread) hot data.
 	 * Written by multiple consumers calling trade_data_buffer_consume().
 	 */
 	____cacheline_aligned
-	_Atomic int num_consumed_cursor;
+	_Atomic(int) num_consumed_cursor;
 
 	/*
 	 * Group 3: Data payload.
@@ -78,7 +78,7 @@ struct trade_data_buffer_cursor {
 	uint64_t consume_count;
 	struct trade_data_chunk *peek_chunk;
 	int peek_idx;
-	_Atomic int in_use;
+	_Atomic(int) in_use;
 } __cacheline_aligned;
 
 /*
@@ -105,7 +105,7 @@ struct trade_data_buffer {
 	 */
 	____cacheline_aligned
 	struct list_head chunk_list;
-	_Atomic uint64_t produced_count;
+	_Atomic(uint64_t) produced_count;
 	int next_tail_write_idx;
 
 	/*

@@ -142,7 +142,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 {
 	struct trade_data_chunk *tail = NULL, *new_chunk = NULL;
 	size_t chunk_size = sizeof(struct trade_data_chunk);
-	_Atomic size_t *free_list_mem_counter =
+	_Atomic(size_t) *free_list_mem_counter =
 		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
 
 	if (!buf || !data) {
@@ -352,7 +352,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
 	bool memory_pressure = atomic_load_explicit(
 		&buf->trc->mem_acc.memory_pressure, memory_order_acquire);
-	_Atomic size_t *free_list_mem_counter =
+	_Atomic(size_t) *free_list_mem_counter =
 		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
 	size_t chunk_size = sizeof(struct trade_data_chunk);
 	size_t total_reaped_size = 0;

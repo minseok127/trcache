@@ -74,7 +74,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	 */
 	num_tasks = (size_t)num_candle_configs * (size_t)max_capacity;
 	in_mem_size = num_tasks * sizeof(struct in_memory_owner);
-	flush_size = num_tasks * sizeof(_Atomic int);
+	flush_size = num_tasks * sizeof(_Atomic(int));
 
 	table->in_memory_ownership_flags = aligned_alloc(
 		CACHE_LINE_SIZE, ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));

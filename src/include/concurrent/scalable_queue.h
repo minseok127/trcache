@@ -61,7 +61,7 @@ struct scq_tls_data {
 	struct scalable_queue *owner_scq;
 	int last_dequeued_thread_idx;
 	int scq_id;
-	_Atomic bool is_active;
+	_Atomic(bool) is_active;
 };
 
 /*
@@ -82,7 +82,7 @@ struct scalable_queue {
 	____cacheline_aligned
 	_Atomic(struct scq_tls_data *)tls_data_ptr_list[MAX_THREAD_NUM];
 	int scq_id;
-	_Atomic int thread_num;
+	_Atomic(int) thread_num;
 	struct trcache *owner_tc;
 
 	____cacheline_aligned

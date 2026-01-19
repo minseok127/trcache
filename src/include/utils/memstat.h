@@ -13,8 +13,8 @@
  * occupies its own cache line.
  */
 struct mem_padded_atomic_size {
-	_Atomic size_t value;
-	char padding[CACHE_LINE_SIZE - sizeof(_Atomic size_t)];
+	_Atomic(size_t) value;
+	char padding[CACHE_LINE_SIZE - sizeof(_Atomic(size_t))];
 } ____cacheline_aligned;
 
 /*
@@ -33,7 +33,7 @@ struct memory_accounting {
 	struct mem_padded_atomic_size total_usage;
 
 	____cacheline_aligned
-	_Atomic bool memory_pressure;
+	_Atomic(bool) memory_pressure;
 
 	____cacheline_aligned
 	struct mem_padded_atomic_size feed_thread_free_list_mem[MAX_NUM_THREADS];
@@ -46,7 +46,7 @@ struct memory_accounting {
  * @param	counter: Pointer to the cacheline-aligned atomic size_t counter.
  * @param	bytes:	 Number of bytes to add.
  */
-static inline void mem_add_atomic(_Atomic size_t *counter, size_t bytes)
+static inline void mem_add_atomic(_Atomic(size_t) *counter, size_t bytes)
 {
 	atomic_fetch_add_explicit(counter, bytes, memory_order_relaxed);
 }
@@ -57,7 +57,7 @@ static inline void mem_add_atomic(_Atomic size_t *counter, size_t bytes)
  * @param	counter: Pointer to the cacheline-aligned atomic size_t counter.
  * @param	bytes:	 Number of bytes to subtract.
  */
-static inline void mem_sub_atomic(_Atomic size_t *counter, size_t bytes)
+static inline void mem_sub_atomic(_Atomic(size_t) *counter, size_t bytes)
 {
 	atomic_fetch_sub_explicit(counter, bytes, memory_order_relaxed);
 }
@@ -69,7 +69,7 @@ static inline void mem_sub_atomic(_Atomic size_t *counter, size_t bytes)
  *
  * @return	Current byte count.
  */
-static inline size_t mem_get_atomic(_Atomic size_t *counter)
+static inline size_t mem_get_atomic(_Atomic(size_t) *counter)
 {
 	return atomic_load_explicit(counter, memory_order_relaxed);
 }

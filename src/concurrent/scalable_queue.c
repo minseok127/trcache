@@ -18,7 +18,7 @@
  * During initialization, the scalable_queue is assigned a unique ID.
  * This ID is later used when threads access the dequeued nodes.
  */
-_Atomic int global_scq_id_flag;
+_Atomic(int) global_scq_id_flag;
 static int global_scq_id_arr[MAX_SCQ_NUM];
 
 /*

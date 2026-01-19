@@ -87,11 +87,11 @@ struct candle_chunk {
 	 * to maximize cache locality.
 	 */
 	____cacheline_aligned
-	_Atomic int num_completed;
+	_Atomic(int) num_completed;
 	int mutable_page_idx;
 	int mutable_row_idx;
 
-	_Atomic int num_converted;
+	_Atomic(int) num_converted;
 	int converting_page_idx;
 	int converting_row_idx;
 
@@ -101,7 +101,7 @@ struct candle_chunk {
 	 */
 	____cacheline_aligned
 	void *flush_handle;
-	_Atomic int is_flushed;
+	_Atomic(int) is_flushed;
 
 	/*
 	 * Group 4: Pointers and Read-mostly / Cold data.

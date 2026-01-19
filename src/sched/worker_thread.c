@@ -58,7 +58,7 @@ static inline size_t get_bitmap_bytes(int num_bits)
  * @param   cycles:    Total cycles spent on the work.
  * @param   count:     Number of items processed.
  */
-static inline void update_ema_cycles(_Atomic uint64_t *ema_ptr,
+static inline void update_ema_cycles(_Atomic(uint64_t) *ema_ptr,
 	uint64_t cycles, uint64_t count)
 {
 	uint64_t old_ema, new_ema;
@@ -285,7 +285,7 @@ static inline bool process_in_memory_word(struct trcache *cache,
 		if (task_idx < num_tasks) {
 			int type_idx = task_idx / max_syms;
 			int sym_idx = task_idx % max_syms;
-			_Atomic int *flag;
+			_Atomic(int) *flag;
 			struct symbol_entry *entry;
 
 			if (is_apply) {
@@ -359,7 +359,7 @@ static inline bool process_flush_word(struct trcache *cache,
 		int task_idx = (word_idx * BITS_PER_WORD) + bit_offset;
 
 		if (task_idx < num_tasks) {
-			_Atomic int *flag = &symtab->flush_ownership_flags[task_idx];
+			_Atomic(int) *flag = &symtab->flush_ownership_flags[task_idx];
 
 			/*
 			 * First, perform a cheap atomic read.

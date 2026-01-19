@@ -182,7 +182,7 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
 	struct trcache *tc;
-	_Atomic size_t *free_list_mem_counter;
+	_Atomic(size_t) *free_list_mem_counter;
 	size_t chunk_size = sizeof(struct trade_data_chunk);
 	size_t total_freed = 0;
 

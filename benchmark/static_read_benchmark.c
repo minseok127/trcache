@@ -108,9 +108,9 @@ static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
 static int g_symbol_ids[NUM_SYMBOLS];
 static struct symbol_keys g_symbol_keys[NUM_SYMBOLS]; /* Track valid keys per symbol */
-static _Atomic bool g_readers_start = false;
-static _Atomic bool g_readers_stop = false;
-static _Atomic int g_readers_ready = 0;
+static _Atomic(bool) g_readers_start = false;
+static _Atomic(bool) g_readers_stop = false;
+static _Atomic(int) g_readers_ready = 0;
 
 /* Candle update operations */
 static void candle_init_tick(struct trcache_candle_base *c,
