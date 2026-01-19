@@ -30,7 +30,7 @@ enum worker_group_type {
  */
 struct worker_state {
 	int worker_id;
-	bool done;
+	_Atomic bool done;
 	_Atomic int group_id;
 	uint64_t *in_memory_bitmap;
 	uint64_t *flush_bitmap;

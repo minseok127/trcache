@@ -105,7 +105,7 @@ struct trade_data_buffer {
 	 */
 	____cacheline_aligned
 	struct list_head chunk_list;
-	uint64_t produced_count;
+	_Atomic uint64_t produced_count;
 	int next_tail_write_idx;
 
 	/*

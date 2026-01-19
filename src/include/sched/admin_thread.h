@@ -51,7 +51,7 @@ struct admin_state {
 	uint64_t *current_flush_bitmaps;
 	size_t in_mem_words_per_worker;
 	size_t flush_words_per_worker;
-	bool done;
+	_Atomic bool done;
 };
 
 /**
