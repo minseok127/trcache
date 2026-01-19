@@ -21,7 +21,7 @@
  * the shared linked list and attached into the thread-local linked list.
  */
 struct scq_node {
-	struct scq_node *next;
+	_Atomic(struct scq_node *)next;
 	void *datum;
 };
 
@@ -44,7 +44,7 @@ struct scq_dequeued_node_list {
  */
 struct scq_free_node_list {
 	struct scq_node shared_sentinel;
-	struct scq_node *shared_tail;
+	_Atomic(struct scq_node *)shared_tail;
 	struct scq_node *local_head;
 	struct scq_node *local_tail;
 };
@@ -56,7 +56,7 @@ struct scq_free_node_list {
 struct scq_tls_data {
 	struct scq_dequeued_node_list dequeued_node_list;
 	struct scq_free_node_list free_node_list;
-	struct scq_node *shared_tail;
+	_Atomic(struct scq_node *)shared_tail;
 	struct scq_node shared_sentinel;
 	struct scalable_queue *owner_scq;
 	int last_dequeued_thread_idx;
@@ -80,9 +80,9 @@ struct scalable_queue {
 	pthread_spinlock_t spinlock;
 
 	____cacheline_aligned
-	struct scq_tls_data *tls_data_ptr_list[MAX_THREAD_NUM];
+	_Atomic(struct scq_tls_data *)tls_data_ptr_list[MAX_THREAD_NUM];
 	int scq_id;
-	int thread_num;
+	_Atomic int thread_num;
 	struct trcache *owner_tc;
 
 	____cacheline_aligned

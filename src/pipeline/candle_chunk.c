@@ -423,7 +423,7 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 
 		if (next_page_idx != cur_page_idx) {
 			/*
-			 * Page is fully converted. Trigger the grace period.
+			 * If we should move to the next page, reclaim the previous page.
 			 */
 			atomsnap_exchange_version_slot(
 				chunk->row_gate, cur_page_idx, NULL);
@@ -443,6 +443,14 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 			= (struct trcache_candle_base *)src_candle_base;
 
 		copy_row_to_batch_all(c, batch, idx, trc, candle_type_idx);
+	}
+
+	/*
+	 * Page is fully converted. Reclaim it.
+	 */
+	if ((cur_page_idx != candle_chunk_calc_page_idx(end_idx + 1)
+			|| ((end_idx + 1) == batch->capacity))) {
+		atomsnap_exchange_version_slot(chunk->row_gate, cur_page_idx, NULL);
 	}
 
 	atomsnap_release_version(page_version);
