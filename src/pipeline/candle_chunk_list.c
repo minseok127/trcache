@@ -176,7 +176,7 @@ free_head_version:
 	 */
 	prev_head_version = atomic_load(&next_head_version->head_version_prev);
 	if (((uint64_t)prev_head_version & HEAD_VERSION_RELEASE_MASK) != 0 ||
-		!atomic_compare_exchange_weak(&next_head_version->head_version_prev,
+		!atomic_compare_exchange_strong(&next_head_version->head_version_prev,
 			&prev_head_version, NULL)) {
 		/* Release the next head's nodes */
 		head_version = next_head_version;
