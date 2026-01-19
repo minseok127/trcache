@@ -86,7 +86,7 @@ struct candle_chunk_list {
 	 */
 	____cacheline_aligned
 	struct candle_chunk *candle_mutable_chunk;
-	struct candle_chunk *tail;
+	_Atomic(struct candle_chunk *)tail;
 	_Atomic uint64_t mutable_seq;
 	_Atomic uint64_t ema_cycles_per_apply;
 

@@ -101,15 +101,15 @@ struct candle_chunk {
 	 */
 	____cacheline_aligned
 	void *flush_handle;
-	int is_flushed;
+	_Atomic int is_flushed;
 
 	/*
 	 * Group 4: Pointers and Read-mostly / Cold data.
 	 * These are pointers (mostly read-only) or written once at init.
 	 */
 	____cacheline_aligned
-	struct candle_chunk *next;
-	struct candle_chunk *prev;
+	_Atomic(struct candle_chunk *)next;
+	_Atomic(struct candle_chunk *)prev;
 	struct atomsnap_gate *row_gate;
 	struct trcache_candle_batch *column_batch;
 	uint64_t seq_first;
