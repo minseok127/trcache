@@ -325,7 +325,8 @@ struct candle_chunk *candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 #else  /* !TRCACHE_DEBUG */
 void candle_chunk_index_pop_head(struct candle_chunk_index *idx)
 {
-	atomic_store_explicit(&idx->head, idx->head + 1, memory_order_release);
+	uint64_t head = atomic_load_explicit(&idx->head, memory_order_relaxed);
+	atomic_store_explicit(&idx->head, head + 1, memory_order_release);
 }
 #endif /* TRCACHE_DEBUG */
 
