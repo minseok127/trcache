@@ -10,11 +10,11 @@
   - Supports user-defined trade data structures. Ingest any raw data format (ticks, order book updates, custom structs).
   - Define any candle structure you need—time-based, tick-based, or custom aggregations. Not limited to OHLCV.
 - **Lock-Free 3-Stage Pipeline**: 
-  - **Apply**: Aggregates raw trades into row-oriented candles
-  - **Convert**: Reshapes rows into SIMD-friendly column batches
-  - **Flush**: Hands off completed batches to user callbacks for persistence
-- **Lock-Free Queries**: Read candle data without locks, even during concurrent updates
-- **Adaptive Scheduling**: Admin thread monitors pipeline throughput and dynamically balances worker threads across stages
+  - **Apply**: Aggregates raw trades into row-oriented candles.
+  - **Convert**: Reshapes rows into SIMD-friendly column batches.
+  - **Flush**: Hands off completed batches to user callbacks for persistence.
+- **Lock-Free Queries**: Read candle data without locks, even during concurrent updates.
+- **Adaptive Scheduling**: Admin thread monitors pipeline throughput and dynamically balances worker threads across stages.
 
 ---
 
@@ -131,18 +131,18 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
   - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations.
 
 - **Memory Management**: 
-  - Non-blocking reclamation for chunks/pages
-  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag)
-  - Admin thread aggregates distributed memory tracking counters and updates global pressure flag
+  - Non-blocking reclamation for chunks/pages.
+  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag).
+  - Admin thread aggregates distributed memory tracking counters and updates global pressure flag.
 
 - **Adaptive Scheduling**: 
-  - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage)
-  - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand
-  - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership)
+  - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage).
+  - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand.
+  - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership).
 
 - **SIMD Optimization**: 
-  - Column batches aligned to 64 bytes
-  - Contiguous memory layout for vectorized analytics
+  - Column batches aligned to 64 bytes.
+  - Contiguous memory layout for vectorized analytics.
 
 For detailed architecture documentation, see inline comments in `src/`.
 
@@ -263,8 +263,8 @@ The routing of `trade_data` to either the `update` or `init` callback is determi
 - **First Trade for a Symbol**: The first trade data received for a given symbol is always routed to the `init` callback.
 - **Update Returns False**: When the `update` callback returns `false`, the trade data is considered not applied to the current candle. This trade data is automatically routed to the `init` callback for the next candle.
 - **Update Returns True**: When the `update` callback returns `true`, the trade data is considered successfully applied to the current candle, and `init` is not invoked. The routing of the next trade data depends on the `is_closed` flag:
-  - If `is_closed` is `true`: The next trade data is automatically routed to `init`
-  - If `is_closed` is `false`: The next trade data is routed to `update`
+  - If `is_closed` is `true`: The next trade data is automatically routed to `init`.
+  - If `is_closed` is `false`: The next trade data is routed to `update`.
 
 ### Step 4: Implement Flush Callbacks
 
@@ -369,8 +369,8 @@ if (!cache) {
 ```
 
 **Memory Limit Calculation**: If initialization fails with "memory limit too low", the error message will show:
-- Minimum required memory for your configuration
-- Per-candle-type breakdown (chunk size, page size)
+- Minimum required memory for your configuration.
+- Per-candle-type breakdown (chunk size, page size).
 - Suggestions to increase limit or reduce `cached_batch_count_pow2`.
 
 ### Step 7: Register Symbols and Feed Data
@@ -491,9 +491,9 @@ trcache_destroy(cache);  // Flushes remaining data and frees all resources
 **Cause**: `total_memory_limit` is below the minimum required for your configuration.
 
 **Solution**: The error message shows:
-- Minimum required memory
-- Per-candle-type breakdown
-- Suggestions to adjust `cached_batch_count_pow2` or increase limit
+- Minimum required memory.
+- Per-candle-type breakdown.
+- Suggestions to adjust `cached_batch_count_pow2` or increase limit.
 
 Example error:
 ```
@@ -507,9 +507,9 @@ Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
 **Cause**: Memory limit reached at runtime.
 
 **Solution**:
-1. Check if `total_memory_limit` is too low for current workload
-2. Increase limit or reduce `cached_batch_count_pow2`
-3. Optimize flush callbacks to reduce latency
+1. Check if `total_memory_limit` is too low for current workload.
+2. Increase limit or reduce `cached_batch_count_pow2`.
+3. Optimize flush callbacks to reduce latency.
 
 ### Segfault on query
 
