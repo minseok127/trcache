@@ -28,9 +28,9 @@
  * @list_node:           Linked list node.
  * @write_idx:           Next write index [0..NUM_TRADE_CHUNK_CAP).
  * @num_consumed_cursor: Atomic count of totally consumed cursor.
- * @entries:             Fixed array of data.
+ * @data:                Variable-sized data array (Flexible Array Member).
  *
- * @note Entries are copied into the chunk; pointer ownership remains with
+ * @note data is copied into the chunk; pointer ownership remains with
  *       the caller.
  */
 struct trade_data_chunk {
@@ -53,7 +53,7 @@ struct trade_data_chunk {
 	 * Group 3: Data payload.
 	 */
 	____cacheline_aligned
-	struct trcache_trade_data entries[NUM_TRADE_CHUNK_CAP];
+	uint8_t data[];
 
 } ____cacheline_aligned;
 
@@ -90,6 +90,7 @@ struct trade_data_buffer_cursor {
  * @num_cursor:          Number of valid cursors.
  * @trc:                 Back-pointer to the main trcache instance.
  * @symbol_id:           Integer symbol ID resolved via symbol table.
+ * @chunk_allocation_size: Pre-calculated size of one chunk (struct + data).
  * @memory_usage:        Memory (bytes) of this struct + all *active* chunks.
  * @cursor_arr:          Cursor array (only valid types are initialized).
  *
@@ -116,6 +117,7 @@ struct trade_data_buffer {
 	int num_cursor;
 	struct trcache *trc;
 	int symbol_id;
+	size_t chunk_allocation_size;
 
 	/*
 	 * Group 3: Memory Counter
@@ -201,14 +203,14 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf);
  * the current one is full.
  *
  * @param   buf:       Buffer to push into.
- * @param   data:      Pointer to trcache_trade_data to copy.
+ * @param   data:      Pointer to user-defined trade data to copy.
  * @param   free_list: Linked list pointer holding recycled chunks.
  * @param   thread_id: The feed thread's unique ID.
  *
  * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const struct trcache_trade_data *data, struct list_head *free_list,
+	const void *data, struct list_head *free_list,
 	int thread_id);
 
 /**
@@ -223,7 +225,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
  */
 int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor,
-	struct trcache_trade_data **data_array, int *count);
+	void **data_array, int *count);
 
 /**
  * @brief	Consume entries up to cursor’s peek position.

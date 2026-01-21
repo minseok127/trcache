@@ -90,9 +90,11 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 	struct trade_data_buffer *buf = entry->trd_buf;
 	struct trade_data_buffer_cursor *cur;
 	struct candle_chunk_list *list;
-	struct trcache_trade_data *array = NULL;
-	int count = 0;
+	size_t trade_data_size;
 	uint64_t start_cycles, work_count = 0;
+	int count = 0;
+	void *array = NULL;
+	void *trade_data = NULL;
 
 	cur = trade_data_buffer_acquire_cursor(buf, candle_idx);
 	if (cur == NULL) {
@@ -102,10 +104,12 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 
 	start_cycles = tsc_cycles();
 	list = entry->candle_chunk_list_ptrs[candle_idx];
+	trade_data_size = list->trc->trade_data_size;
 
 	while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
-			candle_chunk_list_apply_trade(list, &array[i]);
+			trade_data = (uint8_t *)array + (i * trade_data_size);
+			candle_chunk_list_apply_trade(list, trade_data);
 		}
 
 		trade_data_buffer_consume(buf, cur, count);

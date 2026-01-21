@@ -118,8 +118,9 @@ static void* flush_noop(struct trcache* cache,
 
 /* TICK_MODULO Logic */
 template <int SLOT>
-void init_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
+void init_tick_modulo(trcache_candle_base* c, void *data)
 {
+	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
@@ -139,8 +140,9 @@ void init_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 }
 
 template <int SLOT>
-bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
+bool update_tick_modulo(trcache_candle_base* c, void *data)
 {
+	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
@@ -182,8 +184,9 @@ bool update_tick_modulo(trcache_candle_base* c, trcache_trade_data* d)
 
 /* TIME_FIXED Logic */
 template <int SLOT>
-void init_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
+void init_time_fixed(trcache_candle_base* c, void *data)
 {
+	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
@@ -213,8 +216,9 @@ void init_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
 }
 
 template <int SLOT>
-bool update_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
+bool update_time_fixed(trcache_candle_base* c, void* data)
 {
+	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
 	int threshold = g_slot_configs[SLOT].threshold;
 
@@ -248,8 +252,8 @@ bool update_time_fixed(trcache_candle_base* c, trcache_trade_data* d)
  * Function Pointer Arrays
  * These lookup tables map a runtime slot index to the compiled template instance.
  */
-typedef void (*init_func_t)(trcache_candle_base*, trcache_trade_data*);
-typedef bool (*update_func_t)(trcache_candle_base*, trcache_trade_data*);
+typedef void (*init_func_t)(trcache_candle_base*, void *);
+typedef bool (*update_func_t)(trcache_candle_base*, void *);
 
 /* Define instances for slots 0 to 7 */
 static const init_func_t INIT_TICK_OPS[] = {
@@ -354,6 +358,7 @@ struct trcache* engine_init(const struct validator_config& config)
 	ctx.num_worker_threads = config.worker_threads;
 	/* Add buffer to max_symbols for safety */
 	ctx.max_symbols = (config.top_n > 0 ? config.top_n : 1000) + 50;
+	ctx.trade_data_size = sizeof(trcache_trade_data);
 
 	/* 3. Initialize Engine */
 	return trcache_init(&ctx);

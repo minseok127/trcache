@@ -114,8 +114,9 @@ static _Atomic(int) g_readers_ready = 0;
 
 /* Candle update operations */
 static void candle_init_tick(struct trcache_candle_base *c,
-	struct trcache_trade_data *d)
+	void *data)
 {
+	struct trcache_trade_data *d = (struct trcache_trade_data *)data;
 	struct my_candle *candle = (struct my_candle *)c;
 	double price = d->price.as_double;
 	double volume = d->volume.as_double;
@@ -132,8 +133,9 @@ static void candle_init_tick(struct trcache_candle_base *c,
 
 #define DEFINE_TICK_UPDATE_FUNC(N) \
 static bool candle_update_tick_##N(struct trcache_candle_base *c, \
-	struct trcache_trade_data *d) \
+	void *data) \
 { \
+	struct trcache_trade_data *d = (struct trcache_trade_data *)data; \
 	struct my_candle *candle = (struct my_candle *)c; \
 	double price = d->price.as_double; \
 	double volume = d->volume.as_double; \
@@ -152,8 +154,9 @@ static bool candle_update_tick_##N(struct trcache_candle_base *c, \
 DEFINE_TICK_UPDATE_FUNC(3)
 
 static void candle_init_time(struct trcache_candle_base *c,
-	struct trcache_trade_data *d)
+	void *data)
 {
+	struct trcache_trade_data *d = (struct trcache_trade_data *)data;
 	struct my_candle *candle = (struct my_candle *)c;
 	double price = d->price.as_double;
 	double volume = d->volume.as_double;
@@ -170,8 +173,9 @@ static void candle_init_time(struct trcache_candle_base *c,
 
 #define DEFINE_TIME_UPDATE_FUNC(SUFFIX, DURATION_MS) \
 static bool candle_update_time_##SUFFIX(struct trcache_candle_base *c, \
-	struct trcache_trade_data *d) \
+	void *data) \
 { \
+	struct trcache_trade_data *d = (struct trcache_trade_data *)data; \
 	if (d->timestamp >= c->key.timestamp + (DURATION_MS)) { \
 		c->is_closed = true; \
 		return false; \
@@ -625,7 +629,8 @@ static int initialize_trcache(void)
 		.cached_batch_count_pow2 = 5,
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
-		.max_symbols = NUM_SYMBOLS
+		.max_symbols = NUM_SYMBOLS,
+		.trade_data_size = sizeof(struct trcache_trade_data)
 	};
 
 	g_cache = trcache_init(&ctx);

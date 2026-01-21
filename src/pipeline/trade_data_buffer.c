@@ -22,6 +22,16 @@
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
 /**
+ * @brief   Helper to calculate the size of a chunk including flexible array.
+ */
+static size_t calculate_chunk_size(struct trcache *tc)
+{
+	size_t payload_size = tc->trade_data_size * NUM_TRADE_CHUNK_CAP;
+	size_t total_size = sizeof(struct trade_data_chunk) + payload_size;
+	return ALIGN_UP(total_size, CACHE_LINE_SIZE);
+}
+
+/**
  * @brief   Create and initialize a trade_data_buffer.
  *
  * @param   tc: Pointer to the #trcache.
@@ -35,6 +45,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
 	struct trade_data_buffer_cursor *c = NULL;
+	size_t chunk_mem_size;
 
 	if (tc == NULL) {
 		errmsg(stderr, "Invalid argument\n");
@@ -55,8 +66,9 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	atomic_init(&buf->memory_usage.value, 0);
 	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
 
-	chunk = aligned_alloc(CACHE_LINE_SIZE, 
-		ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE));
+	/* Calculate size for chunk + variable data area */
+	chunk_mem_size = calculate_chunk_size(tc);
+	chunk = aligned_alloc(CACHE_LINE_SIZE, chunk_mem_size);
 
 	if (chunk == NULL) {
 		errmsg(stderr, "#trade_data_chunk allocation failed\n");
@@ -66,7 +78,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 
 	memset(chunk, 0, sizeof(struct trade_data_chunk));
 
-	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_chunk));
+	mem_add_atomic(&buf->memory_usage.value, chunk_mem_size);
 
 	INIT_LIST_HEAD(&buf->chunk_list);
 
@@ -91,6 +103,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	buf->num_cursor = tc->num_candle_configs;
 	buf->trc = tc;
 	buf->symbol_id = symbol_id;
+	buf->chunk_allocation_size = chunk_mem_size;
 
 	return buf;
 }
@@ -104,7 +117,6 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 {
 	struct trade_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
-	size_t chunk_size = sizeof(struct trade_data_chunk);
 
 	if (buf == NULL) {
 		return;
@@ -117,7 +129,8 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
 			free(chunk);
-			mem_sub_atomic(&buf->memory_usage.value, chunk_size);
+			mem_sub_atomic(&buf->memory_usage.value,
+				buf->chunk_allocation_size);
 			c = n;
 		}
 	}
@@ -137,13 +150,13 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
  * @return  0 on success, -1 on error.
  */
 int trade_data_buffer_push(struct trade_data_buffer *buf,
-	const trcache_trade_data *data, struct list_head *free_list,
+	const void *data, struct list_head *free_list,
 	int thread_id)
 {
 	struct trade_data_chunk *tail = NULL, *new_chunk = NULL;
-	size_t chunk_size = sizeof(struct trade_data_chunk);
 	_Atomic(size_t) *free_list_mem_counter =
 		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
+	void *dst_ptr;
 
 	if (!buf || !data) {
 		return -1;
@@ -169,8 +182,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
 
 			/* Transfer memory ownership from free list to this buffer */
-			mem_sub_atomic(free_list_mem_counter, chunk_size);
-			mem_add_atomic(&buf->memory_usage.value, chunk_size);
+			mem_sub_atomic(free_list_mem_counter,
+				buf->chunk_allocation_size);
+			mem_add_atomic(&buf->memory_usage.value,
+				buf->chunk_allocation_size);
 		} else {
 			/*
 			 * The local free list is empty, so we must allocate a new
@@ -196,7 +211,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			}
 
 			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE));
+				buf->chunk_allocation_size);
 
 			if (new_chunk == NULL) {
 				errmsg(stderr, "#trade_data_chunk allocation failed\n");
@@ -206,7 +221,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			memset(new_chunk, 0, sizeof(struct trade_data_chunk));
 
 			/* Add new memory to this buffer's tracking */
-			mem_add_atomic(&buf->memory_usage.value, chunk_size);
+			mem_add_atomic(&buf->memory_usage.value,
+				buf->chunk_allocation_size);
 
 			INIT_LIST_HEAD(&new_chunk->list_node);
 			list_add_tail(&new_chunk->list_node, &buf->chunk_list);
@@ -222,7 +238,9 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		buf->next_tail_write_idx += 1;
 	}
 
-	tail->entries[tail->write_idx] = *data;
+	/* Copy user data using memcpy and pointer arithmetic */
+	dst_ptr = tail->data + (tail->write_idx * buf->trc->trade_data_size);
+	memcpy(dst_ptr, data, buf->trc->trade_data_size);
 
 	/*
 	 * Consumers must access the last entry only after
@@ -248,7 +266,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
  */
 int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	struct trade_data_buffer_cursor *cursor,
-	struct trcache_trade_data **data_array,
+	void **data_array,
 	int *count)
 {
 	struct trade_data_chunk *chunk = NULL;
@@ -271,7 +289,7 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 		return 0;
 	} 
 
-	*data_array = &chunk->entries[cursor->peek_idx];
+	*data_array = chunk->data + (cursor->peek_idx * buf->trc->trade_data_size);
 	*count = write_idx - cursor->peek_idx;
 
 	/* advance peek cursor */
@@ -354,7 +372,6 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		&buf->trc->mem_acc.memory_pressure, memory_order_acquire);
 	_Atomic(size_t) *free_list_mem_counter =
 		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
-	size_t chunk_size = sizeof(struct trade_data_chunk);
 	size_t total_reaped_size = 0;
 
 	if (free_list == NULL || list_empty(&buf->chunk_list)) {
@@ -378,7 +395,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		}
 
 		last = (struct list_head *) &chunk->list_node;
-		total_reaped_size += chunk_size;
+		total_reaped_size += buf->chunk_allocation_size;
 		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
 	}
 

@@ -160,7 +160,7 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list);
  * is executed by only one worker thread at a time.
  */
 int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
-	struct trcache_trade_data *trade);
+	void *trade);
 
 /**
  * @brief    Convert all immutable row candles into a column batch.

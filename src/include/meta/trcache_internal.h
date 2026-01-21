@@ -58,6 +58,7 @@ struct trcache_tls_data {
  * @head_version_pool:       SCQ pool for candle_chunk_list's heads.
  * @chunk_pools:             Per-candle-type SCQ pools for candle_chunks.
  * @row_page_pools:          Per-candle-type SCQ pools for candle_row_pages.
+ * @trade_data_size:         User-defined trade data size.
 */
 struct trcache {
 	/*
@@ -106,6 +107,7 @@ struct trcache {
 	struct scalable_queue *head_version_pool;
 	struct scalable_queue *chunk_pools[MAX_CANDLE_TYPES];
 	struct scalable_queue *row_page_pools[MAX_CANDLE_TYPES];
+	size_t trade_data_size;
 
 } ____cacheline_aligned;
 

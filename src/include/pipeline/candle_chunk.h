@@ -291,7 +291,7 @@ void candle_chunk_destroy(struct candle_chunk *chunk);
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	const struct trcache_candle_update_ops *ops,
-	struct trcache_trade_data *trade, uint64_t *first_key);
+	void *trade, uint64_t *first_key);
 
 /**
  * @brief   Convert all immutable row candles within the given chunk.

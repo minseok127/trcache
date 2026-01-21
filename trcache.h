@@ -61,21 +61,16 @@ typedef union {
 } trcache_value;
 
 /*
- * trcache_trade_data - The basic unit provided by the user to trcache.
+ * trcache_trade_data - A default trade data structure.
  *
  * @timestamp: Unix timestamp in milliseconds.
  * @trade_id:  Trade ID used to construct an n-tick candle.
  * @price:     Traded price of a single trade.
  * @volume:    Traded volume of a single trade.
  *
- * The address of this data structure is passed by the user as an argument to
- * the trcache_feed_trade_data(). Since the function copies this trade data
- * structure internally, the user can declare it on their own stack before
- * calling the function.
- *
- * The raw data is reflected in all types of candles managed by trcache.
- * @timestamp is used to distinguish time-based candles, while @trade_id is used
- * to distinguish tick-based candles.
+ * NOTE: The trcache engine no longer enforces this specific structure. Users
+ * can define their own trade data structures of any size. This definition
+ * is kept for convenience and backward compatibility.
  */
 typedef struct trcache_trade_data {
 	uint64_t timestamp;
@@ -106,18 +101,18 @@ typedef struct trcache_candle_base {
 
 /*
  * trcache_candle_batch - Vectorised batch of candles in column-oriented layout.
- * 
+ *
  * This is a hybrid structure. Essential base fields (key, is_closed) are
  * exposed as named members for performance and convenience. Additional
  * user-defined fields are stored in the generic column_arrays.
  *
- * @key_array:     Array for the candle's unique key (always present).
+ * @key_array:       Array for the candle's unique key (always present).
  * @is_closed_array: Array for the candle's closed status (always present).
- * @column_arrays: Array of pointers to the actual columnar data arrays.
- * @capacity:      Capacity of vector arrays.
- * @num_candles:   Number of candles stored in every array.
- * @candle_idx:    The candle type identifier (index into config array).
- * @symbol_id:     Integer symbol ID resolved via symbol table.
+ * @column_arrays:   Array of pointers to the actual columnar data arrays.
+ * @capacity:        Capacity of vector arrays.
+ * @num_candles:     Number of candles stored in every array.
+ * @candle_idx:      The candle type identifier (index into config array).
+ * @symbol_id:       Integer symbol ID resolved via symbol table.
  *
  * All array members point into **one contiguous, SIMD-aligned block** so the
  * whole batch can be freed with a single 'free()' (or just unwound from the
@@ -143,11 +138,10 @@ typedef struct trcache_candle_batch {
  *
  * @flush:                    User-defined batch flush function.
  * @is_done:                  Checks whether the asynchronous flush has completed.
- * @destroy_async_handle:     Cleans up resources associated with the async handle.
+ * @destroy_async_handle:     Cleanup resources associated with the async handle.
  * @on_batch_destroy:         Callback invoked just before a batch's memory is
  *                            freed, allowing the user to release custom
- *                            resources (e.g., pointers stored in candle
- *                            fields).
+ *                            resources.
  * @flush_ctx:                User‑supplied pointer, passed into @flush().
  * @destroy_async_handle_ctx: User-supplied pointer, passed into
  *                            @destroy_async_handle().
@@ -160,14 +154,14 @@ typedef struct trcache_candle_batch {
  * The flush worker calls @flush exactly once for every batch that reaches the
  * fully converted state. User's implementation has two options:
  *
- *   1. **Synchronous flush** – Perform the entire operation inside @flush and
- *      return **NULL**. The engine will treat the batch as flushed
- *      immediately and will not call @is_done or @destroy_handle.
+ * 1. **Synchronous flush** – Perform the entire operation inside @flush and
+ * return **NULL**. The engine will treat the batch as flushed
+ * immediately and will not call @is_done or @destroy_handle.
  *
- *   2. **Asynchronous flush** – Initiate the operation inside @flush and return
- *      **a non‑NULL handle** (any unique pointer or token). The worker will
- *      keep that handle and periodically call @is_done until it returns true.
- *      After completion the worker will call @destroy_handle (if
+ * 2. **Asynchronous flush** – Initiate the operation inside @flush and return
+ * **a non‑NULL handle** (any unique pointer or token). The worker will
+ * keep that handle and periodically call @is_done until it returns true.
+ * After completion the worker will call @destroy_handle (if
  */
 typedef struct trcache_batch_flush_ops {
 	void *(*flush)(trcache *cache, trcache_candle_batch *batch,
@@ -192,16 +186,21 @@ typedef struct trcache_batch_flush_ops {
  *           return true if the trade was consumed by this candle and false
  *           if the candle is already complete and the trade belongs in
  *           the subsequent candle.
+ *
+ * Both callbacks receive a pointer to the user-defined trade data structure.
+ * Users must cast this 'void *' to their own structure type.
  */
 typedef struct trcache_candle_update_ops {
-	void (*init)(struct trcache_candle_base *c, struct trcache_trade_data *d);
-	bool (*update)(struct trcache_candle_base *c, struct trcache_trade_data *d);
+	void (*init)(struct trcache_candle_base *c, void *trade_data);
+	bool (*update)(struct trcache_candle_base *c, void *trade_data);
 } trcache_candle_update_ops;
 
 /*
- * trcache_field_type - Enumerates the possible data types for a user-defined
- * candle field. This provides metadata for future library
- * features like internal analytics or serialization.
+ * trcache_field_type - Enumerates the possible data types for a 
+ *                      user-defined candle field. 
+ *
+ * This provides metadata for future library features like internal analytics
+ * or serialization.
  */
 typedef enum {
 	FIELD_TYPE_UINT64,
@@ -274,6 +273,7 @@ typedef struct trcache_field_request {
  * @total_memory_limit:        The total memory limit in bytes.
  * @num_worker_threads:        Number of worker threads.
  * @max_symbols:               Maximum number of symbols that can be registered.
+ * @trade_data_size:           Size of the user-defined trade data structure.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -287,6 +287,7 @@ typedef struct trcache_init_ctx {
 	size_t total_memory_limit;
 	int num_worker_threads;
 	int max_symbols;
+	size_t trade_data_size;
 } trcache_init_ctx;
 
 /**
@@ -346,17 +347,19 @@ int trcache_lookup_symbol_id(struct trcache *cache, const char *symbol_str);
  * @brief   Push a single trade into the internal pipeline.
  *
  * @param   cache:       Handle from trcache_init().
- * @param   trade_data:  User-filled struct (copied internally).
+ * @param   trade_data:  Pointer to user-defined trade data (copied internally).
  * @param   symbol_id:   ID obtained via trcache_register_symbol().
  *
  * @return  0 on success, -1 on error.
+ *
+ * The function copies @trade_data_size bytes from the @trade_data pointer.
  *
  * XXX Currently, it is assumed that no more than one user thread receives trade
  * data for a given symbol. If multiple users push trade data for the same
  * symbol concurrently, the implementation must be modified accordingly.
  */
-int trcache_feed_trade_data(struct trcache *cache,
-	struct trcache_trade_data *trade_data, int symbol_id);
+int trcache_feed_trade_data(struct trcache *cache, const void *trade_data,
+	int symbol_id);
 
 /**
  * @brief   Copy @count candles ending at the candle with key @key.
@@ -365,7 +368,7 @@ int trcache_feed_trade_data(struct trcache *cache,
  * @param   symbol_id:  Symbol ID from trcache_register_symbol().
  * @param   candle_idx: Candle type to query (index into config array).
  * @param   request:    Pointer to a struct specifying which fields to retrieve.
-*                       Base fields are always included.
+ *                      Base fields are always included.
  * @param   key:        Key of the last candle to retrieve.
  * @param   count:      Number of candles to copy.
  * @param   dst:        Pre-allocated destination batch.

@@ -322,7 +322,7 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
 static int init_first_candle(struct candle_chunk_list *list,
-	struct trcache_trade_data *trade)
+	void *trade)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(
 		list->trc, list->candle_idx, list->symbol_id, list->row_page_count,
@@ -394,7 +394,7 @@ static int init_first_candle(struct candle_chunk_list *list,
 static void advance_within_same_page(struct candle_chunk *chunk, 
 	struct candle_row_page *row_page,
 	const struct trcache_candle_update_ops *ops,
-	struct trcache_trade_data *trade)
+	void *trade)
 {
 	const struct trcache_candle_config *config
 		= &chunk->trc->candle_configs[chunk->column_batch->candle_idx];
@@ -413,7 +413,7 @@ static void advance_within_same_page(struct candle_chunk *chunk,
  */
 static int advance_to_next_page(struct candle_chunk *chunk,
 	const struct trcache_candle_update_ops *ops,
-	struct trcache_trade_data *trade)
+	void *trade)
 {
 	int new_page_idx = chunk->mutable_page_idx + 1;
 	uint64_t dummy;
@@ -432,7 +432,7 @@ static int advance_to_next_page(struct candle_chunk *chunk,
  * @brief   Allocate a fresh chunk and start its first candle.
  */
 static int advance_to_new_chunk(struct candle_chunk_list *list,
-	struct candle_chunk *prev_chunk, struct trcache_trade_data *trade)
+	struct candle_chunk *prev_chunk, void *trade)
 {
 	const struct trcache_candle_update_ops *ops
 		= &list->config->update_ops;
@@ -487,7 +487,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
  * is executed by only one worker thread at a time.
  */
 int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
-	struct trcache_trade_data *trade)
+	void *trade)
 {
 	struct candle_chunk *chunk = list->candle_mutable_chunk;
 	const struct trcache_candle_config *config = list->config;

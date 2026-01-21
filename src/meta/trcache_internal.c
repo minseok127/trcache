@@ -399,6 +399,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
 	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->max_symbols = ctx->max_symbols;
+	tc->trade_data_size = ctx->trade_data_size;
 
 	/* 4. Initialize SCQ pools */
 	tc->head_version_pool = scq_init(tc);
@@ -858,8 +859,9 @@ static void user_thread_apply_trades(struct trade_data_buffer *buf,
 {
 	struct trade_data_buffer_cursor *cur;
 	struct candle_chunk_list *list;
-	struct trcache_trade_data *array;
 	struct trcache *tc = buf->trc;
+	void *trade_data;
+	void *array;
 	int count;
 
 	for (int i = 0; i < tc->num_candle_configs; i++) {
@@ -878,7 +880,8 @@ static void user_thread_apply_trades(struct trade_data_buffer *buf,
 
 		while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 			for (int j = 0; j < count; j++) {
-				candle_chunk_list_apply_trade(list, &array[j]);
+				trade_data = (uint8_t *)array + (j * tc->trade_data_size);
+				candle_chunk_list_apply_trade(list, trade_data);
 			}
 			trade_data_buffer_consume(buf, cur, count);
 		}
@@ -910,7 +913,7 @@ static void user_thread_apply_trades(struct trade_data_buffer *buf,
  * symbol concurrently, the implementation must be modified accordingly.
  */
 int trcache_feed_trade_data(struct trcache *tc,
-	struct trcache_trade_data *data, int symbol_id)
+	const void *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
 	struct trade_data_buffer *trd_databuf;
