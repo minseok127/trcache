@@ -16,6 +16,10 @@
 
 ---
 
+## System Verification & Latency Breakdown
+
+---
+
 ## Benchmark Stress Test
 
 Measured under the following configuration:
@@ -74,7 +78,7 @@ All measurements use **1 concurrent reader thread** (same as Query Latency bench
 
 ---
 
-## Limitations
+## Usage Rules
 
 **[Planned]: Features or constraints targeted for optimization or removal in future releases.**
 - The `max_symbols` capacity is pre-allocated at initialization and cannot be changed at runtime.
