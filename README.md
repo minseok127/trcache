@@ -6,7 +6,9 @@
 
 ## Features
 
-- **Fully Customizable Candles**: Define any candle structure you need—time-based, tick-based, or custom aggregations. Not limited to OHLCV.
+- **Fully Customizable Input & Output**: 
+  - Supports user-defined trade data structures. Ingest any raw data format (ticks, order book updates, custom structs).
+  - Define any candle structure you need—time-based, tick-based, or custom aggregations. Not limited to OHLCV.
 - **Lock-Free 3-Stage Pipeline**: 
   - **Apply**: Aggregates raw trades into row-oriented candles
   - **Convert**: Reshapes rows into SIMD-friendly column batches
@@ -148,7 +150,23 @@ For detailed architecture documentation, see inline comments in `src/`.
 
 ## Usage Guide
 
-### Step 1: Define Your Candle Structure
+### Step 1: Define Your Data Structures
+
+You can define your own custom trade data structure, or use the default `trcache_trade_data` provided by the library for convenience.
+
+**1. Input Trade Data Structure**
+
+```c
+typedef struct {
+    uint64_t timestamp;
+    uint64_t id;
+    double price;
+    double volume;
+    int side; // e.g., 1 for buy, -1 for sell (custom field)
+} MyTrade;
+```
+
+**2. Output Candle Structure**
 
 Your candle struct **must** have `trcache_candle_base` as its first member:
 
@@ -181,9 +199,13 @@ const trcache_field_def my_fields[] = {
 
 ### Step 3: Implement Candle Update Logic
 
+The `init` and `update` callbacks receive a generic `void *` pointer for the trade data. You must cast it to your custom trade structure type.
+
 ```c
-void init_tick(trcache_candle_base *c, trcache_trade_data *d) {
+void init_tick(trcache_candle_base *c, void *trade_data) {
     MyOHLCV *candle = (MyOHLCV *)c;
+    const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
+    
     c->key.trade_id = d->trade_id;  // Use trade_id for tick candles
     c->is_closed = false;
     
@@ -193,8 +215,10 @@ void init_tick(trcache_candle_base *c, trcache_trade_data *d) {
     candle->trade_count = 1;
 }
 
-bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
+bool update_tick(trcache_candle_base *c, void *trade_data) {
     MyOHLCV *candle = (MyOHLCV *)c;
+    const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
+    
     double price = d->price.as_double;
     
     if (price > candle->high) candle->high = price;
@@ -208,15 +232,19 @@ bool update_tick(trcache_candle_base *c, trcache_trade_data *d) {
     return true;  // Trade is consumed
 }
 
-void init_time(trcache_candle_base *c, trcache_trade_data *d) {
+void init_time(trcache_candle_base *c, void *trade_data) {
     MyCandle *candle = (MyCandle *)c;
+    const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
+    
     c->key.timestamp = d->timestamp - (d->timestamp % 60000);  // 1-min window
     c->is_closed = false;
     candle->open = candle->high = candle->low = candle->close = d->price.as_double;
     candle->volume = d->volume.as_double;
 }
 
-bool update_time(trcache_candle_base *c, trcache_trade_data *d) {
+bool update_time(trcache_candle_base *c, void *trade_data) {
+    const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
+
     if (d->timestamp >= c->key.timestamp + 60000) {
         c->is_closed = true;
         return false;  // This trade will be used in the init_time()
@@ -231,7 +259,7 @@ bool update_time(trcache_candle_base *c, trcache_trade_data *d) {
 }
 ```
 
-The routing of `trcache_trade_data` to either the `update` or `init` callback is determined by the following cases:
+The routing of `trade_data` to either the `update` or `init` callback is determined by the following cases:
 - **First Trade for a Symbol**: The first trade data received for a given symbol is always routed to the `init` callback.
 - **Update Returns False**: When the `update` callback returns `false`, the trade data is considered not applied to the current candle. This trade data is automatically routed to the `init` callback for the next candle.
 - **Update Returns True**: When the `update` callback returns `true`, the trade data is considered successfully applied to the current candle, and `init` is not invoked. The routing of the next trade data depends on the `is_closed` flag:
@@ -330,7 +358,8 @@ trcache_init_ctx ctx = {
     .cached_batch_count_pow2 = 3,       // 2^3 = 8 batches cached before flush
     .total_memory_limit = 5ULL << 30,   // 5GB
     .num_worker_threads = 8,
-    .max_symbols = 4096
+    .max_symbols = 4096,
+    .trade_data_size = sizeof(MyTrade)
 };
 
 trcache *cache = trcache_init(&ctx);
@@ -346,18 +375,27 @@ if (!cache) {
 
 ### Step 7: Register Symbols and Feed Data
 
+Feed your custom trade data structure directly to the engine.
+
 ```c
 int aapl_id = trcache_register_symbol(cache, "AAPL");
 
-trcache_trade_data trade = {
-    .timestamp = 1609459200000,  // Unix ms
-    .trade_id = 1,
-    .price = {.as_double = 132.05},
-    .volume = {.as_double = 100.0}
+// Use your custom structure
+MyTrade trade = {
+    .timestamp = 1609459200000,
+    .id = 1,
+    .price = 132.05,
+    .volume = 100.0,
+    .side = 1
 };
 
+// Pass the address of your struct
 trcache_feed_trade_data(cache, &trade, aapl_id);
 ```
+
+The `trcache_feed_trade_data()` performs a copy of the provided trade structure into its internal lock-free buffers.
+- You can safely use stack-allocated structures (as shown above).
+- If you dynamically allocate the trade structure (e.g., using `malloc`), you are safe to `free()` it immediately after the function returns. The engine does not retain the pointer you passed.
 
 **Important**: Only one thread should feed data for a given symbol. Feeding from different symbols concurrently is safe.
 
