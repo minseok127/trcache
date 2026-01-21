@@ -229,5 +229,39 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	uint64_t key, int count, struct trcache_candle_batch *dst,
 	const trcache_field_request *request);
 
+/**
+ * @brief   Copy candles within the key range [start_key, end_key].
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   start_key:   Key of the first candle (inclusive).
+ * @param   end_key:     Key of the last candle (inclusive).
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   request:     Specifies which user-defined fields to retrieve.
+ *
+ * @return  0 on success, -1 on failure (e.g., capacity insufficient).
+ *
+ * @note    If start_key or end_key is outside the available range, the query
+ *          is clamped to the available bounds. If no candles fall within the
+ *          range, dst->num_candles is set to 0 and returns 0.
+ */
+int candle_chunk_list_copy_by_key_range(struct candle_chunk_list *list,
+	uint64_t start_key, uint64_t end_key, struct trcache_candle_batch *dst,
+	const struct trcache_field_request *request);
+
+/**
+ * @brief   Count the number of candles within the key range [start_key, end_key].
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   start_key:   Key of the first candle (inclusive).
+ * @param   end_key:     Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ *
+ * @note    If start_key or end_key is outside the available range, the count
+ *          is based on the clamped bounds. Returns 0 if no candles exist.
+ */
+int candle_chunk_list_count_by_key_range(struct candle_chunk_list *list,
+	uint64_t start_key, uint64_t end_key);
+
 #endif /* CANDLE_CHUNK_LIST_H */
 

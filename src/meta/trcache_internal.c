@@ -1116,3 +1116,143 @@ int trcache_get_candles_by_symbol_str_and_offset(struct trcache *tc,
 	return trcache_get_candles_by_symbol_id_and_offset(tc, symbol_id,
 		candle_idx, request, offset, count, dst);
 }
+
+/**
+ * @brief   Copy candles within the key range [start_key, end_key].
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   candle_idx: Candle type to query.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_id_and_key_range(struct trcache *tc,
+	int symbol_id, int candle_idx,
+	const struct trcache_field_request *request,
+	uint64_t start_key, uint64_t end_key,
+	struct trcache_candle_batch *dst)
+{
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, candle_idx);
+	int ret;
+
+	if (list == NULL) {
+		return -1;
+	}
+
+	dst->symbol_id = symbol_id;
+	dst->candle_idx = candle_idx;
+
+	ret = candle_chunk_list_copy_by_key_range(list, start_key, end_key,
+		dst, request);
+
+	scq_thread_unregister(tc->head_version_pool);
+	scq_thread_unregister(tc->row_page_pools[candle_idx]);
+	scq_thread_unregister(tc->chunk_pools[candle_idx]);
+
+	return ret;
+}
+
+/**
+ * @brief   Copy candles within the key range [start_key, end_key]
+ *          for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   candle_idx: Candle type to query.
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_str_and_key_range(struct trcache *tc,
+	const char *symbol_str, int candle_idx,
+	const struct trcache_field_request *request,
+	uint64_t start_key, uint64_t end_key,
+	struct trcache_candle_batch *dst)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+	int symbol_id;
+
+	if (tls == NULL) {
+		return -1;
+	}
+
+	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
+	if (symbol_id == -1) {
+		errmsg(stderr, "Invalid symbol string\n");
+		return -1;
+	}
+
+	return trcache_get_candles_by_symbol_id_and_key_range(tc, symbol_id, candle_idx,
+		request, start_key, end_key, dst);
+}
+
+/**
+ * @brief   Count candles within the key range [start_key, end_key].
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   candle_idx: Candle type to query.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ */
+int trcache_count_candles_by_symbol_id_and_key_range(struct trcache *tc,
+	int symbol_id, int candle_idx,
+	uint64_t start_key, uint64_t end_key)
+{
+	struct candle_chunk_list *list = get_chunk_list(tc, symbol_id, candle_idx);
+	int ret;
+
+	if (list == NULL) {
+		return -1;
+	}
+
+	ret = candle_chunk_list_count_by_key_range(list, start_key, end_key);
+
+	scq_thread_unregister(tc->head_version_pool);
+	scq_thread_unregister(tc->row_page_pools[candle_idx]);
+	scq_thread_unregister(tc->chunk_pools[candle_idx]);
+
+	return ret;
+}
+
+/**
+ * @brief   Count candles within the key range [start_key, end_key]
+ *          for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   candle_idx: Candle type to query.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ */
+int trcache_count_candles_by_symbol_str_and_key_range(struct trcache *tc,
+	const char *symbol_str, int candle_idx,
+	uint64_t start_key, uint64_t end_key)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+	int symbol_id;
+
+	if (tls == NULL) {
+		return -1;
+	}
+
+	symbol_id = resolve_symbol_id(tc, tls, symbol_str);
+	if (symbol_id == -1) {
+		errmsg(stderr, "Invalid symbol string\n");
+		return -1;
+	}
+
+	return trcache_count_candles_by_symbol_id_and_key_range(tc, symbol_id, candle_idx,
+		start_key, end_key);
+}

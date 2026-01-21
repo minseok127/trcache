@@ -663,7 +663,7 @@ void run_auditor(struct trcache* cache,
 
 		auto now = std::chrono::steady_clock::now();
 		if (std::chrono::duration_cast<std::chrono::seconds>(
-			now - last_report).count() >= 1) {
+			now - last_report).count() >= 600) {
 			stats.report_interval(&csv_file);
 			last_report = now;
 		}

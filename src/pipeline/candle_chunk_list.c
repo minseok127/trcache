@@ -1016,14 +1016,14 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 	struct candle_chunk_list_head_version *head_ver;
 	uint64_t seq_start, seq_end, head_seq_first, available;
 	int ret;
-	
+
 	if (dst == NULL || dst->capacity < count) {
 		errmsg(stderr,
 			"Invalid #trcache_candle_batch (capacity=%d, requested=%d)\n",
 			dst ? dst->capacity : -1, count);
 		return -1;
 	}
-	
+
 	/* Pin the head of list for safe chunk traversing */
 	head_snap = atomsnap_acquire_version(list->head_gate);
 	if (head_snap == NULL) {
@@ -1069,4 +1069,295 @@ int candle_chunk_list_copy_backward_by_key(struct candle_chunk_list *list,
 
 	atomsnap_release_version(head_snap);
 	return ret;
+}
+
+/**
+ * @brief   Helper to find the sequence number for a key with clamping.
+ *
+ * Unlike candle_chunk_index_find_key which returns NULL for out-of-range keys,
+ * this helper clamps to the available range and returns the corresponding
+ * sequence number.
+ *
+ * @param   idx:          Pointer to the chunk index.
+ * @param   target_key:   Key to search for.
+ * @param   head_idx_seq: Index sequence of the head chunk.
+ * @param   mutable_seq:  Current mutable sequence number.
+ * @param   out_chunk:    Output pointer to the found chunk.
+ * @param   out_seq:      Output pointer to the sequence number.
+ * @param   clamp_low:    If true, clamp to head when key is too low.
+ * @param   clamp_high:   If true, clamp to mutable when key is too high.
+ *
+ * @return  0 on success (exact or clamped), -1 on failure.
+ */
+static int find_seq_by_key_clamped(struct candle_chunk_index *idx,
+	uint64_t target_key, uint64_t head_idx_seq, uint64_t mutable_seq,
+	struct candle_chunk **out_chunk, uint64_t *out_seq,
+	bool clamp_low, bool clamp_high)
+{
+	uint64_t head_pos, tail_pos, mask, lo, hi, mid, key_mid;
+	uint64_t tail_idx_seq;
+	struct atomsnap_version *snap_ver;
+	struct candle_chunk_index_version *idx_ver;
+	struct candle_chunk *chunk;
+	uint64_t head_first_key, tail_last_key;
+	int local_idx;
+
+	tail_idx_seq = atomic_load_explicit(&idx->tail, memory_order_acquire);
+	snap_ver = atomsnap_acquire_version(idx->gate);
+	if (snap_ver == NULL) {
+		return -1;
+	}
+
+	idx_ver = (struct candle_chunk_index_version *)
+		atomsnap_get_object(snap_ver);
+	mask = idx_ver->mask;
+
+	head_pos = head_idx_seq & mask;
+	tail_pos = tail_idx_seq & mask;
+
+	head_first_key = idx_ver->array[head_pos].key_first;
+
+	/* Get last key from tail chunk's key_array */
+	chunk = idx_ver->array[tail_pos].chunk_ptr;
+	local_idx = atomic_load_explicit(&chunk->num_completed,
+		memory_order_acquire);
+	tail_last_key = chunk->column_batch->key_array[local_idx];
+
+	/* Check if target_key is below the available range */
+	if (target_key < head_first_key) {
+		if (clamp_low) {
+			*out_chunk = idx_ver->array[head_pos].chunk_ptr;
+			*out_seq = idx_ver->array[head_pos].seq_first;
+			atomsnap_release_version(snap_ver);
+			return 0;
+		}
+		atomsnap_release_version(snap_ver);
+		return -1;
+	}
+
+	/* Check if target_key is above the available range */
+	if (target_key > tail_last_key) {
+		if (clamp_high) {
+			*out_chunk = idx_ver->array[tail_pos].chunk_ptr;
+			*out_seq = mutable_seq;
+			atomsnap_release_version(snap_ver);
+			return 0;
+		}
+		atomsnap_release_version(snap_ver);
+		return -1;
+	}
+
+	/* Binary search for the chunk containing target_key */
+	lo = head_idx_seq;
+	hi = tail_idx_seq;
+
+	while (lo < hi) {
+		mid = lo + ((hi - lo + 1) >> 1);
+		key_mid = idx_ver->array[mid & mask].key_first;
+
+		if (key_mid <= target_key) {
+			lo = mid;
+		} else {
+			hi = mid - 1;
+		}
+	}
+
+	chunk = idx_ver->array[lo & mask].chunk_ptr;
+	*out_chunk = chunk;
+
+	/* Find exact sequence within the chunk */
+	local_idx = candle_chunk_find_idx_by_key(chunk, target_key);
+	if (local_idx == -1) {
+		/*
+		 * Key not found in chunk. This can happen if the key falls
+		 * between chunks. Clamp to the chunk boundary.
+		 */
+		if (clamp_low && lo == head_idx_seq) {
+			*out_seq = chunk->seq_first;
+		} else {
+			/* Clamp to last candle of this chunk */
+			local_idx = atomic_load_explicit(&chunk->num_completed,
+				memory_order_acquire);
+			*out_seq = chunk->seq_first + local_idx;
+		}
+	} else {
+		*out_seq = chunk->seq_first + local_idx;
+	}
+
+	atomsnap_release_version(snap_ver);
+	return 0;
+}
+
+/**
+ * @brief   Copy candles within the key range [start_key, end_key].
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   start_key:   Key of the first candle (inclusive).
+ * @param   end_key:     Key of the last candle (inclusive).
+ * @param   dst:         Pre-allocated destination batch (SoA).
+ * @param   request:     Specifies which user-defined fields to retrieve.
+ *
+ * @return  0 on success, -1 on failure (e.g., capacity insufficient).
+ *
+ * @note    If start_key or end_key is outside the available range, the query
+ *          is clamped to the available bounds. If no candles fall within the
+ *          range, dst->num_candles is set to 0 and returns 0.
+ */
+int candle_chunk_list_copy_by_key_range(struct candle_chunk_list *list,
+	uint64_t start_key, uint64_t end_key, struct trcache_candle_batch *dst,
+	const struct trcache_field_request *request)
+{
+	struct candle_chunk_index *idx = list->chunk_index;
+	struct candle_chunk *head_chunk, *start_chunk, *end_chunk;
+	struct atomsnap_version *head_snap;
+	struct candle_chunk_list_head_version *head_ver;
+	uint64_t seq_start, seq_end, mutable_seq;
+	int count, ret;
+
+	if (dst == NULL) {
+		errmsg(stderr, "Destination batch is NULL\n");
+		return -1;
+	}
+
+	/* Handle invalid range: start > end */
+	if (start_key > end_key) {
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	/* Pin the head of list for safe chunk traversing */
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	if (head_snap == NULL) {
+		/* List not initialized yet, return empty result */
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	head_ver = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
+	head_chunk = head_ver->head_node;
+
+	mutable_seq = atomic_load_explicit(&list->mutable_seq,
+		memory_order_acquire);
+
+	/* Handle empty list */
+	if (mutable_seq == UINT64_MAX) {
+		atomsnap_release_version(head_snap);
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	/* Find start sequence with clamping to head */
+	if (find_seq_by_key_clamped(idx, start_key, head_chunk->idx_seq,
+			mutable_seq, &start_chunk, &seq_start, true, false) == -1) {
+		/* start_key > all available keys */
+		atomsnap_release_version(head_snap);
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	/* Find end sequence with clamping to tail */
+	if (find_seq_by_key_clamped(idx, end_key, head_chunk->idx_seq,
+			mutable_seq, &end_chunk, &seq_end, false, true) == -1) {
+		/* end_key < all available keys */
+		atomsnap_release_version(head_snap);
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	/* After clamping, check if range is still valid */
+	if (seq_start > seq_end) {
+		atomsnap_release_version(head_snap);
+		dst->num_candles = 0;
+		return 0;
+	}
+
+	count = (int)(seq_end - seq_start + 1);
+
+	/* Check capacity */
+	if (dst->capacity < count) {
+		errmsg(stderr,
+			"Insufficient capacity (capacity=%d, required=%d)\n",
+			dst->capacity, count);
+		atomsnap_release_version(head_snap);
+		return -1;
+	}
+
+	ret = candle_chunk_list_copy_backward(list, end_chunk, seq_start,
+		seq_end, count, dst, request);
+
+	atomsnap_release_version(head_snap);
+	return ret;
+}
+
+/**
+ * @brief   Count the number of candles within the key range.
+ *
+ * @param   list:        Pointer to the candle chunk list.
+ * @param   start_key:   Key of the first candle (inclusive).
+ * @param   end_key:     Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ *
+ * @note    If start_key or end_key is outside the available range, the count
+ *          is based on the clamped bounds. Returns 0 if no candles exist.
+ */
+int candle_chunk_list_count_by_key_range(struct candle_chunk_list *list,
+	uint64_t start_key, uint64_t end_key)
+{
+	struct candle_chunk_index *idx = list->chunk_index;
+	struct candle_chunk *head_chunk, *start_chunk, *end_chunk;
+	struct atomsnap_version *head_snap;
+	struct candle_chunk_list_head_version *head_ver;
+	uint64_t seq_start, seq_end, mutable_seq;
+
+	/* Handle invalid range: start > end */
+	if (start_key > end_key) {
+		return 0;
+	}
+
+	/* Pin the head of list for safe chunk traversing */
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	if (head_snap == NULL) {
+		/* List not initialized yet */
+		return 0;
+	}
+
+	head_ver = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
+	head_chunk = head_ver->head_node;
+
+	mutable_seq = atomic_load_explicit(&list->mutable_seq,
+		memory_order_acquire);
+
+	/* Handle empty list */
+	if (mutable_seq == UINT64_MAX) {
+		atomsnap_release_version(head_snap);
+		return 0;
+	}
+
+	/* Find start sequence with clamping to head */
+	if (find_seq_by_key_clamped(idx, start_key, head_chunk->idx_seq,
+			mutable_seq, &start_chunk, &seq_start, true, false) == -1) {
+		/* start_key > all available keys */
+		atomsnap_release_version(head_snap);
+		return 0;
+	}
+
+	/* Find end sequence with clamping to tail */
+	if (find_seq_by_key_clamped(idx, end_key, head_chunk->idx_seq,
+			mutable_seq, &end_chunk, &seq_end, false, true) == -1) {
+		/* end_key < all available keys */
+		atomsnap_release_version(head_snap);
+		return 0;
+	}
+
+	atomsnap_release_version(head_snap);
+
+	/* After clamping, check if range is still valid */
+	if (seq_start > seq_end) {
+		return 0;
+	}
+
+	return (int)(seq_end - seq_start + 1);
 }

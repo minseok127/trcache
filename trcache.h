@@ -471,6 +471,91 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
  */
 void trcache_batch_free(struct trcache_candle_batch *batch);
 
+/**
+ * @brief   Copy candles within the key range [start_key, end_key].
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   candle_idx: Candle type to query (index into config array).
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ *                      Base fields are always included.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure (e.g., capacity insufficient).
+ *
+ * @note    If start_key or end_key is outside the available range, the query
+ *          is clamped to the available bounds. If no candles fall within the
+ *          range, dst->num_candles is set to 0 and the function returns 0.
+ *          Returns -1 if dst->capacity is insufficient to hold all candles
+ *          in the range.
+ */
+int trcache_get_candles_by_symbol_id_and_key_range(struct trcache *tc,
+	int symbol_id, int candle_idx,
+	const struct trcache_field_request *request,
+	uint64_t start_key, uint64_t end_key,
+	struct trcache_candle_batch *dst);
+
+/**
+ * @brief   Copy candles within the key range [start_key, end_key]
+ *          for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   candle_idx: Candle type to query (index into config array).
+ * @param   request:    Pointer to a struct specifying which fields to retrieve.
+ *                      Base fields are always included.
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ * @param   dst:        Pre-allocated destination batch.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+int trcache_get_candles_by_symbol_str_and_key_range(struct trcache *tc,
+	const char *symbol_str, int candle_idx,
+	const struct trcache_field_request *request,
+	uint64_t start_key, uint64_t end_key,
+	struct trcache_candle_batch *dst);
+
+/**
+ * @brief   Count candles within the key range [start_key, end_key].
+ *
+ * Use this function to determine the required capacity before calling
+ * trcache_get_candles_by_symbol_id_and_key_range().
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_id:  Symbol ID from trcache_register_symbol().
+ * @param   candle_idx: Candle type to query (index into config array).
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ *
+ * @note    If start_key or end_key is outside the available range, the count
+ *          is based on the clamped bounds. Returns 0 if no candles exist
+ *          in the range or the list is empty.
+ */
+int trcache_count_candles_by_symbol_id_and_key_range(struct trcache *tc,
+	int symbol_id, int candle_idx,
+	uint64_t start_key, uint64_t end_key);
+
+/**
+ * @brief   Count candles within the key range [start_key, end_key]
+ *          for a symbol string.
+ *
+ * @param   tc:         Pointer to trcache instance.
+ * @param   symbol_str: NULL-terminated symbol string.
+ * @param   candle_idx: Candle type to query (index into config array).
+ * @param   start_key:  Key of the first candle (inclusive).
+ * @param   end_key:    Key of the last candle (inclusive).
+ *
+ * @return  Number of candles in the range (>= 0), or -1 on failure.
+ */
+int trcache_count_candles_by_symbol_str_and_key_range(struct trcache *tc,
+	const char *symbol_str, int candle_idx,
+	uint64_t start_key, uint64_t end_key);
+
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
