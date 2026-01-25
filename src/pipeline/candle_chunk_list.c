@@ -1169,16 +1169,32 @@ static int find_seq_by_key_clamped(struct candle_chunk_index *idx,
 	local_idx = candle_chunk_find_idx_by_key(chunk, target_key);
 	if (local_idx == -1) {
 		/*
-		 * Key not found in chunk. This can happen if the key falls
-		 * between chunks. Clamp to the chunk boundary.
+		 * Key not found in chunk. Since binary search ensures
+		 * chunk.key_first <= target_key, this implies target_key is
+		 * beyond the last key of this chunk (Gap After scenario).
 		 */
-		if (clamp_low && lo == head_idx_seq) {
-			*out_seq = chunk->seq_first;
+		uint64_t num_completed = atomic_load_explicit(&chunk->num_completed,
+			memory_order_acquire);
+
+		if (clamp_high) {
+			/*
+			 * For end_key: We want the max valid seq <= target_key.
+			 * Since target_key is beyond this chunk, the last candle
+			 * of this chunk is the closest valid lower bound.
+			 */
+			if (num_completed > 0) {
+				*out_seq = chunk->seq_first + num_completed - 1;
+			} else {
+				/* Should not happen for valid chunks in index */
+				*out_seq = chunk->seq_first;
+			}
 		} else {
-			/* Clamp to last candle of this chunk */
-			local_idx = atomic_load_explicit(&chunk->num_completed,
-				memory_order_acquire);
-			*out_seq = chunk->seq_first + local_idx;
+			/*
+			 * For start_key: We want the min valid seq >= target_key.
+			 * Since target_key is beyond this chunk, the first candle
+			 * of the NEXT chunk is the answer.
+			 */
+			*out_seq = chunk->seq_first + num_completed;
 		}
 	} else {
 		*out_seq = chunk->seq_first + local_idx;
