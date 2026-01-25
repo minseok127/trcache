@@ -1,20 +1,20 @@
 # TRCACHE
 
-`trcache` is a C library for ingesting real-time trade data and transforming it into **column-oriented, user-defined candle arrays** optimized for analytics. Designed for multicore systems, it leverages lock-free data structures and dedicated worker threads to scale with available CPU resources.
+`trcache` is a C library for ingesting real-time trade data and transforming it into column-oriented, user-defined candle arrays. It uses lock-free data structures and dedicated worker threads to scale with available CPU cores.
 
 ---
 
 ## Features
 
-- **Fully Customizable Input & Output**: 
-  - Supports user-defined trade data structures. Ingest any raw data format (ticks, order book updates, custom structs).
-  - Define any candle structure you need—time-based, tick-based, or custom aggregations. Not limited to OHLCV.
-- **Lock-Free 3-Stage Pipeline**: 
-  - **Apply**: Aggregates raw trades into row-oriented candles.
-  - **Convert**: Reshapes rows into SIMD-friendly column batches.
-  - **Flush**: Hands off completed batches to user callbacks for persistence.
-- **Lock-Free Queries**: Read candle data without locks, even during concurrent updates.
-- **Adaptive Scheduling**: Admin thread monitors pipeline throughput and dynamically balances worker threads across stages.
+- **User-Defined Input & Output**:
+  - Accepts user-defined trade data structures.
+  - Accepts user-defined candle structures (time-based, tick-based, or custom aggregations).
+- **Lock-Free 3-Stage Pipeline**:
+  - **Apply**: Aggregates trades into row-oriented candles.
+  - **Convert**: Transforms rows into SIMD-aligned column batches.
+  - **Flush**: Passes completed batches to user callbacks for persistence.
+- **Lock-Free Queries**: Reads candle data without locks during concurrent updates.
+- **Adaptive Scheduling**: Admin thread monitors pipeline throughput and rebalances worker threads across stages.
 
 ---
 
@@ -32,11 +32,7 @@ Measured under the following configuration:
 - Memory Limit: 5GB
 - Candle Types: 3-tick candle, 1-minute candle
 
-This benchmark represents a **stress test scenario** where the feed threads
-push trades via direct function calls at maximum rate, **with no network I/O 
-overhead or rate limiting**. In production environments with network-based feeds, 
-the sustained ingestion rate will be constrained by network throughput rather 
-than trcache's processing capacity.
+Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead. In production with network-based feeds, ingestion rate is constrained by network throughput.
 
 ### Write Throughput (1 feed thread, 3 worker threads, no concurrent readers)
 
@@ -118,41 +114,41 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
    Aggregation         → SIMD Columns        → User Callbacks
 ```
 
-1. **APPLY**: Worker threads consume trades from lock-free buffers and update row-oriented candles. Only the most recent candle is mutable; all prior candles are immutable.
+1. **APPLY**: Worker threads consume trades from lock-free buffers and update row-oriented candles. Only the most recent candle is mutable; prior candles are immutable.
 
-2. **CONVERT**: Once a candle completes, a worker transforms the immutable row (Array of Structs) into a column-oriented batch (Struct of Arrays) aligned for SIMD operations.
+2. **CONVERT**: When a candle completes, a worker transforms the immutable row (Array of Structs) into a column-oriented batch (Struct of Arrays) with SIMD alignment.
 
-3. **FLUSH**: When the number of unflushed batches exceeds a threshold, a worker invokes user-provided callbacks to persist data (supports both sync and async I/O).
+3. **FLUSH**: When unflushed batch count exceeds a threshold, a worker invokes user-provided callbacks to persist data (supports sync and async I/O).
 
-### Implementation Highlights
+### Implementation Details
 
-- **Lock-Free Primitives**: 
-  - `atomsnap`: Custom versioning mechanism for atomic pointer snapshots.
+- **Lock-Free Primitives**:
+  - `atomsnap`: Versioning mechanism for atomic pointer snapshots.
   - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations.
 
-- **Memory Management**: 
+- **Memory Management**:
   - Non-blocking reclamation for chunks/pages.
-  - Pressure-aware pooling (recycle vs. free based on `memory_pressure` flag).
-  - Admin thread aggregates distributed memory tracking counters and updates global pressure flag.
+  - Pooling behavior (recycle vs. free) determined by `memory_pressure` flag.
+  - Admin thread aggregates distributed memory counters and updates global pressure flag.
 
-- **Adaptive Scheduling**: 
+- **Adaptive Scheduling**:
   - Admin thread calculates EMA (N=4) of cycle costs per (symbol, candle_type, stage).
   - Partitions workers into In-Memory (Apply+Convert) vs. Flush groups based on cycle demand.
   - Assigns tasks via lock-free bitmaps (workers scan for set bits, CAS to claim ownership).
 
-- **SIMD Optimization**: 
+- **SIMD Alignment**:
   - Column batches aligned to 64 bytes.
-  - Contiguous memory layout for vectorized analytics.
+  - Contiguous memory layout for vectorized operations.
 
-For detailed architecture documentation, see inline comments in `src/`.
+See inline comments in `src/` for implementation details.
 
 ---
 
 ## Usage Guide
 
-### Step 1: Define Your Data Structures
+### Step 1: Define Data Structures
 
-You can define your own custom trade data structure, or use the default `trcache_trade_data` provided by the library for convenience.
+Define a custom trade data structure, or use the default `trcache_trade_data` provided by the library.
 
 **1. Input Trade Data Structure**
 
@@ -168,7 +164,7 @@ typedef struct {
 
 **2. Output Candle Structure**
 
-Your candle struct **must** have `trcache_candle_base` as its first member:
+The candle struct must have `trcache_candle_base` as its first member:
 
 ```c
 typedef struct {
@@ -182,9 +178,9 @@ typedef struct {
 } MyOHLCV;
 ```
 
-### Step 2: Describe the Memory Layout
+### Step 2: Define Field Layout
 
-Create an array of `trcache_field_def` to map your custom fields:
+Create an array of `trcache_field_def` to specify field offsets and types:
 
 ```c
 const trcache_field_def my_fields[] = {
@@ -199,7 +195,7 @@ const trcache_field_def my_fields[] = {
 
 ### Step 3: Implement Candle Update Logic
 
-The `init` and `update` callbacks receive a generic `void *` pointer for the trade data. You must cast it to your custom trade structure type.
+The `init` and `update` callbacks receive `void *` for trade data. Cast it to the custom trade structure type.
 
 ```c
 void init_tick(trcache_candle_base *c, void *trade_data) {
@@ -327,7 +323,7 @@ trcache_batch_flush_ops async_ops = {
 };
 ```
 
-### Step 5: Configure Your Candle Types
+### Step 5: Configure Candle Types
 
 ```c
 trcache_candle_config configs[] = {
@@ -368,14 +364,14 @@ if (!cache) {
 }
 ```
 
-**Memory Limit Calculation**: If initialization fails with "memory limit too low", the error message will show:
-- Minimum required memory for your configuration.
+If initialization fails with "memory limit too low", the error message shows:
+- Minimum required memory.
 - Per-candle-type breakdown (chunk size, page size).
-- Suggestions to increase limit or reduce `cached_batch_count_pow2`.
+- Suggested adjustments.
 
 ### Step 7: Register Symbols and Feed Data
 
-Feed your custom trade data structure directly to the engine.
+Pass the custom trade data structure to the engine.
 
 ```c
 int aapl_id = trcache_register_symbol(cache, "AAPL");
@@ -393,90 +389,101 @@ MyTrade trade = {
 trcache_feed_trade_data(cache, &trade, aapl_id);
 ```
 
-The `trcache_feed_trade_data()` performs a copy of the provided trade structure into its internal lock-free buffers.
-- You can safely use stack-allocated structures (as shown above).
-- If you dynamically allocate the trade structure (e.g., using `malloc`), you are safe to `free()` it immediately after the function returns. The engine does not retain the pointer you passed.
-
-**Important**: Only one thread should feed data for a given symbol. Feeding from different symbols concurrently is safe.
+`trcache_feed_trade_data()` copies the trade structure into internal lock-free buffers. Stack-allocated and heap-allocated structures can be used; the pointer is not retained after the function returns.
 
 ### Step 8: Query Candle Data
 
-#### Specify Which Fields to Retrieve
+#### 1. Select Fields
 
 ```c
-int field_indices[] = {1, 2, 3};  // Request: high, low, close
+int field_indices[] = {1, 2, 3};  // high, low, close
 trcache_field_request request = {
     .field_indices = field_indices,
     .num_fields = 3
 };
 ```
 
-#### Allocate Result Batch
+#### 2. Allocate Result Batch
 
 ```c
 trcache_candle_batch *batch = trcache_batch_alloc_on_heap(
-    cache, 
-    0,          // candle_idx (0 = first config)
+    cache,
+    0,          // candle_idx
     100,        // capacity
-    &request    // NULL = allocate all fields
+    &request    // NULL = all fields
 );
 ```
 
-#### Query by Offset (Most Recent N Candles)
+#### 3. Query
 
+Three query methods are available:
+
+**By Offset** - Retrieve N candles from a position relative to the most recent candle.
 ```c
-int ret = trcache_get_candles_by_symbol_id_and_offset(
-    cache, aapl_id, 
-    0,          // candle_idx
-    &request, 
-    0,          // offset (0 = most recent)
-    10,         // count
+trcache_get_candles_by_symbol_id_and_offset(
+    cache, aapl_id, 0, &request,
+    0,      // offset (0 = most recent)
+    10,     // count
     batch
 );
-
-if (ret == 0) {
-    printf("Retrieved %d candles\n", batch->num_candles);
-}
 ```
 
-#### Query by Key (Specific Candle)
-
+**By Key** - Retrieve N candles starting from a specific key.
 ```c
-uint64_t target_key = 1609459200000;  // Timestamp or trade_id
 trcache_get_candles_by_symbol_id_and_key(
-    cache, aapl_id, 0, &request, target_key, 10, batch
+    cache, aapl_id, 0, &request,
+    1609459200000,  // start_key (timestamp or trade_id)
+    10,             // count
+    batch
 );
 ```
 
-#### Access Column Data
+**By Key Range** - Retrieve all candles within [start_key, end_key].
+```c
+// Count candles in range (to check capacity)
+int count = trcache_count_candles_by_symbol_id_and_key_range(
+    cache, aapl_id, 0,
+    1609459200000,  // start_key
+    1609459260000   // end_key
+);
 
-**CRITICAL**: Use the **original field index** from `field_definitions`, NOT the request array index!
+// Retrieve candles
+trcache_get_candles_by_symbol_id_and_key_range(
+    cache, aapl_id, 0, &request,
+    1609459200000,  // start_key
+    1609459260000,  // end_key
+    batch
+);
+```
+Returns -1 if `batch->capacity` is insufficient. Use `trcache_count_candles_by_symbol_id_and_key_range()` to check the required capacity before calling.
+
+#### 4. Access Column Data
+
+Use the original field index from `field_definitions`, not the request array index:
 
 ```c
-// ❌ WRONG - using request array indices
-double *highs = (double *)batch->column_arrays[0];  // This is NULL! Because the 0 index was not required
+// WRONG - request array index
+double *highs = (double *)batch->column_arrays[0];  // NULL
 
-// ✅ CORRECT - using original field_definitions indices
-double *highs  = (double *)batch->column_arrays[1];  // Index 1 in my_fields
-double *lows   = (double *)batch->column_arrays[2];  // Index 2 in my_fields
-double *closes = (double *)batch->column_arrays[3];  // Index 3 in my_fields
+// CORRECT - field_definitions index
+double *highs  = (double *)batch->column_arrays[1];
+double *lows   = (double *)batch->column_arrays[2];
+double *closes = (double *)batch->column_arrays[3];
 
-/* Oldest -> Newest */
-for (int i = 0; i < batch->num_candles; i++) {
-    printf("Candle %d: H=%.2f L=%.2f C=%.2f\n", 
-           i, highs[i], lows[i], closes[i]);
+for (int i = 0; i < batch->num_candles; i++) {  // Oldest -> Newest
+    printf("H=%.2f L=%.2f C=%.2f\n", highs[i], lows[i], closes[i]);
 }
 ```
 
-**Why?** The `column_arrays` is sized to match your **full** `field_definitions` array, but only requested fields are allocated. Non-requested fields will be NULL.
+`column_arrays` is indexed by `field_definitions` order. Non-requested fields are NULL.
 
-#### Cleanup
+#### 5. Cleanup
 
 ```c
 trcache_batch_free(batch);
 ```
 
-### Step 9: Destroy the Engine
+### Step 9: Destroy
 
 ```c
 trcache_destroy(cache);  // Flushes remaining data and frees all resources
@@ -488,12 +495,9 @@ trcache_destroy(cache);  // Flushes remaining data and frees all resources
 
 ### "Memory limit reached" during initialization
 
-**Cause**: `total_memory_limit` is below the minimum required for your configuration.
+**Cause**: `total_memory_limit` is below the minimum required.
 
-**Solution**: The error message shows:
-- Minimum required memory.
-- Per-candle-type breakdown.
-- Suggestions to adjust `cached_batch_count_pow2` or increase limit.
+**Solution**: Check the error message for minimum required memory and per-candle-type breakdown. Adjust `cached_batch_count_pow2` or increase limit.
 
 Example error:
 ```
@@ -507,9 +511,8 @@ Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
 **Cause**: Memory limit reached at runtime.
 
 **Solution**:
-1. Check if `total_memory_limit` is too low for current workload.
-2. Increase limit or reduce `cached_batch_count_pow2`.
-3. Optimize flush callbacks to reduce latency.
+1. Increase `total_memory_limit` or reduce `cached_batch_count_pow2`.
+2. Reduce flush callback latency.
 
 ### Segfault on query
 
