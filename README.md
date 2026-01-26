@@ -124,7 +124,15 @@ Raw histogram data available in `validator/results/`.
 | RAM | 16GB DDR5 5600MHz |
 | Symbols | 1,024 |
 | Distribution | Zipf (s=0.99) |
+
+### Engine Configuration
+
+| Parameter | Value |
+|-----------|-------|
 | Memory Limit | 5 GB |
+| Worker Threads | 3 or 6 |
+| Batch Size | 16,384 candles (2^14) |
+| Cached Batches | 1 (2^0) |
 | Candle Types | 3-tick, 1-minute |
 
 Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead.
