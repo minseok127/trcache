@@ -117,6 +117,8 @@ Raw histogram data available in `validator/results/`.
 
 ## Benchmark Stress Test
 
+Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead. This measures maximum throughput under stress conditions without network bottlenecks.
+
 ### Test Environment
 
 | Parameter | Value |
@@ -143,8 +145,6 @@ Raw histogram data available in `validator/results/`.
 | Feed Threads | 1, 2, or 3 |
 
 Zipf distribution simulates realistic market conditions where a small number of symbols receive disproportionately more trades. Higher s values increase this skew.
-
-Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead.
 
 ### Write Throughput (1 feed thread, 3 worker threads, no concurrent readers)
 
