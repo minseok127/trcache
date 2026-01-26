@@ -81,7 +81,7 @@ Exchange Server              Local Machine
 
 | Metric | Description |
 |--------|-------------|
-| Gaps | Missing trades between consecutive candles. |
+| Gaps | Trade ID discontinuity at candle boundaries. |
 | Tick Errors | Mismatch between expected and actual tick count per candle. |
 
 | Test | Candles | Gaps | Tick Errors |
