@@ -141,8 +141,6 @@ Feed threads push trades via direct function calls at maximum rate, with no netw
 |-----------|-------|
 | Symbols | 1,024 |
 | Distribution | Zipf (s=0.99) |
-| Worker Threads | 3 or 6 |
-| Feed Threads | 1, 2, or 3 |
 
 Zipf distribution simulates realistic market conditions where a small number of symbols receive disproportionately more trades. Higher s values increase this skew.
 
