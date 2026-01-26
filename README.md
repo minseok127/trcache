@@ -20,6 +20,95 @@
 
 ## System Verification & Latency Breakdown
 
+Data integrity and processing latency measured using live exchange data.
+
+### Test Environment
+
+| Parameter | Value |
+|-----------|-------|
+| Cloud | Google Cloud Platform |
+| Region | asia-northeast1-c (Tokyo) |
+| Instance | e2-custom-12-6144 |
+| vCPU | 12 |
+| Memory | 6 GB |
+| Exchange | Binance Futures |
+| WebSocket | wss://fstream.binance.com |
+
+### Engine Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Memory Limit | 2 GB |
+| Worker Threads | 3 |
+| Batch Size | 4,096 candles (2^12) |
+| Candle Type | 5-tick |
+
+### Latency Measurement
+
+```
+Exchange Server              Local Machine
+      │                            │
+      │      Network Latency       │
+      ▼                            ▼
+┌──────────┐                 ┌──────────┐                 ┌──────────┐
+│ Binance  │  ─────────────▶ │   Feed   │  ─────────────▶ │ trcache  │
+│  Server  │                 │ (parse)  │                 │  Engine  │
+└──────────┘                 └──────────┘                 └──────────┘
+     T0                           T1                           T2
+                └─────────────────┘         └─────────────────┘
+                 Network + Parsing            Engine Internal
+                    (T1 - T0)                    (T2 - T1)
+```
+
+| Stage | Description |
+|-------|-------------|
+| **Network + Parsing** | Exchange event timestamp to WebSocket receive + JSON parsing complete. |
+| **Engine Internal** | JSON parsing complete to candle update complete. |
+
+### Test Scenarios
+
+|  | Small-scale | Large-scale |
+|--|-------------|-------------|
+| Symbols | 2 (BTC, ETH) | 500 (Top USDT pairs) |
+| WebSocket Connections | 1 | 3 |
+| Feed Threads | 1 | 3 |
+| Duration | ~86 hours | ~72 hours |
+
+### Results
+
+#### Data Integrity
+
+| Test | Candles | Gaps | Tick Errors |
+|------|---------|------|-------------|
+| Small-scale (2 sym) | 2,434,253 | **0** | 0 |
+| Large-scale (500 sym) | TBD | TBD | TBD |
+
+#### Latency (Small-scale, 2 Symbols)
+
+| Stage | P50 | P99 | P99.9 | Max |
+|-------|-----|-----|-------|-----|
+| Network + Parsing | 8.7 ms | 158.2 ms | 159.9 ms | >1 s |
+| Engine Internal | 1.6 μs | 13.4 μs | 57.0 μs | 1.48 ms |
+| Auditor Detection | 0.8 μs | 4.5 μs | 57.6 μs | 6.08 ms |
+
+#### Latency (Large-scale, 500 Symbols)
+
+| Stage | P50 | P99 | P99.9 | Max |
+|-------|-----|-----|-------|-----|
+| Network + Parsing | TBD | TBD | TBD | TBD |
+| Engine Internal | TBD | TBD | TBD | TBD |
+| Auditor Detection | TBD | TBD | TBD | TBD |
+
+#### Engine Internal Latency Distribution
+
+![Engine Latency Comparison](validator/results/engine_latency_comparison.png)
+
+### Findings
+
+(Pending 500-symbol test completion)
+
+Raw histogram data available in `validator/results/`.
+
 ---
 
 ## Benchmark Stress Test
