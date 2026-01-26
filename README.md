@@ -116,15 +116,18 @@ Raw histogram data available in `validator/results/`.
 
 ## Benchmark Stress Test
 
-Measured under the following configuration:
-- CPU: Intel Core i5-13400F (16 cores)
-- RAM: 16GB DDR5 5600MHz
-- Symbols: 1,024
-- Distribution: Zipf (s=0.99)
-- Memory Limit: 5GB
-- Candle Types: 3-tick candle, 1-minute candle
+### Test Environment
 
-Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead. In production with network-based feeds, ingestion rate is constrained by network throughput.
+| Parameter | Value |
+|-----------|-------|
+| CPU | Intel Core i5-13400F (16 cores) |
+| RAM | 16GB DDR5 5600MHz |
+| Symbols | 1,024 |
+| Distribution | Zipf (s=0.99) |
+| Memory Limit | 5 GB |
+| Candle Types | 3-tick, 1-minute |
+
+Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead.
 
 ### Write Throughput (1 feed thread, 3 worker threads, no concurrent readers)
 
