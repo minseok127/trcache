@@ -41,6 +41,7 @@ Data integrity and processing latency measured using live exchange data.
 | Memory Limit | 2 GB |
 | Worker Threads | 3 |
 | Batch Size | 4,096 candles (2^12) |
+| Cached Batches | 1 (2^0) |
 | Candle Type | 5-tick |
 
 ### Latency Measurement
@@ -122,18 +123,26 @@ Raw histogram data available in `validator/results/`.
 |-----------|-------|
 | CPU | Intel Core i5-13400F (16 cores) |
 | RAM | 16GB DDR5 5600MHz |
-| Symbols | 1,024 |
-| Distribution | Zipf (s=0.99) |
 
 ### Engine Configuration
 
 | Parameter | Value |
 |-----------|-------|
 | Memory Limit | 5 GB |
-| Worker Threads | 3 or 6 |
 | Batch Size | 16,384 candles (2^14) |
 | Cached Batches | 1 (2^0) |
 | Candle Types | 3-tick, 1-minute |
+
+### Test Scenarios
+
+| Parameter | Value |
+|-----------|-------|
+| Symbols | 1,024 |
+| Distribution | Zipf (s=0.99) |
+| Worker Threads | 3 or 6 |
+| Feed Threads | 1, 2, or 3 |
+
+Zipf distribution simulates realistic market conditions where a small number of symbols receive disproportionately more trades. Higher s values increase this skew.
 
 Feed threads push trades via direct function calls at maximum rate, with no network I/O overhead.
 
