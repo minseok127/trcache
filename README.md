@@ -72,11 +72,16 @@ Exchange Server              Local Machine
 | Symbols | 2 (BTC, ETH) | 500 (Top USDT pairs) |
 | WebSocket Connections | 1 | 3 |
 | Feed Threads | 1 | 3 |
-| Duration | ~86 hours | ~72 hours |
+| Duration | ~86 hours | TBD |
 
 ### Results
 
 #### Data Integrity
+
+| Metric | Description |
+|--------|-------------|
+| Gaps | Missing sequence numbers in candle data. |
+| Tick Errors | Mismatch between expected and actual tick count per candle. |
 
 | Test | Candles | Gaps | Tick Errors |
 |------|---------|------|-------------|
@@ -89,7 +94,6 @@ Exchange Server              Local Machine
 |-------|-----|-----|-------|-----|
 | Network + Parsing | 8.7 ms | 158.2 ms | 159.9 ms | >1 s |
 | Engine Internal | 1.6 μs | 13.4 μs | 57.0 μs | 1.48 ms |
-| Auditor Detection | 0.8 μs | 4.5 μs | 57.6 μs | 6.08 ms |
 
 #### Latency (Large-scale, 500 Symbols)
 
@@ -97,7 +101,6 @@ Exchange Server              Local Machine
 |-------|-----|-----|-------|-----|
 | Network + Parsing | TBD | TBD | TBD | TBD |
 | Engine Internal | TBD | TBD | TBD | TBD |
-| Auditor Detection | TBD | TBD | TBD | TBD |
 
 #### Engine Internal Latency Distribution
 
