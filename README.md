@@ -81,7 +81,7 @@ Exchange Server              Local Machine
 
 | Metric | Description |
 |--------|-------------|
-| Gaps | Missing sequence numbers in candle data. |
+| Gaps | Missing trades between consecutive candles. |
 | Tick Errors | Mismatch between expected and actual tick count per candle. |
 
 | Test | Candles | Gaps | Tick Errors |
@@ -124,7 +124,7 @@ Feed threads push trades via direct function calls at maximum rate, with no netw
 | Parameter | Value |
 |-----------|-------|
 | CPU | Intel Core i5-13400F (16 cores) |
-| RAM | 16GB DDR5 5600MHz |
+| RAM | 16 GB DDR5 5600MHz |
 
 ### Engine Configuration
 
@@ -162,7 +162,7 @@ Zipf distribution simulates realistic market conditions where a small number of 
 
 ### Scalability
 
-All measurements use **1 concurrent reader thread** (same as Query Latency benchmarks) to isolate the impact of feed/worker scaling:
+All measurements use 1 concurrent reader thread.
 
 - **3 worker threads:**
 
