@@ -542,7 +542,7 @@ trcache_get_candles_by_symbol_id_and_offset(
 ```c
 trcache_get_candles_by_symbol_id_and_key(
     cache, aapl_id, candle_config_idx, &request,
-    1609459200000,  // key (timestamp or trade_id)
+    1609459200000,  // key (trcache_candle_base.key)
     10,             // count
     batch
 );
