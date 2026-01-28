@@ -73,7 +73,7 @@ Exchange Server              Local Machine
 | Symbols | 2 (BTC, ETH) | 500 (Top USDT pairs) |
 | WebSocket Connections | 1 | 3 |
 | Feed Threads | 1 | 3 |
-| Duration | ~86 hours | TBD |
+| Duration | ~86 hours | ~70 hours |
 
 ### Results
 
@@ -86,8 +86,8 @@ Exchange Server              Local Machine
 
 | Test | Candles | Gaps | Tick Errors |
 |------|---------|------|-------------|
-| Small-scale (2 sym) | 2,434,253 | **0** | 0 |
-| Large-scale (500 sym) | TBD | TBD | TBD |
+| Small-scale (2 sym) | 2,434,253 | 0 | 0 |
+| Large-scale (500 sym) | 32,935,900 | 0 | 0 |
 
 #### Latency (Small-scale, 2 Symbols)
 
@@ -100,16 +100,12 @@ Exchange Server              Local Machine
 
 | Stage | P50 | P99 | P99.9 | Max |
 |-------|-----|-----|-------|-----|
-| Network + Parsing | TBD | TBD | TBD | TBD |
-| Engine Internal | TBD | TBD | TBD | TBD |
+| Network + Parsing | 10.3 ms | 159.6 ms | 161.7 ms | 590.1 ms |
+| Engine Internal | 21.0 μs | 60.9 μs | 114.8 μs | 49.7 ms |
 
 #### Engine Internal Latency Distribution
 
 ![Engine Latency Comparison](validator/results/engine_latency_comparison.png)
-
-### Findings
-
-(Pending 500-symbol test completion)
 
 Raw histogram data available in `validator/results/`.
 
