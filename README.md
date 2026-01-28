@@ -548,7 +548,7 @@ trcache_get_candles_by_symbol_id_and_key(
 );
 ```
 
-**By Key Range** - Retrieve all candles within [start_key, end_key].
+**By Key Range** - Retrieve all candles within `[start_key, end_key]`.
 ```c
 // Count candles in range (to check capacity)
 int count = trcache_count_candles_by_symbol_id_and_key_range(
