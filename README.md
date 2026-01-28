@@ -518,9 +518,9 @@ trcache_field_request request = {
 ```c
 trcache_candle_batch *batch = trcache_batch_alloc_on_heap(
     cache,
-    0,          // candle_idx
-    100,        // capacity
-    &request    // NULL = all fields
+    candle_config_idx,  // index into candle_configs array
+    100,                // capacity
+    &request            // NULL = all fields
 );
 ```
 
@@ -528,21 +528,21 @@ trcache_candle_batch *batch = trcache_batch_alloc_on_heap(
 
 Three query methods are available:
 
-**By Offset** - Retrieve N candles from a position relative to the most recent candle.
+**By Offset** - Retrieve N candles from a position relative to the most recent candle. Returns candles from `[newest - offset - count + 1]` to `[newest - offset]`.
 ```c
 trcache_get_candles_by_symbol_id_and_offset(
-    cache, aapl_id, 0, &request,
+    cache, aapl_id, candle_config_idx, &request,
     0,      // offset (0 = most recent)
     10,     // count
     batch
 );
 ```
 
-**By Key** - Retrieve N candles starting from a specific key.
+**By Key** - Retrieve N candles ending at a specific key. Returns candles from `[key - count + 1]` to `[key]`.
 ```c
 trcache_get_candles_by_symbol_id_and_key(
-    cache, aapl_id, 0, &request,
-    1609459200000,  // start_key (timestamp or trade_id)
+    cache, aapl_id, candle_config_idx, &request,
+    1609459200000,  // key (timestamp or trade_id)
     10,             // count
     batch
 );
@@ -552,14 +552,14 @@ trcache_get_candles_by_symbol_id_and_key(
 ```c
 // Count candles in range (to check capacity)
 int count = trcache_count_candles_by_symbol_id_and_key_range(
-    cache, aapl_id, 0,
+    cache, aapl_id, candle_config_idx,
     1609459200000,  // start_key
     1609459260000   // end_key
 );
 
 // Retrieve candles
 trcache_get_candles_by_symbol_id_and_key_range(
-    cache, aapl_id, 0, &request,
+    cache, aapl_id, candle_config_idx, &request,
     1609459200000,  // start_key
     1609459260000,  // end_key
     batch
