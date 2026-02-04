@@ -183,7 +183,7 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	struct list_head *c = NULL, *n = NULL;
 	struct trcache *tc;
 	_Atomic(size_t) *free_list_mem_counter;
-	size_t chunk_size = sizeof(struct trade_data_chunk);
+	size_t chunk_size;
 	size_t total_freed = 0;
 
 	if (tls_data == NULL) {
@@ -193,6 +193,8 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	tc = tls_data->trcache_ptr;
 	free_list_mem_counter =
 		&tc->mem_acc.feed_thread_free_list_mem[tls_data->thread_id].value;
+	chunk_size = align_up(sizeof(struct trade_data_chunk) +
+		tc->trade_data_size * NUM_TRADE_CHUNK_CAP, CACHE_LINE_SIZE);
 
 	if (tls_data->local_symbol_id_map != NULL) {
 		ht_destroy(tls_data->local_symbol_id_map);
