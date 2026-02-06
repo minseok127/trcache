@@ -329,7 +329,7 @@ static void* reader_thread_main(void *arg)
 				offset, query_size, batch);
 			clock_gettime(CLOCK_MONOTONIC, &end_ts);
 
-			if (ret == 0) {
+			if (ret == 0 && batch->num_candles == query_size) {
 				uint64_t latency_ns
 					= (end_ts.tv_sec - start_ts.tv_sec) * 1000000000ULL +
 						(end_ts.tv_nsec - start_ts.tv_nsec);
