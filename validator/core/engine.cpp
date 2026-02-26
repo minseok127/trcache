@@ -240,7 +240,8 @@ bool update_time_fixed(trcache_candle_base* c, void* data)
 
 /*
  * Function Pointer Arrays
- * These lookup tables map a runtime slot index to the compiled template instance.
+ * These lookup tables map a runtime slot index to the compiled
+ * template instance.
  */
 typedef void (*init_func_t)(trcache_candle_base*, void *);
 typedef bool (*update_func_t)(trcache_candle_base*, void *);
@@ -315,14 +316,14 @@ struct trcache* engine_init(const struct validator_config& config)
 
 		/*
 		 * Initialize trcache_candle_config using aggregate init.
-		 * This is required because update_ops and flush_ops are const.
+		 * This is required because update_ops and batch_flush_ops are const.
 		 */
 		trcache_candle_config c_conf = {
 			sizeof(val_candle),        /* user_candle_size */
 			val_candle_fields,         /* field_definitions */
 			num_val_candle_fields,     /* num_fields */
 			u_ops,                     /* update_ops */
-			f_ops                      /* flush_ops */
+			f_ops                      /* batch_flush_ops */
 		};
 
 		tr_configs.push_back(c_conf);

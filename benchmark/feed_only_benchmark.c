@@ -116,7 +116,8 @@ static uint64_t get_total_feed_count(void);
  * @param start_rank    The global rank of the first symbol in this partition.
  * @param num_symbols   Number of symbols in this partition.
  * @param s             Zipf exponent 's'.
- * @param cdf_array     Output array (size num_symbols) to store the relative CDF.
+ * @param cdf_array     Output array (size num_symbols) to store the
+ *                      relative CDF.
  */
 static void init_partition_zipf_generator(int start_rank, int num_symbols,
 	double s, double *cdf_array)
@@ -539,8 +540,8 @@ static int initialize_trcache(void)
 		[0] = { .init = candle_init_tick, .update = candle_update_tick_3 },
 		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
-	/* flush_ops all-NULL: candle batch flushing disabled in benchmark */
-	const struct trcache_batch_flush_ops g_flush_ops = {};
+	/* batch_flush_ops all-NULL: candle batch flushing disabled in benchmark */
+	const struct trcache_batch_flush_ops g_batch_flush_ops = {};
 
 	/* Define NUM_FIELDS here for clarity */
 	const int num_fields = sizeof(g_candle_fields)
@@ -554,14 +555,14 @@ static int initialize_trcache(void)
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[0],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		},
 		{ /* [1] - 1 Minute */
 			.user_candle_size = candle_size,
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[1],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		}
 	};
 

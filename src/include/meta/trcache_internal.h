@@ -47,8 +47,8 @@ struct trcache_tls_data {
  * @num_workers:             Number of worker threads.
  * @batch_candle_count:      Number of candles per column batch.
  * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
- * @flush_threshold:         How many candle batches to buffer before flush.
- * @flush_threshold_pow2:    Equal to log2(@flush_threshold_batches).
+ * @batch_flush_threshold:      How many candle batches to buffer before flush.
+ * @batch_flush_threshold_pow2: Equal to log2(@batch_flush_threshold_batches).
  * @worker_state_arr:        Per-worker state array of length @num_workers.
  * @admin_thread:            Handle for admin thread.
  * @worker_threads:          Array of handles for worker threads.
@@ -104,8 +104,8 @@ struct trcache {
 	int num_workers;
 	int batch_candle_count;
 	int batch_candle_count_pow2;
-	int flush_threshold;
-	int flush_threshold_pow2;
+	int batch_flush_threshold;
+	int batch_flush_threshold_pow2;
 	struct worker_state *worker_state_arr;
 	pthread_t admin_thread;
 	pthread_t *worker_threads;

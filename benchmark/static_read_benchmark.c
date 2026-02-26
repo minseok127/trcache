@@ -107,7 +107,8 @@ struct symbol_keys {
 static struct trcache *g_cache = NULL;
 static struct benchmark_config g_config;
 static int g_symbol_ids[NUM_SYMBOLS];
-static struct symbol_keys g_symbol_keys[NUM_SYMBOLS]; /* Track valid keys per symbol */
+/* Track valid keys per symbol */
+static struct symbol_keys g_symbol_keys[NUM_SYMBOLS];
 static _Atomic(bool) g_readers_start = false;
 static _Atomic(bool) g_readers_stop = false;
 static _Atomic(int) g_readers_ready = 0;
@@ -535,7 +536,8 @@ static void print_usage(const char *prog_name)
 		"  -o, --output-csv <path>    Path to output CSV file\n"
 		"\n"
 		"Optional Options:\n"
-		"  -k, --key-based            Use key-based sequential access pattern (default: offset)\n"
+		"  -k, --key-based            Use key-based sequential access"
+		" pattern (default: offset)\n"
 		"  -h, --help                 Print this help message\n",
 		prog_name);
 }
@@ -563,7 +565,7 @@ static int parse_arguments(int argc, char **argv)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "r:w:o:k:h", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "r:w:o:kh", long_options, NULL)) != -1) {
 		switch (c) {
 			case 'r': g_config.num_reader_threads = atoi(optarg); break;
 			case 'w': g_config.num_worker_threads = atoi(optarg); break;
@@ -591,8 +593,8 @@ static int initialize_trcache(void)
 		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
 
-	/* flush_ops all-NULL: candle batch flushing disabled in benchmark */
-	const struct trcache_batch_flush_ops g_flush_ops = {};
+	/* batch_flush_ops all-NULL: candle batch flushing disabled in benchmark */
+	const struct trcache_batch_flush_ops g_batch_flush_ops = {};
 
 	const int num_fields = sizeof(g_candle_fields) /
 		sizeof(struct trcache_field_def);
@@ -604,14 +606,14 @@ static int initialize_trcache(void)
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[0],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		},
 		{
 			.user_candle_size = candle_size,
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[1],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		}
 	};
 

@@ -620,8 +620,8 @@ static int initialize_trcache(void)
 		[0] = { .init = candle_init_tick, .update = candle_update_tick_3 },
 		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
-	/* flush_ops all-NULL: candle batch flushing disabled in benchmark */
-	const struct trcache_batch_flush_ops g_flush_ops = {};
+	/* batch_flush_ops all-NULL: candle batch flushing disabled in benchmark */
+	const struct trcache_batch_flush_ops g_batch_flush_ops = {};
 	const int num_fields = sizeof(g_candle_fields) /
 		sizeof(struct trcache_field_def);
 	const size_t candle_size = sizeof(struct my_candle);
@@ -632,14 +632,14 @@ static int initialize_trcache(void)
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[0],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		},
 		{
 			.user_candle_size = candle_size,
 			.field_definitions = g_candle_fields,
 			.num_fields = num_fields,
 			.update_ops = g_update_ops[1],
-			.flush_ops = g_flush_ops,
+			.batch_flush_ops = g_batch_flush_ops,
 		}
 	};
 
@@ -708,7 +708,8 @@ static int parse_arguments(int argc, char **argv)
 	};
 
 	int c;
-	while ((c = getopt_long(argc, argv, "f:w:o:s:d:h", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "f:w:o:s:d:h",
+			        long_options, NULL)) != -1) {
 		switch (c) {
 			case 'f': g_config.num_feed_threads = atoi(optarg); break;
 			case 'w': g_config.num_worker_threads = atoi(optarg); break;

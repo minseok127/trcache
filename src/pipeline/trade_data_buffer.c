@@ -518,7 +518,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
  *
  * @return  1 if the chunk transitioned to DONE, 0 if still in progress.
  */
-static int flush_complete_chunk(struct trade_data_buffer *buf,
+static int trade_flush_drive_chunk(struct trade_data_buffer *buf,
 	struct trade_data_chunk *chunk,
 	const struct trcache_trade_flush_ops *ops)
 {
@@ -555,7 +555,7 @@ static int flush_complete_chunk(struct trade_data_buffer *buf,
  * @brief   Flush full trade chunks using the provided flush callbacks.
  *
  * Iterates all chunks ahead of the current tail. For each chunk in the
- * NEEDED or IN_FLIGHT state, drives the flush via flush_complete_chunk().
+ * NEEDED or IN_FLIGHT state, drives the flush via trade_flush_drive_chunk().
  * The active tail chunk is never touched here; use
  * trade_data_buffer_finalize() to flush it during shutdown.
  *
@@ -587,11 +587,17 @@ int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
 			break;
 		}
 
+		/*
+		 * Skip DONE chunks explicitly: unlike batch flush, where the
+		 * atomsnap head advances past DONE chunks before the next call,
+		 * DONE trade chunks remain in the list until reaped. The state
+		 * check here prevents calling trade_flush_drive_chunk() on them.
+		 */
 		int state = atomic_load_explicit(&chunk->flush_state,
 			memory_order_acquire);
 		if (state == TRADE_CHUNK_FLUSH_NEEDED ||
 				state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
-			completed += flush_complete_chunk(buf, chunk, ops);
+			completed += trade_flush_drive_chunk(buf, chunk, ops);
 		}
 	}
 
@@ -629,14 +635,13 @@ void trade_data_buffer_finalize(struct trade_data_buffer *buf,
 	/*
 	 * If the tail contains data that has not yet been marked for flush,
 	 * mark it now. write_idx is intentionally NOT overridden so that
-	 * flush_complete_chunk() passes the real trade count to the callback.
+	 * trade_flush_drive_chunk() passes the real trade count to the callback.
 	 * The producer has already stopped (destroy path), so write_idx is
 	 * stable and this write is race-free.
 	 */
 	if (write_idx > 0 &&
-			atomic_load_explicit(&tail->flush_state,
-				memory_order_acquire)
-			== TRADE_CHUNK_FLUSH_NOT_READY) {
+			atomic_load_explicit(&tail->flush_state, memory_order_acquire)
+				== TRADE_CHUNK_FLUSH_NOT_READY) {
 		atomic_store_explicit(&tail->flush_state,
 			TRADE_CHUNK_FLUSH_NEEDED, memory_order_release);
 		atomic_fetch_add_explicit(&buf->num_full_unflushed_chunks,
@@ -659,7 +664,7 @@ void trade_data_buffer_finalize(struct trade_data_buffer *buf,
 			memory_order_acquire);
 		if (tail_state == TRADE_CHUNK_FLUSH_NEEDED ||
 				tail_state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
-			flush_complete_chunk(buf, tail, ops);
+			trade_flush_drive_chunk(buf, tail, ops);
 		}
 	}
 }

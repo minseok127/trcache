@@ -234,7 +234,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	chunk->mutable_row_idx = -1;
 	chunk->converting_page_idx = 0;
 	chunk->converting_row_idx = 0;
-	chunk->is_flushed = 0;
+	chunk->flush_state = BATCH_FLUSH_NEEDED;
 	chunk->seq_first = UINT64_MAX;
 
 	atomic_store(&chunk->num_completed, 0);
@@ -465,67 +465,6 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	/* chunk->num_converted = chunk->num_completed */
 	atomic_store_explicit(&chunk->num_converted, end_idx,
 		memory_order_release);
-}
-
-/**
- * @brief   Initiate a flush for a single fully-converted candle chunk.
- *
- * Calls flush_ops->flush() and returns 0. The caller must subsequently
- * poll candle_chunk_flush_poll() until it returns 1. If flush_ops->flush
- * is NULL (no backend configured), the chunk is marked done immediately
- * and 1 is returned; no poll is needed.
- *
- * @param   chunk:     Pointer to the target candle_chunk.
- * @param   flush_ops: User-defined batch flush operation callbacks.
- *
- * @return  1  no flush backend configured; chunk marked done immediately.
- *          0  flush initiated; poll with candle_chunk_flush_poll().
- */
-int candle_chunk_flush(struct candle_chunk *chunk,
-	const struct trcache_batch_flush_ops* flush_ops)
-{
-	struct trcache *trc = chunk->trc;
-
-	/* Flush operation is not defined, do nothing */
-	if (flush_ops->flush == NULL) {
-		chunk->is_flushed = 1;
-		return 1;
-	}
-	
-	flush_ops->flush(trc, chunk->column_batch, flush_ops->ctx);
-	chunk->is_flushed = 0;
-	return 0;
-}
-
-/**
- * @brief   Poll a candle chunk for flush completion.
- *
- * Queries flush_ops->is_done(). When it returns true, the chunk is marked
- * flushed and this function returns 1. If the chunk was already marked
- * flushed by a previous call, returns 0 (not counted again).
- *
- * @param   chunk:     Pointer to the target candle_chunk.
- * @param   flush_ops: User-defined batch flush operation callbacks.
- *
- * @return  1  flush completed in this call.
- *          0  flush not yet complete, or already completed in a prior call.
- */
-int candle_chunk_flush_poll(struct candle_chunk *chunk,
-	const struct trcache_batch_flush_ops* flush_ops)
-{
-	struct trcache *trc = chunk->trc;
-
-	/* Already completed in a previous poll call; not counted again. */
-	if (chunk->is_flushed) {
-		return 0;
-	}
-
-	if (!flush_ops->is_done(trc, chunk->column_batch, flush_ops->ctx)) {
-		return 0;
-	}
-
-	chunk->is_flushed = 1;
-	return 1;
 }
 
 /**

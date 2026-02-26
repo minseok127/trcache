@@ -34,7 +34,8 @@
 
 struct trade_flush_ctx {
 	int               *fds;           /* fds[symbol_id], -1 = not yet opened */
-	size_t            *write_offsets; /* write_offsets[symbol_id], next write position */
+	/* write_offsets[symbol_id], next write position */
+	size_t            *write_offsets;
 	int                max_symbols;
 	size_t             trade_data_size;
 	/* PATH_MAX/2 leaves room for "/<symbol>" in the per-file path buffer. */

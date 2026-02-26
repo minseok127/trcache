@@ -32,7 +32,7 @@
 struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 {
 	struct symbol_table *table = calloc(1, sizeof(struct symbol_table));
-	size_t num_tasks, in_mem_size, flush_size;
+	size_t num_tasks, in_mem_size, batch_flush_size;
 
 	if (table == NULL) {
 		errmsg(stderr, "#symbol_table allocation failed\n");
@@ -74,7 +74,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	 */
 	num_tasks = (size_t)num_candle_configs * (size_t)max_capacity;
 	in_mem_size = num_tasks * sizeof(struct in_memory_owner);
-	flush_size = num_tasks * sizeof(_Atomic(int));
+	batch_flush_size = num_tasks * sizeof(_Atomic(int));
 
 	table->in_memory_ownership_flags = aligned_alloc(
 		CACHE_LINE_SIZE, ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));
@@ -89,10 +89,10 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	/* Initialize all flags to -1 (free) */
 	memset(table->in_memory_ownership_flags, -1, in_mem_size);
 
-	table->flush_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE, ALIGN_UP(flush_size, CACHE_LINE_SIZE));
-	if (table->flush_ownership_flags == NULL) {
-		errmsg(stderr, "flush_ownership_flags allocation failed\n");
+	table->batch_flush_ownership_flags = aligned_alloc(
+		CACHE_LINE_SIZE, ALIGN_UP(batch_flush_size, CACHE_LINE_SIZE));
+	if (table->batch_flush_ownership_flags == NULL) {
+		errmsg(stderr, "batch_flush_ownership_flags allocation failed\n");
 		free(table->in_memory_ownership_flags);
 		free(table->symbol_entries);
 		ht_destroy(table->symbol_id_map);
@@ -101,11 +101,11 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		return NULL;
 	}
 	/* Initialize all flags to -1 (free) */
-	memset(table->flush_ownership_flags, -1, flush_size);
+	memset(table->batch_flush_ownership_flags, -1, batch_flush_size);
 
 	/*
 	 * Allocate per-symbol ownership flags for raw trade chunk flush.
-	 * Unlike flush_ownership_flags, this array is indexed by sym_idx
+	 * Unlike batch_flush_ownership_flags, this array is indexed by sym_idx
 	 * only and is independent of candle type.
 	 */
 	size_t trade_flush_size = (size_t)max_capacity * sizeof(_Atomic(int));
@@ -116,7 +116,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	if (table->trade_flush_ownership_flags == NULL) {
 		errmsg(stderr,
 			"trade_flush_ownership_flags allocation failed\n");
-		free(table->flush_ownership_flags);
+		free(table->batch_flush_ownership_flags);
 		free(table->in_memory_ownership_flags);
 		free(table->symbol_entries);
 		ht_destroy(table->symbol_id_map);
@@ -165,7 +165,7 @@ void symbol_table_destroy(struct symbol_table *table)
 	}
 
 	free(table->in_memory_ownership_flags);
-	free(table->flush_ownership_flags);
+	free(table->batch_flush_ownership_flags);
 	free(table->trade_flush_ownership_flags);
 
 	free(table->symbol_entries);
@@ -294,7 +294,8 @@ static int init_symbol_entry(struct trcache *tc,
  *
  * @return  Assigned symbol ID >=0, or -1 on error.
  *
- * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
+ * @thread-safety Safe for concurrent callers; registration path is
+ *               mutex-protected.
  */
 int symbol_table_register(struct trcache *tc, struct symbol_table *table,
 	const char *symbol_str)

@@ -25,6 +25,19 @@
 #endif
 
 /*
+ * candle_flush_state - State of a chunk's batch flush operation.
+ *
+ * BATCH_FLUSH_NEEDED:    Initial state; flush() has not been called yet.
+ * BATCH_FLUSH_IN_FLIGHT: flush() was called; polling is_done() for result.
+ * BATCH_FLUSH_DONE:      Flush completed; chunk data has been persisted.
+ */
+enum candle_flush_state {
+	BATCH_FLUSH_NEEDED = 0,
+	BATCH_FLUSH_IN_FLIGHT,
+	BATCH_FLUSH_DONE,
+};
+
+/*
  * candle_row_page - Array of row-oriented candles.
  *
  * @pool: Pointer to the scq pool this page belongs to, for recycling.
@@ -45,7 +58,7 @@ struct candle_row_page {
  * @num_converted:        Number of records (candles) converted to column batch.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
- * @is_flushed:           Flag to indicate flush state (0=pending, 1=done).
+ * @flush_state:    Batch flush progress (NEEDED/IN_FLIGHT/DONE).
  * @next:                 Linked list pointer to the next chunk.
  * @prev:                 Linked list pointer to the previous chunk.
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
@@ -99,7 +112,7 @@ struct candle_chunk {
 	 * Written once by the Flush worker.
 	 */
 	____cacheline_aligned
-	_Atomic(int) is_flushed;
+	enum candle_flush_state flush_state;
 
 	/*
 	 * Group 4: Pointers and Read-mostly / Cold data.
@@ -300,39 +313,6 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
  */
 void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx);
-
-/**
- * @brief   Initiate a flush for a single fully-converted candle chunk.
- *
- * Calls flush_ops->flush() and returns 0. The caller must subsequently
- * poll candle_chunk_flush_poll() until it returns 1. If flush_ops->flush
- * is NULL (no backend configured), the chunk is marked done immediately
- * and 1 is returned; no poll is needed.
- *
- * @param   chunk:     Pointer to the target candle_chunk.
- * @param   flush_ops: User-defined batch flush operation callbacks.
- *
- * @return  1  no flush backend configured; chunk marked done immediately.
- *          0  flush initiated; poll with candle_chunk_flush_poll().
- */
-int candle_chunk_flush(struct candle_chunk *chunk,
-	const struct trcache_batch_flush_ops* flush_ops);
-
-/**
- * @brief   Poll a candle chunk for flush completion.
- *
- * Queries flush_ops->is_done(). When it returns true, the chunk is marked
- * flushed and this function returns 1. If the chunk was already marked
- * flushed by a previous call, returns 0 (not counted again).
- *
- * @param   chunk:     Pointer to the target candle_chunk.
- * @param   flush_ops: User-defined batch flush operation callbacks.
- *
- * @return  1  flush completed in this call.
- *          0  flush not yet complete, or already completed in a prior call.
- */
-int candle_chunk_flush_poll(struct candle_chunk *chunk,
-	const struct trcache_batch_flush_ops* flush_ops);
 
 /**
  * @brief   Copy a single mutable candle from a row page into a SoA batch.

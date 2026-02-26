@@ -318,6 +318,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		errmsg(stderr, "num_worker_threads is less than 2\n");
 		free(tc);
 		return NULL;
+	} else if (ctx->trade_data_size == 0) {
+		errmsg(stderr, "trade_data_size must be greater than 0\n");
+		free(tc);
+		return NULL;
 	}
 
 	/*
@@ -406,8 +410,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->num_workers = ctx->num_worker_threads;
 	tc->batch_candle_count_pow2 = ctx->batch_candle_count_pow2;
 	tc->batch_candle_count = (1 << ctx->batch_candle_count_pow2);
-	tc->flush_threshold_pow2 = ctx->cached_batch_count_pow2;
-	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
+	tc->batch_flush_threshold_pow2 = ctx->cached_batch_count_pow2;
+	tc->batch_flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->max_symbols = ctx->max_symbols;
 	tc->trade_data_size = ctx->trade_data_size;
 	tc->trade_flush_ops = ctx->trade_flush_ops;
@@ -420,12 +424,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	 * never yields zero.
 	 * trade_data_buf_size is rounded up to the data-buffer alignment so
 	 * that aligned_alloc(TRADE_DATA_BUF_ALIGN, ...) is always valid.
-	 *
-	 * Skip the block entirely when trade_data_size is zero (trade data
-	 * feature disabled); trades_per_chunk and trade_data_buf_size stay
-	 * at zero, keeping the division well-defined.
 	 */
-	if (tc->trade_data_size > 0) {
+	{
 		size_t io_block = (ctx->trade_io_block_size > 0) ?
 			ctx->trade_io_block_size : 65536;
 		tc->trades_per_chunk =
@@ -1247,8 +1247,8 @@ int trcache_get_candles_by_symbol_str_and_key_range(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_get_candles_by_symbol_id_and_key_range(tc, symbol_id, candle_idx,
-		request, start_key, end_key, dst);
+	return trcache_get_candles_by_symbol_id_and_key_range(
+		tc, symbol_id, candle_idx, request, start_key, end_key, dst);
 }
 
 /**
@@ -1311,6 +1311,6 @@ int trcache_count_candles_by_symbol_str_and_key_range(struct trcache *tc,
 		return -1;
 	}
 
-	return trcache_count_candles_by_symbol_id_and_key_range(tc, symbol_id, candle_idx,
-		start_key, end_key);
+	return trcache_count_candles_by_symbol_id_and_key_range(
+		tc, symbol_id, candle_idx, start_key, end_key);
 }

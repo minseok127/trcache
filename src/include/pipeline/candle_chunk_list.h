@@ -64,7 +64,7 @@ struct candle_chunk_list_init_ctx {
  * @last_seq_converted:      Highest seqnum already converted to COLUMN batch.
  * @ema_cycles_per_convert:  EMA cycles per single CONVERT item.
  * @head_gate:               Gate managing head versions.
- * @ema_cycles_per_flush:    EMA cycles per single FLUSH item.
+ * @ema_cycles_per_batch_flush:    EMA cycles per single BATCH FLUSH item.
  * @unflushed_batch_count:   Number of batches not yet flushed.
  * @config:                  Pointer to the configuration for this candle type.
  * @trc:                     #trcache back-pointer.
@@ -100,7 +100,7 @@ struct candle_chunk_list {
 	 */
 	____cacheline_aligned
 	struct atomsnap_gate *head_gate;
-	_Atomic(uint64_t) ema_cycles_per_flush;
+	_Atomic(uint64_t) ema_cycles_per_batch_flush;
 
 	/*
 	 * Group 3: Shared counter (True Sharing).
@@ -194,7 +194,7 @@ void candle_chunk_list_finalize(struct candle_chunk_list *list);
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-int candle_chunk_list_flush(struct candle_chunk_list *list);
+int candle_chunk_list_batch_flush(struct candle_chunk_list *list);
 
 /**
  * @brief   Copy @count candles ending at @seq_end.
@@ -249,7 +249,8 @@ int candle_chunk_list_copy_by_key_range(struct candle_chunk_list *list,
 	const struct trcache_field_request *request);
 
 /**
- * @brief   Count the number of candles within the key range [start_key, end_key].
+ * @brief   Count the number of candles within the key range
+ *          [start_key, end_key].
  *
  * @param   list:        Pointer to the candle chunk list.
  * @param   start_key:   Key of the first candle (inclusive).

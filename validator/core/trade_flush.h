@@ -33,7 +33,8 @@ struct trade_flush_ctx *trade_flush_ctx_create(int max_symbols,
 	size_t trade_data_size, const char *output_dir);
 
 /*
- * trade_flush_ctx_destroy - Close all open file descriptors and free the context.
+ * trade_flush_ctx_destroy - Close all open file descriptors and free
+ * the context.
  */
 void trade_flush_ctx_destroy(struct trade_flush_ctx *ctx);
 

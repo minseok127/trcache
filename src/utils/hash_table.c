@@ -2,8 +2,9 @@
  * @file utils/htab.c
  * @brief Generic hash table implementation with customizable callbacks.
  *
- * Provides functions to create, destroy, insert, lookup, and remove key–value pairs.
- * User supplies hash, compare, duplicate, and free callbacks to control key behavior.
+ * Provides functions to create, destroy, insert, lookup, and remove
+ * key–value pairs. User supplies hash, compare, duplicate, and free
+ * callbacks to control key behavior.
  * Automatically resizes when load factor exceeds threshold.
  * Not thread-safe: callers must synchronize externally for concurrent access.
  */

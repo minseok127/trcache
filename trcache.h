@@ -241,14 +241,14 @@ typedef struct trcache_field_def {
  * @field_definitions:  An array describing each field in the custom candle.
  * @num_fields:         The number of entries in the field_definitions array.
  * @update_ops:         Callbacks for initializing and updating a candle.
- * @flush_ops:          Callbacks for flushing a completed candle batch.
+ * @batch_flush_ops:    Callbacks for flushing a completed candle batch.
  */
 typedef struct trcache_candle_config {
 	size_t user_candle_size;
 	const struct trcache_field_def *field_definitions;
 	int num_fields;
 	const struct trcache_candle_update_ops update_ops;
-	const struct trcache_batch_flush_ops flush_ops;
+	const struct trcache_batch_flush_ops batch_flush_ops;
 } trcache_candle_config;
 
 /*

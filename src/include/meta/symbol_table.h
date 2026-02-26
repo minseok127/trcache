@@ -50,7 +50,7 @@ struct in_memory_owner {
  * @capacity:                     Allocated array capacity.
  * @in_memory_ownership_flags:    Array of ownership flags for Apply/Convert.
  *                                Indexed by (type_idx * capacity + sym_idx).
- * @flush_ownership_flags:        Array of ownership flags for candle batch
+ * @batch_flush_ownership_flags:  Array of ownership flags for candle batch
  *                                Flush. Indexed by
  *                                (type_idx * capacity + sym_idx).
  * @trade_flush_ownership_flags:  Array of ownership flags for raw trade chunk
@@ -67,7 +67,7 @@ struct symbol_table {
 	_Atomic(int) num_symbols;
 	int capacity;
 	struct in_memory_owner *in_memory_ownership_flags;
-	_Atomic(int) *flush_ownership_flags;
+	_Atomic(int) *batch_flush_ownership_flags;
 	_Atomic(int) *trade_flush_ownership_flags;
 };
 
@@ -127,7 +127,8 @@ int symbol_table_lookup_symbol_id(
  *
  * @return  Assigned symbol ID >=0, or -1 on error.
  *
- * @thread-safety Safe for concurrent callers; registration path is mutex-protected.
+ * @thread-safety Safe for concurrent callers; registration path is
+ *               mutex-protected.
  */
 int symbol_table_register(struct trcache *tc, struct symbol_table *table,
 	const char *symbol_str);

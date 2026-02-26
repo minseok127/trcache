@@ -370,9 +370,11 @@ The routing of `trade_data` to either the `update` or `init` callback is determi
 
 ### Step 4: Configure Candle Batch Flush (Optional)
 
-When a column batch is complete, trcache calls the user-provided `flush` callback
-then polls `is_done` until the write finishes. Set `flush_ops = {}` (all NULL) to
-skip persistence; candle data remains queryable in memory.
+When a column batch is complete, trcache calls `flush()` once to submit the write,
+then calls `is_done()` immediately after. If `is_done()` returns false, the worker
+moves on to other work and calls `is_done()` again on the next pass — it does not
+block or retry in place. Set `flush_ops = {}` (all NULL) to skip persistence;
+candle data remains queryable in memory.
 
 #### Synchronous example
 ```c
@@ -395,18 +397,35 @@ trcache_batch_flush_ops flush_ops = {
 
 #### Asynchronous example
 
-Submit I/O in `flush` and track state through `ctx`. Poll completion in `is_done`.
+`batch` is a unique pointer per in-flight batch; use it as the map key.
+Submit I/O in `flush` and poll completion and clean up in `is_done`.
 
-```c
+```cpp
+struct MyHandle { bool done; };
+
+struct MyAsyncCtx {
+    std::unordered_map<trcache_candle_batch *, MyHandle *> handle_map;
+    /* ... async I/O backend state (fd, ring, etc.) ... */
+};
+
 void my_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
     MyAsyncCtx *c = (MyAsyncCtx *)ctx;
-    // Submit async I/O; record in-flight state via c
+    MyHandle *h = new MyHandle{false};
+    c->handle_map[batch] = h;
+    /* submit async write; completion sets h->done = true */
+    my_submit_write(c, batch->key_array,
+                    batch->num_candles * sizeof(uint64_t), h);
 }
 
 bool my_is_done(trcache *cache, trcache_candle_batch *batch, void *ctx) {
     MyAsyncCtx *c = (MyAsyncCtx *)ctx;
-    // Poll completion; return true when write finished and state cleaned up
-    return c->done;
+    my_drain_completions(c);   /* process events → sets h->done */
+    MyHandle *h = c->handle_map[batch];
+    if (!h->done)
+        return false;
+    c->handle_map.erase(batch);
+    delete h;
+    return true;
 }
 ```
 
@@ -416,15 +435,59 @@ Raw trade records fed via `trcache_feed_trade_data` are collected into fixed-siz
 chunks per symbol and can be persisted independently of candle batch flush.
 This allows the raw feed to be replayed or audited.
 
+`flush()` is called once per chunk when it is full. `is_done()` is called
+immediately after and on each subsequent worker pass until it returns true — the
+worker does not block in place. The `data` pointer passed to `is_done()` is the
+same pointer passed to `flush()`, and is unique per in-flight chunk; use it as
+the map key for async tracking. At shutdown, any partial (not-yet-full) tail
+chunk is also flushed automatically.
+
+#### Synchronous example
+
 ```c
 void trade_flush(trcache *cache, int symbol_id,
                  const void *data, int num_trades, void *ctx) {
-    // data: contiguous array of num_trades records, each trade_data_size bytes
-    // Use trcache_lookup_symbol_str(cache, symbol_id) to get the symbol name
+    MyCtx *c = (MyCtx *)ctx;
+    size_t size = (size_t)num_trades * trade_data_size;
+    pwrite(c->fds[symbol_id], data, size, c->offsets[symbol_id]);
+    c->offsets[symbol_id] += size;
 }
 
 bool trade_is_done(trcache *cache, const void *data, void *ctx) {
-    return true;  // true when the write is complete (sync: always true)
+    return true;  /* pwrite completed synchronously */
+}
+```
+
+#### Asynchronous example
+
+`data` is a unique pointer per in-flight chunk; use it as the map key.
+
+```cpp
+struct MyHandle { bool done; };
+
+struct MyAsyncCtx {
+    std::unordered_map<const void *, MyHandle *> handle_map;
+    /* ... async I/O backend state (fds, ring, offsets, etc.) ... */
+};
+
+void trade_flush(trcache *cache, int symbol_id,
+                 const void *data, int num_trades, void *ctx) {
+    MyAsyncCtx *c = (MyAsyncCtx *)ctx;
+    MyHandle *h = new MyHandle{false};
+    c->handle_map[data] = h;
+    /* submit async write; completion sets h->done = true */
+    my_submit_write(c, symbol_id, data, num_trades, h);
+}
+
+bool trade_is_done(trcache *cache, const void *data, void *ctx) {
+    MyAsyncCtx *c = (MyAsyncCtx *)ctx;
+    my_drain_completions(c);   /* process events → sets h->done */
+    MyHandle *h = c->handle_map[data];
+    if (!h->done)
+        return false;
+    c->handle_map.erase(data);
+    delete h;
+    return true;
 }
 ```
 

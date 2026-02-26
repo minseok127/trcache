@@ -21,6 +21,43 @@
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
 /**
+ * @brief   Drive a candle chunk's batch flush forward.
+ *
+ * Implements the NEEDED → IN_FLIGHT → DONE state machine in one call:
+ *   NEEDED:    calls ops->flush(); transitions to IN_FLIGHT (or directly to
+ *              DONE when no backend is configured).
+ *   IN_FLIGHT: calls ops->is_done(); transitions to DONE on completion.
+ *
+ * Must only be called for chunks in NEEDED or IN_FLIGHT state. No DONE
+ * guard is needed here because the atomsnap head version advances past DONE
+ * chunks before the next call, so the iteration always starts at the first
+ * non-DONE chunk.
+ *
+ * @return  1  chunk transitioned to DONE in this call.
+ *          0  chunk is still IN_FLIGHT; call again next cycle.
+ */
+static int batch_flush_drive_chunk(struct candle_chunk *chunk,
+	const struct trcache_batch_flush_ops *ops)
+{
+	if (chunk->flush_state == BATCH_FLUSH_NEEDED) {
+		if (ops->flush == NULL) {
+			chunk->flush_state = BATCH_FLUSH_DONE;
+			return 1;
+		}
+		ops->flush(chunk->trc, chunk->column_batch, ops->ctx);
+		chunk->flush_state = BATCH_FLUSH_IN_FLIGHT;
+	}
+
+	/* IN_FLIGHT: poll for completion */
+	if (!ops->is_done(chunk->trc, chunk->column_batch, ops->ctx)) {
+		return 0;
+	}
+
+	chunk->flush_state = BATCH_FLUSH_DONE;
+	return 1;
+}
+
+/**
  * @brief   Allocate an candle chunk list's head version object.
  *
  * @param   chunk_list: #candle_chunk_list pointer.
@@ -212,7 +249,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 	list->row_page_pool = list->trc->row_page_pools[ctx->candle_idx];
 
 	list->chunk_index = candle_chunk_index_create(list->trc,
-		list->trc->flush_threshold_pow2, list->trc->batch_candle_count_pow2);
+		list->trc->batch_flush_threshold_pow2, list->trc->batch_candle_count_pow2);
 	if (list->chunk_index == NULL) {
 		errmsg(stderr, "Failure on candle_chunk_index_create()\n");
 		free(list);
@@ -282,11 +319,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
 	 */
 	chunk = head_version->head_node;
 	do {
-		if (candle_chunk_flush(chunk, &chunk_list->config->flush_ops) == 0) {
-			while (candle_chunk_flush_poll(chunk,
-					&chunk_list->config->flush_ops) != 1) {
-				/* polling */ ;
-			}
+		while (batch_flush_drive_chunk(
+			    chunk, &chunk_list->config->batch_flush_ops) != 1) {
+			/* polling */
 		}
 		chunk = chunk->next;
 	} while (chunk != NULL);
@@ -588,7 +623,7 @@ int candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		&list->mutable_seq, memory_order_acquire);
 	uint64_t last_seq_converted = atomic_load_explicit(
 		&list->last_seq_converted, memory_order_acquire);
-	int num_completed, num_converted, start_idx, end_idx, num_flush_batch = 0;
+	int num_completed, num_converted, start_idx, end_idx, num_batch_flush = 0;
 	int total_converted = 0;
 	struct candle_chunk *chunk;
 
@@ -639,14 +674,14 @@ int candle_chunk_list_convert_to_column_batch(struct candle_chunk_list *list)
 		}
 
 		/* If this chunk is fully converted, notice it to the flush worker */
-		num_flush_batch += 1;
+		num_batch_flush += 1;
 		chunk = chunk->next;
 	}
 
 	atomic_store_explicit(&list->last_seq_converted, last_seq_converted,
 		memory_order_release);
 
-	atomic_fetch_add_explicit(&list->unflushed_batch_count, num_flush_batch,
+	atomic_fetch_add_explicit(&list->unflushed_batch_count, num_batch_flush,
 		memory_order_release);
 
 	return total_converted;
@@ -704,24 +739,67 @@ void candle_chunk_list_finalize(struct candle_chunk_list *list)
  * The admin thread must ensure that the flush function for a single chunk
  * list is executed by only one worker thread at a time.
  */
-int candle_chunk_list_flush(struct candle_chunk_list *list)
+int candle_chunk_list_batch_flush(struct candle_chunk_list *list)
 {
-	int flush_batch_count = atomic_load_explicit(&list->unflushed_batch_count,
-		memory_order_acquire) - list->trc->flush_threshold;
-	int flush_start_count = 0, flush_done_count = 0;
+	int batch_flush_count = atomic_load_explicit(&list->unflushed_batch_count,
+		memory_order_acquire) - list->trc->batch_flush_threshold;
+	int done_count = 0;
 	struct atomsnap_version *head_snap, *new_snap;
 	struct candle_chunk_list_head_version *head_version, *new_ver;
-	struct candle_chunk *chunk, *last_chunk = NULL;
-	const struct trcache_batch_flush_ops *flush_ops
-		= &list->config->flush_ops;
+	struct candle_chunk *chunk, *last_done = NULL;
+	const struct trcache_batch_flush_ops *batch_flush_ops
+		= &list->config->batch_flush_ops;
 
-	if (flush_batch_count <= 0) {
+	if (batch_flush_count <= 0) {
 		return 0;
 	}
 
+	/*
+	 * Pre-allocate the new head version before acquiring the current one.
+	 * This ordering is required by the atomsnap protocol.
+	 */
 	new_snap = atomsnap_make_version(list->head_gate);
 	if (new_snap == NULL) {
 		errmsg(stderr, "Failure on atomsnap_make_version()\n");
+		return 0;
+	}
+
+	head_snap = atomsnap_acquire_version(list->head_gate);
+	head_version = (struct candle_chunk_list_head_version *)
+		atomsnap_get_object(head_snap);
+
+	/*
+	 * Drive all chunks within the budget forward:
+	 *   NEEDED    → call flush()  → IN_FLIGHT (or DONE if no backend)
+	 *   IN_FLIGHT → call poll()   → DONE if backend has completed
+	 *   DONE      → nothing to do
+	 *
+	 * Returns immediately; chunks not yet DONE will be revisited next call.
+	 */
+	chunk = head_version->head_node;
+	for (int i = 0; i < batch_flush_count && chunk != NULL; i++) {
+		assert(chunk->num_converted == list->trc->batch_candle_count);
+
+		batch_flush_drive_chunk(chunk, batch_flush_ops);
+
+		chunk = chunk->next;
+	}
+
+	/*
+	 * Advance the head past all contiguous DONE chunks.
+	 * A gap (non-DONE chunk) stops the advance: head must move in order.
+	 */
+	chunk = head_version->head_node;
+	while (chunk != NULL && done_count < batch_flush_count
+			&& chunk->flush_state == BATCH_FLUSH_DONE) {
+		last_done = chunk;
+		done_count++;
+		chunk = chunk->next;
+	}
+
+	if (done_count == 0) {
+		atomsnap_free_version(new_snap);
+		atomsnap_release_version(head_snap);
 		return 0;
 	}
 
@@ -729,79 +807,35 @@ int candle_chunk_list_flush(struct candle_chunk_list *list)
 	if (new_ver == NULL) {
 		errmsg(stderr, "Failure on alloc_head_version_object()\n");
 		atomsnap_free_version(new_snap);
+		atomsnap_release_version(head_snap);
 		return 0;
 	}
 
 	atomsnap_set_object(new_snap, new_ver, list);
 
-	head_snap = atomsnap_acquire_version(list->head_gate);
-	head_version = (struct candle_chunk_list_head_version *)
-		atomsnap_get_object(head_snap);
+	assert(last_done != NULL && last_done != list->tail);
 
 	/*
-	 * Modifying the head of the list is restricted to a single thread,
-	 * coordinated by the admin thread. Thus, only this execution thread is
-	 * allowed to update the list head.
+	 * Publish the new head. Essential fields (head_version_next, tail_node)
+	 * must be visible before the exchange so that concurrent readers and
+	 * the version-free path observe a consistent list state.
 	 */
-	chunk = head_version->head_node;
-
-	while (chunk != NULL) {
-		assert(chunk->num_converted == list->trc->batch_candle_count);
-
-		flush_start_count += 1;
-
-		if (candle_chunk_flush(chunk, flush_ops) == 1) {
-			flush_done_count += 1;
-		}
-
-		if (flush_start_count == flush_batch_count) {
-			last_chunk = chunk;
-			break;
-		}
-
-		chunk = chunk->next;
-	}
-
-	assert(last_chunk != NULL && last_chunk != list->tail);
-
-	/* If asynchronous flush is used, check whether the flush has completed */
-	while (flush_done_count < flush_batch_count) {
-		chunk = head_version->head_node;
-		while (true) {
-			if (candle_chunk_flush_poll(chunk, flush_ops) == 1) {
-				flush_done_count += 1;
-			}
-			
-			if (chunk == last_chunk) {
-				break;
-			}
-			chunk = chunk->next;
-		}
-	}
-
-	atomic_fetch_sub_explicit(&list->unflushed_batch_count, flush_done_count,
-		memory_order_release);
-
-	/* Change head version */
 	new_ver->head_version_prev = head_version;
 	new_ver->head_version_next = NULL;
-
 	new_ver->tail_node = NULL;
-	new_ver->head_node = last_chunk->next;
+	new_ver->head_node = last_done->next;
 	assert(new_ver->head_node != NULL);
 
 	atomic_store(&head_version->head_version_next, new_ver);
-	atomic_store(&head_version->tail_node, last_chunk);	
+	atomic_store(&head_version->tail_node, last_done);
 
-	/*
-	 * The above contains essential information for both threads starting
-	 * traversal from the head version and for freeing old versions. It must be
-	 * set before registering the new head and releasing the old head version.
-	 */
 	atomsnap_exchange_version(list->head_gate, new_snap);
 	atomsnap_release_version(head_snap);
 
-	return flush_done_count;
+	atomic_fetch_sub_explicit(&list->unflushed_batch_count, done_count,
+		memory_order_release);
+
+	return done_count;
 }
 
 /**
