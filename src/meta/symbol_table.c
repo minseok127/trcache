@@ -103,6 +103,30 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	/* Initialize all flags to -1 (free) */
 	memset(table->flush_ownership_flags, -1, flush_size);
 
+	/*
+	 * Allocate per-symbol ownership flags for raw trade chunk flush.
+	 * Unlike flush_ownership_flags, this array is indexed by sym_idx
+	 * only and is independent of candle type.
+	 */
+	size_t trade_flush_size = (size_t)max_capacity * sizeof(_Atomic(int));
+
+	table->trade_flush_ownership_flags = aligned_alloc(
+		CACHE_LINE_SIZE,
+		ALIGN_UP(trade_flush_size, CACHE_LINE_SIZE));
+	if (table->trade_flush_ownership_flags == NULL) {
+		errmsg(stderr,
+			"trade_flush_ownership_flags allocation failed\n");
+		free(table->flush_ownership_flags);
+		free(table->in_memory_ownership_flags);
+		free(table->symbol_entries);
+		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
+		free(table);
+		return NULL;
+	}
+	/* Initialize all flags to -1 (free) */
+	memset(table->trade_flush_ownership_flags, -1, trade_flush_size);
+
 	table->capacity = max_capacity;
 	table->num_symbols = 0;
 
@@ -142,6 +166,7 @@ void symbol_table_destroy(struct symbol_table *table)
 
 	free(table->in_memory_ownership_flags);
 	free(table->flush_ownership_flags);
+	free(table->trade_flush_ownership_flags);
 
 	free(table->symbol_entries);
 	free(table);

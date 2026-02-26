@@ -43,16 +43,22 @@ struct in_memory_owner {
 /*
  * symbol_table - Structure that manages symbol id and it's entry.
  *
- * @ht_hash_table_mutex:       Protects registration path.
- * @symbol_id_map:             Hash table that maps from string to ID.
- * @symbol_entries:            Pre-allocated array of all symbol entries.
- * @num_symbols:               Number of registered symbols.
- * @capacity:                  Allocated array capacity.
- * @in_memory_ownership_flags: Array of ownership flags for Apply/Convert.
- * @flush_ownership_flags:     Array of ownership flags for Flush.
+ * @ht_hash_table_mutex:          Protects registration path.
+ * @symbol_id_map:                Hash table that maps from string to ID.
+ * @symbol_entries:               Pre-allocated array of all symbol entries.
+ * @num_symbols:                  Number of registered symbols.
+ * @capacity:                     Allocated array capacity.
+ * @in_memory_ownership_flags:    Array of ownership flags for Apply/Convert.
+ *                                Indexed by (type_idx * capacity + sym_idx).
+ * @flush_ownership_flags:        Array of ownership flags for candle batch
+ *                                Flush. Indexed by
+ *                                (type_idx * capacity + sym_idx).
+ * @trade_flush_ownership_flags:  Array of ownership flags for raw trade chunk
+ *                                Flush. Indexed by sym_idx only (one entry
+ *                                per symbol, independent of candle type).
  *
- * The data arrays pointed to by the ownership flags will be
- * allocated on a cache line boundary in symbol_table_init().
+ * All ownership flag arrays are allocated on a cache line boundary in
+ * symbol_table_init() and initialized to -1 (free).
  */
 struct symbol_table {
 	pthread_mutex_t ht_hash_table_mutex;
@@ -62,6 +68,7 @@ struct symbol_table {
 	int capacity;
 	struct in_memory_owner *in_memory_ownership_flags;
 	_Atomic(int) *flush_ownership_flags;
+	_Atomic(int) *trade_flush_ownership_flags;
 };
 
 /**

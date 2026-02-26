@@ -45,8 +45,7 @@ struct candle_row_page {
  * @num_converted:        Number of records (candles) converted to column batch.
  * @converting_page_idx:  Index of the page being converted to column batch.
  * @converting_row_idx:   Index of the row being converted to column batch.
- * @flush_handle:         Returned pointer of trcache_batch_flush_ops->flush().
- * @is_flushed:           Flag to indicate flush state.
+ * @is_flushed:           Flag to indicate flush state (0=pending, 1=done).
  * @next:                 Linked list pointer to the next chunk.
  * @prev:                 Linked list pointer to the previous chunk.
  * @row_gate:             atomsnap_gate for managing #candle_row_pages.
@@ -100,7 +99,6 @@ struct candle_chunk {
 	 * Written once by the Flush worker.
 	 */
 	____cacheline_aligned
-	void *flush_handle;
 	_Atomic(int) is_flushed;
 
 	/*
@@ -304,20 +302,18 @@ void candle_chunk_convert_to_batch(struct candle_chunk *chunk,
 	int start_idx, int end_idx);
 
 /**
- * @brief   Flush a single fully-converted candle chunk.
+ * @brief   Initiate a flush for a single fully-converted candle chunk.
  *
- * Starts a backend-specific flush on @chunk using the callbacks in
- * @trc->flush_ops. If the backend returns a non-NULL handle, the flush is
- * assumed to be asynchronous and remains "in-flight"; the caller must poll
- * it later with flush_ops->is_done(). When the backend performs a
- * synchronous flush it returns NULL, in which case the chunk is marked
- * immediately as flushed.
+ * Calls flush_ops->flush() and returns 0. The caller must subsequently
+ * poll candle_chunk_flush_poll() until it returns 1. If flush_ops->flush
+ * is NULL (no backend configured), the chunk is marked done immediately
+ * and 1 is returned; no poll is needed.
  *
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
- * @return  1  flush completed synchronously  
- *          0  flush started asynchronously (still pending)  
+ * @return  1  no flush backend configured; chunk marked done immediately.
+ *          0  flush initiated; poll with candle_chunk_flush_poll().
  */
 int candle_chunk_flush(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops);
@@ -325,16 +321,15 @@ int candle_chunk_flush(struct candle_chunk *chunk,
 /**
  * @brief   Poll a candle chunk for flush completion.
  *
- * If the chunk was flushed synchronously (@chunk->is_flushed == 1) the
- * function returns immediately. Otherwise it queries the backend via
- * flush_ops->is_done(). When the backend signals completion, the flush
- * handle is destroyed and the chunk is marked flushed.
+ * Queries flush_ops->is_done(). When it returns true, the chunk is marked
+ * flushed and this function returns 1. If the chunk was already marked
+ * flushed by a previous call, returns 0 (not counted again).
  *
  * @param   chunk:     Pointer to the target candle_chunk.
  * @param   flush_ops: User-defined batch flush operation callbacks.
  *
- * @return  1  flush has completed *in this call*.
- *          0  flush has not completed *in this call*.
+ * @return  1  flush completed in this call.
+ *          0  flush not yet complete, or already completed in a prior call.
  */
 int candle_chunk_flush_poll(struct candle_chunk *chunk,
 	const struct trcache_batch_flush_ops* flush_ops);

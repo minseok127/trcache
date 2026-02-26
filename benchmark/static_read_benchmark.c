@@ -194,12 +194,6 @@ static bool candle_update_time_##SUFFIX(struct trcache_candle_base *c, \
 
 DEFINE_TIME_UPDATE_FUNC(1min, ONE_MINUTE_MS)
 
-static void* sync_flush_noop(struct trcache *cache,
-	struct trcache_candle_batch *batch, void *ctx)
-{
-	(void)cache; (void)batch; (void)ctx;
-	return NULL;
-}
 
 /**
  * @brief   Warmup phase: feed trades to populate candles and track keys.
@@ -597,9 +591,8 @@ static int initialize_trcache(void)
 		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
 
-	const struct trcache_batch_flush_ops g_flush_ops = {
-		.flush = sync_flush_noop
-	};
+	/* flush_ops all-NULL: candle batch flushing disabled in benchmark */
+	const struct trcache_batch_flush_ops g_flush_ops = {};
 
 	const int num_fields = sizeof(g_candle_fields) /
 		sizeof(struct trcache_field_def);

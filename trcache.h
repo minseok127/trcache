@@ -136,46 +136,46 @@ typedef struct trcache_candle_batch {
 /*
  * trcache_batch_flush_ops - User-defined batch flush operation callbacks.
  *
- * @flush:                    User-defined batch flush function.
- * @is_done:                  Checks whether the asynchronous flush has completed.
- * @destroy_async_handle:     Cleanup resources associated with the async handle.
- * @on_batch_destroy:         Callback invoked just before a batch's memory is
- *                            freed, allowing the user to release custom
- *                            resources.
- * @flush_ctx:                User‑supplied pointer, passed into @flush().
- * @destroy_async_handle_ctx: User-supplied pointer, passed into
- *                            @destroy_async_handle().
- * @on_destroy_ctx:           User-supplied pointer, passed into
- *                            @on_batch_destroy().
+ * @flush:   Initiate a flush for one fully-converted candle batch.
+ *           The implementation tracks async state internally via @ctx.
+ * @is_done: Poll for flush completion. Returns true when done (success or
+ *           error). Always called after @flush; never called before it.
+ *           The implementation must clean up any internal async state before
+ *           returning true.
+ * @ctx:     User-supplied pointer passed to both @flush and @is_done.
  *
- * This structure lets applications plug in either synchronous or asynchronous
- * flush logic without changing the core engine.
- *
- * The flush worker calls @flush exactly once for every batch that reaches the
- * fully converted state. User's implementation has two options:
- *
- * 1. **Synchronous flush** – Perform the entire operation inside @flush and
- * return **NULL**. The engine will treat the batch as flushed
- * immediately and will not call @is_done or @destroy_handle.
- *
- * 2. **Asynchronous flush** – Initiate the operation inside @flush and return
- * **a non‑NULL handle** (any unique pointer or token). The worker will
- * keep that handle and periodically call @is_done until it returns true.
- * After completion the worker will call @destroy_handle (if
+ * The flush worker calls @flush exactly once per fully-converted batch,
+ * then polls @is_done until it returns true. Error reporting is the
+ * implementation's responsibility (e.g. via a callback stored in @ctx).
  */
 typedef struct trcache_batch_flush_ops {
-	void *(*flush)(trcache *cache, trcache_candle_batch *batch,
-		void *flush_ctx);
-	bool (*is_done)(trcache *cache, trcache_candle_batch *batch,
-		void *async_handle);
-	void (*destroy_async_handle)(void *async_handle,
-		void *destroy_async_handle_ctx);
-	void (*on_batch_destroy)(trcache_candle_batch *batch,
-		void *on_destroy_ctx);
-	void *flush_ctx;
-	void *destroy_async_handle_ctx;
-	void *on_destroy_ctx;
+	void (*flush)(trcache *cache, trcache_candle_batch *batch, void *ctx);
+	bool (*is_done)(trcache *cache, trcache_candle_batch *batch, void *ctx);
+	void *ctx;
 } trcache_batch_flush_ops;
+
+/*
+ * trcache_trade_flush_ops - User-defined raw trade chunk flush callbacks.
+ *
+ * @flush:   Initiate a flush for one completed raw trade chunk.
+ *           The implementation tracks async state internally via @ctx,
+ *           keyed by @data (the chunk's unique buffer pointer).
+ * @is_done: Poll for flush completion. Returns true when done (success or
+ *           error). Always called after @flush; never called before it.
+ *           The implementation must clean up any internal async state before
+ *           returning true.
+ * @ctx:     User-supplied pointer passed to both @flush and @is_done.
+ *
+ * Setting @flush to NULL disables raw trade persistence entirely.
+ * Error reporting is the implementation's responsibility (e.g. via a
+ * callback stored in @ctx).
+ */
+typedef struct trcache_trade_flush_ops {
+	void (*flush)(trcache *cache, int symbol_id,
+		const void *data, int num_trades, void *ctx);
+	bool (*is_done)(trcache *cache, const void *data, void *ctx);
+	void *ctx;
+} trcache_trade_flush_ops;
 
 /*
  * trcache_candle_update_ops - Callbacks for updating candles.
@@ -274,6 +274,15 @@ typedef struct trcache_field_request {
  * @num_worker_threads:        Number of worker threads.
  * @max_symbols:               Maximum number of symbols that can be registered.
  * @trade_data_size:           Size of the user-defined trade data structure.
+ * @trade_io_block_size:       Target I/O block size for raw trade chunks in
+ *                             bytes. The number of trades per chunk is
+ *                             computed as trade_io_block_size/trade_data_size.
+ *                             Set to 0 to use the default (64 KiB), which
+ *                             aligns well with typical NVMe write granularity.
+ *                             The data buffer of each chunk is allocated with
+ *                             4 KiB alignment to support DMA transfers.
+ * @trade_flush_ops:           Optional callbacks to persist raw trade chunks.
+ *                             Set .flush = NULL to disable.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -288,6 +297,8 @@ typedef struct trcache_init_ctx {
 	int num_worker_threads;
 	int max_symbols;
 	size_t trade_data_size;
+	size_t trade_io_block_size;
+	struct trcache_trade_flush_ops trade_flush_ops;
 } trcache_init_ctx;
 
 /**
@@ -461,9 +472,8 @@ struct trcache_candle_batch *trcache_batch_alloc_on_heap(struct trcache *tc,
  *
  * This function is intended for batches allocated by the user via
  * trcache_batch_alloc_on_heap(). It only frees the memory block.
- * It does *not* invoke the on_batch_destroy() callback, which is reserved
- * for the internal pipeline. The user is responsible for cleaning up any
- * custom resources within the batch before calling this function.
+ * The user is responsible for cleaning up any custom resources within
+ * the batch before calling this function.
  *
  * @param   batch: Pointer to the batch to be freed.
  *

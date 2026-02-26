@@ -368,68 +368,77 @@ The routing of `trade_data` to either the `update` or `init` callback is determi
   - If `is_closed` is `true`: The next trade data is automatically routed to `init`.
   - If `is_closed` is `false`: The next trade data is routed to `update`.
 
-### Step 4: Implement Flush Callbacks
+### Step 4: Configure Candle Batch Flush (Optional)
 
-#### Synchronous Example
+When a column batch is complete, trcache calls the user-provided `flush` callback
+then polls `is_done` until the write finishes. Set `flush_ops = {}` (all NULL) to
+skip persistence; candle data remains queryable in memory.
+
+#### Synchronous example
 ```c
-void* sync_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+void my_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
     FILE *fp = (FILE *)ctx;
     fwrite(batch->key_array, sizeof(uint64_t), batch->num_candles, fp);
     // ... write other columns ...
-    return NULL;  // NULL = synchronous completion
 }
 
-trcache_batch_flush_ops flush_ops = {.flush = sync_flush, .flush_ctx = my_file};
-```
-
-#### Asynchronous Example (io_uring)
-```c
-typedef struct {
-    struct io_uring *ring;
-    int fd;
-} UringCtx;
-
-void* async_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
-    UringCtx *uring = (UringCtx *)ctx;
-    
-    // Allocate job context
-    struct job {
-        struct iovec iov;
-        bool done;
-    } *job = malloc(sizeof(*job));
-    
-    job->iov.iov_base = batch->key_array;
-    job->iov.iov_len = batch->num_candles * sizeof(uint64_t);
-    job->done = false;
-    
-    // Submit write
-    struct io_uring_sqe *sqe = io_uring_get_sqe(uring->ring);
-    io_uring_prep_writev(sqe, uring->fd, &job->iov, 1, -1);
-    io_uring_sqe_set_data(sqe, job);
-    io_uring_submit(uring->ring);
-    
-    return job;  // Non-NULL = async, will poll for completion
+bool my_is_done(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+    return true;  // write completed synchronously in flush
 }
 
-bool async_is_done(trcache *cache, trcache_candle_batch *batch, void *handle) {
-    struct job *job = (struct job *)handle;
-    // Poll completion queue and check if our job finished
-    // ... (see benchmark/htap_benchmark.c for full example)
-    return job->done;
-}
-
-void async_cleanup(void *handle, void *ctx) {
-    free(handle);
-}
-
-trcache_batch_flush_ops async_ops = {
-    .flush = async_flush,
-    .is_done = async_is_done,
-    .destroy_async_handle = async_cleanup
+trcache_batch_flush_ops flush_ops = {
+    .flush   = my_flush,
+    .is_done = my_is_done,
+    .ctx     = my_file
 };
 ```
 
-### Step 5: Configure Candle Types
+#### Asynchronous example
+
+Submit I/O in `flush` and track state through `ctx`. Poll completion in `is_done`.
+
+```c
+void my_flush(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+    MyAsyncCtx *c = (MyAsyncCtx *)ctx;
+    // Submit async I/O; record in-flight state via c
+}
+
+bool my_is_done(trcache *cache, trcache_candle_batch *batch, void *ctx) {
+    MyAsyncCtx *c = (MyAsyncCtx *)ctx;
+    // Poll completion; return true when write finished and state cleaned up
+    return c->done;
+}
+```
+
+### Step 5: Configure Trade Data Flush (Optional)
+
+Raw trade records fed via `trcache_feed_trade_data` are collected into fixed-size
+chunks per symbol and can be persisted independently of candle batch flush.
+This allows the raw feed to be replayed or audited.
+
+```c
+void trade_flush(trcache *cache, int symbol_id,
+                 const void *data, int num_trades, void *ctx) {
+    // data: contiguous array of num_trades records, each trade_data_size bytes
+    // Use trcache_lookup_symbol_str(cache, symbol_id) to get the symbol name
+}
+
+bool trade_is_done(trcache *cache, const void *data, void *ctx) {
+    return true;  // true when the write is complete (sync: always true)
+}
+```
+
+Configure in `trcache_init_ctx`:
+```c
+ctx.trade_flush_ops.flush   = trade_flush;
+ctx.trade_flush_ops.is_done = trade_is_done;
+ctx.trade_flush_ops.ctx     = my_ctx;
+// ctx.trade_io_block_size: chunk size in bytes (default: 64 KiB)
+```
+
+Leave `trade_flush_ops.flush = NULL` (or zero-initialize) to disable.
+
+### Step 6: Configure Candle Types
 
 ```c
 trcache_candle_config configs[] = {
@@ -450,7 +459,7 @@ trcache_candle_config configs[] = {
 };
 ```
 
-### Step 6: Initialize the Engine
+### Step 7: Initialize the Engine
 
 ```c
 trcache_init_ctx ctx = {
@@ -475,7 +484,7 @@ If initialization fails with "memory limit too low", the error message shows:
 - Per-candle-type breakdown (chunk size, page size).
 - Suggested adjustments.
 
-### Step 7: Register Symbols and Feed Data
+### Step 8: Register Symbols and Feed Data
 
 Pass the custom trade data structure to the engine.
 
@@ -497,7 +506,7 @@ trcache_feed_trade_data(cache, &trade, aapl_id);
 
 `trcache_feed_trade_data()` copies the trade structure into internal lock-free buffers. Stack-allocated and heap-allocated structures can be used; the pointer is not retained after the function returns.
 
-### Step 8: Query Candle Data
+### Step 9: Query Candle Data
 
 #### 1. Select Fields
 
@@ -589,7 +598,7 @@ for (int i = 0; i < batch->num_candles; i++) {  // Oldest -> Newest
 trcache_batch_free(batch);
 ```
 
-### Step 9: Destroy
+### Step 10: Destroy
 
 ```c
 trcache_destroy(cache);  // Flushes remaining data and frees all resources
@@ -622,7 +631,7 @@ Suggestion: Increase total_memory_limit or decrease cached_batch_count_pow2.
 
 ### Segfault on query
 
-**Cause**: Accessing `column_arrays` with wrong index (see Step 8).
+**Cause**: Accessing `column_arrays` with wrong index (see Step 9).
 
 **Solution**: Always use the original `field_definitions` index, not the `field_request` index:
 ```c

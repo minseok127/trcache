@@ -193,8 +193,15 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	tc = tls_data->trcache_ptr;
 	free_list_mem_counter =
 		&tc->mem_acc.feed_thread_free_list_mem[tls_data->thread_id].value;
-	chunk_size = align_up(sizeof(struct trade_data_chunk) +
-		tc->trade_data_size * NUM_TRADE_CHUNK_CAP, CACHE_LINE_SIZE);
+
+	/*
+	 * Each chunk in the free list owns a separately allocated 4 KiB-
+	 * aligned data buffer. The total tracked size per chunk is the
+	 * struct size plus that data buffer size, matching the value stored
+	 * in trade_data_buffer.chunk_allocation_size.
+	 */
+	chunk_size = align_up(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE)
+		+ tc->trade_data_buf_size;
 
 	if (tls_data->local_symbol_id_map != NULL) {
 		ht_destroy(tls_data->local_symbol_id_map);
@@ -207,6 +214,7 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
 			total_freed += chunk_size;
+			free(chunk->data);
 			free(chunk);
 			c = n;
 		}
@@ -402,6 +410,33 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->flush_threshold = (1 << ctx->cached_batch_count_pow2);
 	tc->max_symbols = ctx->max_symbols;
 	tc->trade_data_size = ctx->trade_data_size;
+	tc->trade_flush_ops = ctx->trade_flush_ops;
+
+	/*
+	 * Derive the number of trade records per chunk from the requested
+	 * I/O block size. Default to 64 KiB when the caller leaves the
+	 * field at zero, which aligns well with NVMe write granularity.
+	 * Clamp to at least one record so that a very large trade_data_size
+	 * never yields zero.
+	 * trade_data_buf_size is rounded up to the data-buffer alignment so
+	 * that aligned_alloc(TRADE_DATA_BUF_ALIGN, ...) is always valid.
+	 *
+	 * Skip the block entirely when trade_data_size is zero (trade data
+	 * feature disabled); trades_per_chunk and trade_data_buf_size stay
+	 * at zero, keeping the division well-defined.
+	 */
+	if (tc->trade_data_size > 0) {
+		size_t io_block = (ctx->trade_io_block_size > 0) ?
+			ctx->trade_io_block_size : 65536;
+		tc->trades_per_chunk =
+			(int)(io_block / tc->trade_data_size);
+		if (tc->trades_per_chunk < 1) {
+			tc->trades_per_chunk = 1;
+		}
+		tc->trade_data_buf_size = align_up(
+			(size_t)tc->trades_per_chunk * tc->trade_data_size,
+			4096);
+	}
 
 	/* 4. Initialize SCQ pools */
 	tc->head_version_pool = scq_init(tc);
@@ -665,6 +700,25 @@ void trcache_destroy(struct trcache *tc)
 	/* 4. Destroy remaining shared resources */
 	pthread_mutex_destroy(&tc->tls_id_mutex);
 	
+	/*
+	 * If raw trade flush is configured, busy-flush every symbol's
+	 * remaining chunks (including partial tails) before we tear down
+	 * the symbol table.
+	 */
+	if (tc->trade_flush_ops.flush != NULL) {
+		int num_syms = atomic_load_explicit(
+			(int *)&tc->symbol_table->num_symbols,
+			memory_order_acquire);
+		for (int i = 0; i < num_syms; i++) {
+			struct symbol_entry *entry =
+				&tc->symbol_table->symbol_entries[i];
+			if (entry->trd_buf != NULL) {
+				trade_data_buffer_finalize(
+					entry->trd_buf, &tc->trade_flush_ops);
+			}
+		}
+	}
+
 	/*
 	 * Destroy symbol table. This finalizes all candle lists,
 	 * flushing data and returning all chunks/pages to the SCQ pools.
@@ -943,7 +997,8 @@ int trcache_feed_trade_data(struct trcache *tc,
 	}
 
 	/* If we need free chunk, reap it from data buffer. */
-	if (trd_databuf->next_tail_write_idx == NUM_TRADE_CHUNK_CAP - 1 &&
+	if (trd_databuf->next_tail_write_idx ==
+			tc->trades_per_chunk - 1 &&
 			list_empty(&tls_data_ptr->local_free_list)) {
 
 		is_memory_pressure = atomic_load_explicit(
@@ -954,7 +1009,8 @@ int trcache_feed_trade_data(struct trcache *tc,
 		}
 
 		trade_data_buffer_reap_free_chunks(trd_databuf,
-			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id);
+			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id,
+			tc->trade_flush_ops.flush != NULL);
 	}
 
 	/*

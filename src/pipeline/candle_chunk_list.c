@@ -121,12 +121,6 @@ free_head_version:
 		candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
 
-		if (chunk_list->config->flush_ops.on_batch_destroy != NULL) {
-			chunk_list->config->flush_ops.on_batch_destroy(
-				prev_chunk->column_batch,
-				chunk_list->config->flush_ops.on_destroy_ctx);
-		}
-
 		candle_chunk_destroy(prev_chunk);
 		prev_chunk = chunk;
 	}
@@ -136,12 +130,6 @@ free_head_version:
 #else  /* !TRCACHE_DEBUG */
 	candle_chunk_index_pop_head(chunk_index);
 #endif /* TRCACHE_DEBUG */
-
-	if (chunk_list->config->flush_ops.on_batch_destroy != NULL) {
-		chunk_list->config->flush_ops.on_batch_destroy(
-			head_version->tail_node->column_batch,
-			chunk_list->config->flush_ops.on_destroy_ctx);
-	}
 
 	candle_chunk_destroy(head_version->tail_node);
 

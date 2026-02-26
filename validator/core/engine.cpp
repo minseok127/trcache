@@ -9,6 +9,7 @@
 #include "engine.h"
 #include "types.h"
 #include "latency_codec.h"
+#include "trade_flush.h"
 
 #include <iostream>
 #include <vector>
@@ -22,6 +23,9 @@
 
 /* Maximum number of candle configurations supported dynamically */
 #define MAX_CANDLE_SLOTS 8
+
+/* Global trade flush context; one per trcache instance. */
+static struct trade_flush_ctx *g_tfc = nullptr;
 
 /*
  * Global array to hold threshold values for each slot.
@@ -90,20 +94,6 @@ static void update_common(val_candle* candle, trcache_trade_data* d)
 	candle->exchange_ts = d->timestamp;
 	candle->end_seq_id = d->trade_id;
 	candle->tick_count++;
-}
-
-/*
- * flush_noop - Memory-only flush (No disk I/O).
- * Returns NULL to indicate synchronous completion.
- */
-static void* flush_noop(struct trcache* cache,
-			struct trcache_candle_batch* batch,
-			void* ctx)
-{
-	(void)cache;
-	(void)batch;
-	(void)ctx;
-	return NULL;
 }
 
 /* --------------------------------------------------------------------------
@@ -307,9 +297,8 @@ struct trcache* engine_init(const struct validator_config& config)
 
 		/* Prepare Ops Structures */
 		trcache_candle_update_ops u_ops = {};
+		/* Candle batch flush disabled; all NULL = immediate done. */
 		trcache_batch_flush_ops f_ops = {};
-		
-		f_ops.flush = flush_noop;
 
 		/* Map Logic Type to Slot Function */
 		if (user_cfg.type == "TICK_MODULO") {
@@ -360,13 +349,31 @@ struct trcache* engine_init(const struct validator_config& config)
 	ctx.max_symbols = (config.top_n > 0 ? config.top_n : 1000) + 50;
 	ctx.trade_data_size = sizeof(trcache_trade_data);
 
-	/* 3. Initialize Engine */
+	/* 3. Set up io_uring trade flush */
+	{
+		const std::string default_dir = "./trade_data";
+		auto it = config.options.find("trade_output_dir");
+		const std::string &out_dir =
+			(it != config.options.end()) ? it->second : default_dir;
+
+		g_tfc = trade_flush_ctx_create(ctx.max_symbols,
+			ctx.trade_data_size, out_dir.c_str());
+		if (!g_tfc) {
+			std::cerr << "[Engine] trade_flush_ctx_create failed\n";
+			return nullptr;
+		}
+		ctx.trade_flush_ops = trade_flush_get_ops(g_tfc);
+	}
+
+	/* 4. Initialize Engine */
 	return trcache_init(&ctx);
 }
 
 void engine_destroy(struct trcache* cache)
 {
-	if (cache) {
+	if (cache)
 		trcache_destroy(cache);
-	}
+
+	trade_flush_ctx_destroy(g_tfc);
+	g_tfc = nullptr;
 }

@@ -40,7 +40,7 @@ struct trcache_tls_data {
  * @pthread_trcache_key:     Key for pthread_get/setspecific.
  * @tls_id_mutex:            Protects allocation/release of thread IDs.
  * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
- * @tls_data_ptr_arr:        Pointers to each thread’s tls_data.
+ * @tls_data_ptr_arr:        Pointers to each thread's tls_data.
  * @symbol_table:            Abstracted symbol table.
  * @candle_configs:          Array of all candle configurations.
  * @num_candle_configs:      Total number of candle configurations.
@@ -59,6 +59,14 @@ struct trcache_tls_data {
  * @chunk_pools:             Per-candle-type SCQ pools for candle_chunks.
  * @row_page_pools:          Per-candle-type SCQ pools for candle_row_pages.
  * @trade_data_size:         User-defined trade data size.
+ * @trades_per_chunk:        Number of trade records per chunk data buffer.
+ *                           Computed as io_block_size / trade_data_size.
+ * @trade_data_buf_size:     Byte size of one chunk's data buffer (4 KiB-
+ *                           aligned allocation that holds trades_per_chunk
+ *                           records). Used when freeing chunks from the
+ *                           thread-local free list.
+ * @trade_flush_ops:         Optional callbacks to persist raw trade chunks.
+ *                           .flush == NULL means raw trade flush is disabled.
 */
 struct trcache {
 	/*
@@ -108,6 +116,9 @@ struct trcache {
 	struct scalable_queue *chunk_pools[MAX_CANDLE_TYPES];
 	struct scalable_queue *row_page_pools[MAX_CANDLE_TYPES];
 	size_t trade_data_size;
+	int trades_per_chunk;
+	size_t trade_data_buf_size;
+	struct trcache_trade_flush_ops trade_flush_ops;
 
 } ____cacheline_aligned;
 

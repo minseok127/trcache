@@ -28,6 +28,7 @@ LDFLAGS = -rdynamic -L$(TRCACHE_ROOT) -Wl,-rpath=$(TRCACHE_ROOT) -ltrcache -lssl
 SRCS = main.cpp \
        core/config_loader.cpp \
        core/engine.cpp \
+       core/trade_flush.cpp \
        core/auditor.cpp \
        exchanges/binance/binance_client.cpp
 

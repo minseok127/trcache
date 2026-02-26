@@ -22,13 +22,24 @@
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
 /**
- * @brief   Helper to calculate the size of a chunk including flexible array.
+ * @brief   Helper to calculate the cacheline-aligned struct allocation size.
  */
-static size_t calculate_chunk_size(struct trcache *tc)
+static size_t calculate_chunk_struct_size(void)
 {
-	size_t payload_size = tc->trade_data_size * NUM_TRADE_CHUNK_CAP;
-	size_t total_size = sizeof(struct trade_data_chunk) + payload_size;
-	return ALIGN_UP(total_size, CACHE_LINE_SIZE);
+	return ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE);
+}
+
+/**
+ * @brief   Helper to calculate the 4 KiB-aligned data buffer size.
+ *
+ * The result is rounded up to TRADE_DATA_BUF_ALIGN so that
+ * aligned_alloc(TRADE_DATA_BUF_ALIGN, ...) satisfies its requirement that
+ * size is a multiple of the requested alignment.
+ */
+static size_t calculate_data_buf_size(struct trcache *tc)
+{
+	size_t raw = (size_t)tc->trades_per_chunk * tc->trade_data_size;
+	return ALIGN_UP(raw, TRADE_DATA_BUF_ALIGN);
 }
 
 /**
@@ -45,7 +56,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	struct trade_data_buffer *buf = NULL;
 	struct trade_data_chunk *chunk = NULL;
 	struct trade_data_buffer_cursor *c = NULL;
-	size_t chunk_mem_size;
+	size_t chunk_struct_size, data_buf_size, chunk_total_size;
 
 	if (tc == NULL) {
 		errmsg(stderr, "Invalid argument\n");
@@ -66,10 +77,16 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	atomic_init(&buf->memory_usage.value, 0);
 	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
 
-	/* Calculate size for chunk + variable data area */
-	chunk_mem_size = calculate_chunk_size(tc);
-	chunk = aligned_alloc(CACHE_LINE_SIZE, chunk_mem_size);
+	/*
+	 * Allocate the chunk struct and its data buffer separately.
+	 * chunk_total_size is tracked for memory accounting; it equals
+	 * the struct size plus the 4 KiB-aligned data buffer size.
+	 */
+	chunk_struct_size = calculate_chunk_struct_size();
+	data_buf_size = calculate_data_buf_size(tc);
+	chunk_total_size = chunk_struct_size + data_buf_size;
 
+	chunk = aligned_alloc(CACHE_LINE_SIZE, chunk_struct_size);
 	if (chunk == NULL) {
 		errmsg(stderr, "#trade_data_chunk allocation failed\n");
 		free(buf);
@@ -78,7 +95,15 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 
 	memset(chunk, 0, sizeof(struct trade_data_chunk));
 
-	mem_add_atomic(&buf->memory_usage.value, chunk_mem_size);
+	chunk->data = aligned_alloc(TRADE_DATA_BUF_ALIGN, data_buf_size);
+	if (chunk->data == NULL) {
+		errmsg(stderr, "trade_data_chunk data buffer allocation failed\n");
+		free(chunk);
+		free(buf);
+		return NULL;
+	}
+
+	mem_add_atomic(&buf->memory_usage.value, chunk_total_size);
 
 	INIT_LIST_HEAD(&buf->chunk_list);
 
@@ -86,6 +111,7 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	INIT_LIST_HEAD(&chunk->list_node);
 	atomic_store(&chunk->write_idx, 0);
 	atomic_store(&chunk->num_consumed_cursor, 0);
+	atomic_store(&chunk->flush_state, TRADE_CHUNK_FLUSH_NOT_READY);
 	list_add_tail(&chunk->list_node, &buf->chunk_list);
 
 	/* Init cursors */
@@ -103,7 +129,9 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	buf->num_cursor = tc->num_candle_configs;
 	buf->trc = tc;
 	buf->symbol_id = symbol_id;
-	buf->chunk_allocation_size = chunk_mem_size;
+	buf->chunk_allocation_size = chunk_total_size;
+	atomic_store(&buf->num_full_unflushed_chunks, 0);
+	atomic_store(&buf->ema_cycles_per_trade_flush, 0);
 
 	return buf;
 }
@@ -122,12 +150,13 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 		return;
 	}
 
-	/* free all chunks in list */
+	/* Free all chunks in list; each chunk owns a separate data buffer. */
 	if (!list_empty(&buf->chunk_list)) {
 		c = list_get_first(&buf->chunk_list);
 		while (c != &buf->chunk_list) {
 			n = c->next;
 			chunk = __get_trd_chunk_ptr(c);
+			free(chunk->data);
 			free(chunk);
 			mem_sub_atomic(&buf->memory_usage.value,
 				buf->chunk_allocation_size);
@@ -167,16 +196,16 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	/*
 	 * The user thread exclusively manages chunk allocation and maintains the
 	 * free list. Whether a chunk has been fully consumed is determined by a
-	 * counter incremented by the consumer threads. It’s possible for the
+	 * counter incremented by the consumer threads. It's possible for the
 	 * consumer threads to be faster and consume all the way to the tail. In
-	 * that case, if the consumer’s cursor is pointing to a chunk that has
+	 * that case, if the consumer's cursor is pointing to a chunk that has
 	 * already been fully used, the user thread might place that chunk back into
 	 * the free list. Later, when the consumer thread tries to advance its
 	 * cursor, it could end up accessing a freed chunk. To prevent this, the
 	 * user thread links a new chunk just before writing the last piece of data
-	 * to ensure the consumer’s cursor never points to a fully consumed chunk.
+	 * to ensure the consumer's cursor never points to a fully consumed chunk.
 	 */
-	if ((tail->write_idx + 1) == NUM_TRADE_CHUNK_CAP) {
+	if ((tail->write_idx + 1) == buf->trc->trades_per_chunk) {
 		if (free_list != NULL && !list_empty(free_list)) {
 			list_move_tail(free_list->next, &buf->chunk_list);
 			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
@@ -211,14 +240,28 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			}
 
 			new_chunk = aligned_alloc(CACHE_LINE_SIZE,
-				buf->chunk_allocation_size);
+				calculate_chunk_struct_size());
 
 			if (new_chunk == NULL) {
 				errmsg(stderr, "#trade_data_chunk allocation failed\n");
 				return -1;
 			}
 
+			/*
+			 * Zero only the struct. The data buffer is allocated
+			 * separately below to preserve 4 KiB alignment for DMA.
+			 */
 			memset(new_chunk, 0, sizeof(struct trade_data_chunk));
+
+			new_chunk->data = aligned_alloc(TRADE_DATA_BUF_ALIGN,
+				buf->trc->trade_data_buf_size);
+
+			if (new_chunk->data == NULL) {
+				errmsg(stderr,
+					"trade_data_chunk data buffer allocation failed\n");
+				free(new_chunk);
+				return -1;
+			}
 
 			/* Add new memory to this buffer's tracking */
 			mem_add_atomic(&buf->memory_usage.value,
@@ -234,12 +277,21 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			memory_order_release);
 		atomic_store_explicit(&new_chunk->num_consumed_cursor, 0,
 			memory_order_release);
+		atomic_store_explicit(&new_chunk->flush_state,
+			TRADE_CHUNK_FLUSH_NOT_READY, memory_order_relaxed);
+		/*
+		 * new_chunk->data is intentionally not reset here:
+		 * it points to the chunk's permanent 4 KiB-aligned buffer
+		 * (either reused from the free list or freshly allocated
+		 * above).
+		 */
 	} else {
 		buf->next_tail_write_idx += 1;
 	}
 
-	/* Copy user data using memcpy and pointer arithmetic */
-	dst_ptr = tail->data + (tail->write_idx * buf->trc->trade_data_size);
+	/* Copy user data into the 4 KiB-aligned data buffer. */
+	dst_ptr = (uint8_t *)tail->data +
+		(tail->write_idx * buf->trc->trade_data_size);
 	memcpy(dst_ptr, data, buf->trc->trade_data_size);
 
 	/*
@@ -248,6 +300,19 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 */
 	atomic_store_explicit(&tail->write_idx, tail->write_idx + 1,
 		memory_order_release);
+
+	/*
+	 * If this write filled the chunk, mark it as needing a flush.
+	 * The new tail was already linked above, so 'tail' is now the
+	 * second-to-last chunk and will no longer be written to.
+	 */
+	if (tail->write_idx == buf->trc->trades_per_chunk &&
+			buf->trc->trade_flush_ops.flush != NULL) {
+		atomic_store_explicit(&tail->flush_state,
+			TRADE_CHUNK_FLUSH_NEEDED, memory_order_release);
+		atomic_fetch_add_explicit(&buf->num_full_unflushed_chunks,
+			1, memory_order_release);
+	}
 
 	buf->produced_count += 1;
 
@@ -289,13 +354,14 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 		return 0;
 	} 
 
-	*data_array = chunk->data + (cursor->peek_idx * buf->trc->trade_data_size);
+	*data_array = (uint8_t *)chunk->data +
+		(cursor->peek_idx * buf->trc->trade_data_size);
 	*count = write_idx - cursor->peek_idx;
 
 	/* advance peek cursor */
 	cursor->peek_idx += *count;
 
-	if (cursor->peek_idx == NUM_TRADE_CHUNK_CAP) {
+	if (cursor->peek_idx == buf->trc->trades_per_chunk) {
 		assert(&chunk->list_node != list_get_last(&buf->chunk_list));
 		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
 		cursor->peek_chunk = chunk;
@@ -364,7 +430,7 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
  * @param   thread_id:           The feed thread's unique ID.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
-	struct list_head *free_list, int thread_id)
+	struct list_head *free_list, int thread_id, int flush_enabled)
 {
 	struct trade_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
@@ -387,10 +453,20 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 	/*
 	 * Note that we should remain at least one node in the list.
 	 * See the comment in the trade_data_buffer_push().
+	 *
+	 * A chunk is reclaimable when all candle-type cursors have moved
+	 * past it AND, if trade flush is configured, its flush is done.
 	 */
 	while (chunk != tail) {
 		if (atomic_load_explicit(&chunk->num_consumed_cursor,
 				memory_order_acquire) != buf->num_cursor) {
+			break;
+		}
+
+		if (flush_enabled &&
+				atomic_load_explicit(&chunk->flush_state,
+					memory_order_acquire)
+				!= TRADE_CHUNK_FLUSH_DONE) {
 			break;
 		}
 
@@ -410,10 +486,8 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 			while (node != NULL) {
 				c = __get_trd_chunk_ptr(node);
 				next = (node == last) ? NULL : node->next;
+				free(c->data);
 				free(c);
-				if (node == last) {
-					break;
-				}
 				node = next;
 			}
 
@@ -423,6 +497,169 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 			/* Transfer memory ownership to the free list */
 			mem_add_atomic(free_list_mem_counter, total_reaped_size);
 			list_bulk_move_tail(free_list, first, last);
+		}
+	}
+}
+
+/**
+ * @brief   Initiate or poll the flush of a single chunk.
+ *
+ * If the chunk is NEEDED, calls ops->flush() and transitions it to
+ * IN_FLIGHT. Then polls ops->is_done(); if done, transitions to DONE
+ * and decrements num_full_unflushed_chunks.
+ *
+ * Reads the actual trade count from @chunk->write_idx so it works
+ * correctly for both full non-tail chunks (write_idx == trades_per_chunk)
+ * and partial tail chunks (write_idx < trades_per_chunk).
+ *
+ * @param   buf:   Owning buffer (for context and counters).
+ * @param   chunk: Target chunk; flush_state must be NEEDED or IN_FLIGHT.
+ * @param   ops:   Flush callback operations.
+ *
+ * @return  1 if the chunk transitioned to DONE, 0 if still in progress.
+ */
+static int flush_complete_chunk(struct trade_data_buffer *buf,
+	struct trade_data_chunk *chunk,
+	const struct trcache_trade_flush_ops *ops)
+{
+	if (atomic_load_explicit(&chunk->flush_state, memory_order_acquire)
+			== TRADE_CHUNK_FLUSH_NEEDED) {
+		/*
+		 * flush() has not been called yet. Read write_idx for the
+		 * actual count; for completed non-tail chunks this equals
+		 * trades_per_chunk, for a partial tail it is the real count.
+		 */
+		int num_trades = atomic_load_explicit(
+			&chunk->write_idx, memory_order_acquire);
+
+		ops->flush(buf->trc, buf->symbol_id,
+			chunk->data, num_trades, ops->ctx);
+
+		atomic_store_explicit(&chunk->flush_state,
+			TRADE_CHUNK_FLUSH_IN_FLIGHT, memory_order_release);
+	}
+
+	/* flush() was already called; poll for completion. */
+	if (!ops->is_done(buf->trc, chunk->data, ops->ctx)) {
+		return 0;
+	}
+
+	atomic_store_explicit(&chunk->flush_state,
+		TRADE_CHUNK_FLUSH_DONE, memory_order_release);
+	atomic_fetch_sub_explicit(&buf->num_full_unflushed_chunks,
+		1, memory_order_release);
+	return 1;
+}
+
+/**
+ * @brief   Flush full trade chunks using the provided flush callbacks.
+ *
+ * Iterates all chunks ahead of the current tail. For each chunk in the
+ * NEEDED or IN_FLIGHT state, drives the flush via flush_complete_chunk().
+ * The active tail chunk is never touched here; use
+ * trade_data_buffer_finalize() to flush it during shutdown.
+ *
+ * @param   buf:  Buffer whose chunks to flush.
+ * @param   ops:  Trade flush callback operations.
+ *
+ * @return  Number of chunks whose flush completed in this call.
+ */
+int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
+	const struct trcache_trade_flush_ops *ops)
+{
+	struct trade_data_chunk *tail, *chunk;
+	struct list_head *node;
+	int completed = 0;
+
+	if (buf == NULL || ops == NULL || ops->flush == NULL) {
+		return 0;
+	}
+
+	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+
+	node = list_get_first(&buf->chunk_list);
+	while (node != &buf->chunk_list) {
+		chunk = __get_trd_chunk_ptr(node);
+		node = node->next;
+
+		/* Never touch the active tail chunk. */
+		if (chunk == tail) {
+			break;
+		}
+
+		int state = atomic_load_explicit(&chunk->flush_state,
+			memory_order_acquire);
+		if (state == TRADE_CHUNK_FLUSH_NEEDED ||
+				state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
+			completed += flush_complete_chunk(buf, chunk, ops);
+		}
+	}
+
+	return completed;
+}
+
+/**
+ * @brief   Flush all remaining trade chunks, including any partial tail.
+ *
+ * Intended for use during trcache_destroy(). Marks the current tail chunk
+ * as needing a flush if it contains any data, then busy-polls until all
+ * chunks (full and partial) have completed their flush.
+ *
+ * The tail chunk is handled directly here because
+ * trade_data_buffer_flush_full_chunks() deliberately skips it during
+ * normal operation (the producer may still be writing to it).
+ *
+ * @param   buf:  Buffer to finalize.
+ * @param   ops:  Trade flush callback operations.
+ */
+void trade_data_buffer_finalize(struct trade_data_buffer *buf,
+	const struct trcache_trade_flush_ops *ops)
+{
+	struct trade_data_chunk *tail;
+	int write_idx;
+
+	if (buf == NULL || ops == NULL || ops->flush == NULL) {
+		return;
+	}
+
+	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+	write_idx = atomic_load_explicit(&tail->write_idx,
+		memory_order_acquire);
+
+	/*
+	 * If the tail contains data that has not yet been marked for flush,
+	 * mark it now. write_idx is intentionally NOT overridden so that
+	 * flush_complete_chunk() passes the real trade count to the callback.
+	 * The producer has already stopped (destroy path), so write_idx is
+	 * stable and this write is race-free.
+	 */
+	if (write_idx > 0 &&
+			atomic_load_explicit(&tail->flush_state,
+				memory_order_acquire)
+			== TRADE_CHUNK_FLUSH_NOT_READY) {
+		atomic_store_explicit(&tail->flush_state,
+			TRADE_CHUNK_FLUSH_NEEDED, memory_order_release);
+		atomic_fetch_add_explicit(&buf->num_full_unflushed_chunks,
+			1, memory_order_release);
+	}
+
+	/*
+	 * Busy-poll until every chunk is flushed. Non-tail chunks are
+	 * handled by flush_full_chunks(); the tail is handled directly here
+	 * because flush_full_chunks() always skips it.
+	 *
+	 * In the destroy path there is no concurrent producer, so this loop
+	 * always terminates.
+	 */
+	while (atomic_load_explicit(&buf->num_full_unflushed_chunks,
+			memory_order_acquire) > 0) {
+		trade_data_buffer_flush_full_chunks(buf, ops);
+
+		int tail_state = atomic_load_explicit(&tail->flush_state,
+			memory_order_acquire);
+		if (tail_state == TRADE_CHUNK_FLUSH_NEEDED ||
+				tail_state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
+			flush_complete_chunk(buf, tail, ops);
 		}
 	}
 }

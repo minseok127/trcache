@@ -302,15 +302,6 @@ static bool candle_update_time_##SUFFIX(struct trcache_candle_base *c, \
 DEFINE_TIME_UPDATE_FUNC(1min, ONE_MINUTE_MS)
 
 
-/**
- * @brief No-op flush function for the benchmark.
- */
-static void* sync_flush_noop(struct trcache *cache,
-	struct trcache_candle_batch *batch, void *ctx)
-{
-	(void)cache; (void)batch; (void)ctx;
-	return NULL;
-}
 
 /*
  * ====================================================================
@@ -548,10 +539,8 @@ static int initialize_trcache(void)
 		[0] = { .init = candle_init_tick, .update = candle_update_tick_3 },
 		[1] = { .init = candle_init_time, .update = candle_update_time_1min }
 	};
-	/* Define the shared no-op flush_ops */
-	const struct trcache_batch_flush_ops g_flush_ops = {
-		.flush = sync_flush_noop
-	};
+	/* flush_ops all-NULL: candle batch flushing disabled in benchmark */
+	const struct trcache_batch_flush_ops g_flush_ops = {};
 
 	/* Define NUM_FIELDS here for clarity */
 	const int num_fields = sizeof(g_candle_fields)
@@ -584,7 +573,8 @@ static int initialize_trcache(void)
 		.total_memory_limit = 5ULL * 1024 * 1024 * 1024,
 		.num_worker_threads = g_config.num_worker_threads,
 		.max_symbols = NUM_SYMBOLS,
-		.trade_data_size = sizeof(struct trcache_trade_data)
+		.trade_data_size = sizeof(struct trcache_trade_data),
+		/* trade_flush_ops.flush = NULL: trade persistence disabled (stress test) */
 	};
 	g_cache = trcache_init(&ctx);
 	if (g_cache == NULL) {

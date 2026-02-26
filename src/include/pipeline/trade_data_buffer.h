@@ -13,22 +13,40 @@
 #define __cacheline_aligned __attribute__((aligned(64)))
 #endif /* __cacheline_aligned */
 
-/**
- * @brief Number of entries per trade data chunk.
+/*
+ * Alignment requirement for trade chunk data buffers.
  *
- * Can be overridden at compile time.
+ * 4 KiB matches the hardware page size and ensures that data pointers
+ * passed to the flush callback are suitable for DMA transfers.
  */
-#ifndef NUM_TRADE_CHUNK_CAP
-#define NUM_TRADE_CHUNK_CAP (64)
-#endif
+#define TRADE_DATA_BUF_ALIGN (4096)
+
+/*
+ * trade_chunk_flush_state - Lifecycle of a full trade chunk's flush.
+ *
+ * NOT_READY:  The chunk has not yet been filled; no flush is needed.
+ * NEEDED:     The chunk is full and flush() has not been called yet.
+ * IN_FLIGHT:  flush() has been called; is_done() is being polled.
+ * DONE:       The flush has completed (success or error).
+ */
+enum trade_chunk_flush_state {
+	TRADE_CHUNK_FLUSH_NOT_READY = 0,
+	TRADE_CHUNK_FLUSH_NEEDED    = 1,
+	TRADE_CHUNK_FLUSH_IN_FLIGHT = 2,
+	TRADE_CHUNK_FLUSH_DONE      = 3,
+};
 
 /*
  * trade_data_chunk - Single chunk storing multiple trade entries.
  *
  * @list_node:           Linked list node.
- * @write_idx:           Next write index [0..NUM_TRADE_CHUNK_CAP).
+ * @write_idx:           Next write index [0..trades_per_chunk).
+ * @data:                4 KiB-aligned buffer holding the raw trade records.
+ *                       Allocated separately at chunk creation and freed
+ *                       when the chunk itself is freed. Preserved across
+ *                       free-list recycling; never zeroed between reuses.
  * @num_consumed_cursor: Atomic count of totally consumed cursor.
- * @data:                Variable-sized data array (Flexible Array Member).
+ * @flush_state:         Current flush lifecycle state.
  *
  * @note data is copied into the chunk; pointer ownership remains with
  *       the caller.
@@ -37,10 +55,13 @@ struct trade_data_chunk {
 	/*
 	 * Group 1: Producer (Feed Thread) hot data.
 	 * Written when pushing data or reaping chunks.
+	 * data is set once at allocation and preserved for the chunk's
+	 * lifetime, so it lives here alongside write_idx.
 	 */
 	____cacheline_aligned
 	struct list_head list_node;
 	_Atomic(int) write_idx;
+	void *data;
 
 	/*
 	 * Group 2: Consumer (Apply Thread) hot data.
@@ -50,10 +71,11 @@ struct trade_data_chunk {
 	_Atomic(int) num_consumed_cursor;
 
 	/*
-	 * Group 3: Data payload.
+	 * Group 3: Flush Worker exclusive data.
+	 * Written once by the flush worker that owns this symbol.
 	 */
 	____cacheline_aligned
-	uint8_t data[];
+	_Atomic(int) flush_state;
 
 } ____cacheline_aligned;
 
@@ -84,15 +106,23 @@ struct trade_data_buffer_cursor {
 /*
  * trade_data_buffer - Buffer managing a linked list of trade_data_chunk.
  *
- * @chunk_list:          Linked list for chunks.
- * @produced_count:      Number of data items supplied to this buffer.
- * @next_tail_write_idx: Next write_idx of the tail chunk.
- * @num_cursor:          Number of valid cursors.
- * @trc:                 Back-pointer to the main trcache instance.
- * @symbol_id:           Integer symbol ID resolved via symbol table.
- * @chunk_allocation_size: Pre-calculated size of one chunk (struct + data).
- * @memory_usage:        Memory (bytes) of this struct + all *active* chunks.
- * @cursor_arr:          Cursor array (only valid types are initialized).
+ * @chunk_list:               Linked list for chunks.
+ * @produced_count:           Number of data items supplied to this buffer.
+ * @next_tail_write_idx:      Next write_idx of the tail chunk.
+ * @num_cursor:               Number of valid cursors.
+ * @trc:                      Back-pointer to the main trcache instance.
+ * @symbol_id:                Integer symbol ID resolved via symbol table.
+ * @chunk_allocation_size:    Pre-calculated size of one chunk (struct + data).
+ * @memory_usage:             Memory (bytes) of this struct + all *active*
+ *                            chunks.
+ * @num_full_unflushed_chunks: Number of full chunks whose flush has not yet
+ *                            completed. Incremented by the producer when a
+ *                            chunk fills; decremented by the flush worker
+ *                            when flush completes.
+ * @ema_cycles_per_trade_flush: EMA of CPU cycles per completed chunk flush.
+ *                            Written by the flush worker; read by the admin
+ *                            thread for scheduling cost estimation.
+ * @cursor_arr:               Cursor array (only valid types are initialized).
  *
  * @next_tail_write_idx is a cached prediction of the tail chunk's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -128,7 +158,16 @@ struct trade_data_buffer {
 	struct mem_padded_atomic_size memory_usage;
 
 	/*
-	 * Group 4: Consumer (Apply Thread) hot data area.
+	 * Group 4: Flush accounting.
+	 * num_full_unflushed_chunks is written by both the producer and the
+	 * flush worker, so it lives on its own cache line.
+	 */
+	____cacheline_aligned
+	_Atomic(int) num_full_unflushed_chunks;
+	_Atomic(uint64_t) ema_cycles_per_trade_flush;
+
+	/*
+	 * Group 5: Consumer (Apply Thread) hot data area.
 	 * This is an array of aligned cursors. Each cursor is written by
 	 * a different Apply thread.
 	 */
@@ -244,11 +283,52 @@ void trade_data_buffer_consume(struct trade_data_buffer *buf,
  * to move fully consumed chunks to the 'free_list'. If the memory limit is
  * exceeded, it frees the chunks directly instead.
  *
+ * A chunk is eligible for reclamation only when all candle-type cursors have
+ * advanced past it AND, if trade flush is configured, its flush has completed.
+ *
  * @param   buf:                 Buffer to reap the free chunks.
  * @param   free_list:           Linked list pointer holding recycled chunks.
  * @param   thread_id:           The feed thread's unique ID.
+ * @param   flush_enabled:       Non-zero if trade flush ops are configured.
  */
 void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
-	struct list_head *free_list, int thread_id);
+	struct list_head *free_list, int thread_id, int flush_enabled);
+
+/**
+ * @brief   Flush full trade chunks using the provided flush callbacks.
+ *
+ * Iterates all chunks ahead of the current tail. For each chunk in the
+ * NEEDED or IN_FLIGHT state, drives the flush to completion via
+ * flush_complete_chunk(). Completed chunks are marked DONE and
+ * num_full_unflushed_chunks is decremented.
+ *
+ * The active tail chunk is never touched here; call
+ * trade_data_buffer_finalize() to flush it during shutdown.
+ *
+ * Must be called only by the flush worker that holds trade-flush ownership
+ * for this buffer's symbol.
+ *
+ * @param   buf:  Buffer whose chunks to flush.
+ * @param   ops:  Trade flush callback operations.
+ *
+ * @return  Number of chunks whose flush completed in this call.
+ */
+int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
+	const struct trcache_trade_flush_ops *ops);
+
+/**
+ * @brief   Flush all remaining trade chunks, including any partial tail.
+ *
+ * Intended for use during trcache_destroy(). Marks the current tail chunk
+ * as needing a flush if it contains any data, then busy-polls until all
+ * chunks (full and partial) have completed their flush. The tail is
+ * handled directly here because trade_data_buffer_flush_full_chunks()
+ * deliberately skips it during normal operation.
+ *
+ * @param   buf:  Buffer to finalize.
+ * @param   ops:  Trade flush callback operations.
+ */
+void trade_data_buffer_finalize(struct trade_data_buffer *buf,
+	const struct trcache_trade_flush_ops *ops);
 
 #endif /* TRADE_DATA_BUFFER_H */

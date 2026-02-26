@@ -54,8 +54,9 @@ int admin_state_init(struct trcache *tc)
 {
 	struct admin_state *state;
 	size_t num_tasks, snaps_size, rates_size, costs_size;
-	size_t num_workers, in_mem_words, flush_words;
+	size_t num_workers, in_mem_words, flush_words, trade_flush_words;
 	size_t im_bitmap_alloc_size, flush_bitmap_alloc_size;
+	size_t trade_flush_bitmap_alloc_size;
 
 	if (!tc) {
 		errmsg(stderr, "Invalid trcache pointer\n");
@@ -74,9 +75,15 @@ int admin_state_init(struct trcache *tc)
 	state->stage_snaps = calloc(1, snaps_size);
 	state->stage_rates = calloc(1, rates_size);
 	state->task_costs = calloc(1, costs_size);
+	state->trade_chunk_fill_rates =
+		calloc((size_t)tc->max_symbols, sizeof(uint64_t));
+	state->trade_fill_timestamps =
+		calloc((size_t)tc->max_symbols, sizeof(uint64_t));
 
 	if (state->stage_snaps == NULL || state->stage_rates == NULL ||
-		state->task_costs == NULL) {
+		state->task_costs == NULL ||
+		state->trade_chunk_fill_rates == NULL ||
+		state->trade_fill_timestamps == NULL) {
 		errmsg(stderr, "Admin statistics array allocation failed\n");
 		goto cleanup_stats;
 	}
@@ -90,24 +97,37 @@ int admin_state_init(struct trcache *tc)
 	num_workers = (size_t)tc->num_workers;
 	in_mem_words = get_bitmap_bytes(num_tasks * 2) / 8;
 	flush_words = get_bitmap_bytes(num_tasks) / 8;
+	/* One bit per symbol (not per candle-type × symbol). */
+	trade_flush_words = get_bitmap_bytes(tc->max_symbols) / 8;
 
 	state->in_mem_words_per_worker = in_mem_words;
 	state->flush_words_per_worker = flush_words;
+	state->trade_flush_words_per_worker = trade_flush_words;
 
 	im_bitmap_alloc_size = num_workers * in_mem_words * sizeof(uint64_t);
 	flush_bitmap_alloc_size = num_workers * flush_words * sizeof(uint64_t);
+	trade_flush_bitmap_alloc_size =
+		num_workers * trade_flush_words * sizeof(uint64_t);
 
 	state->next_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(im_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->next_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(flush_bitmap_alloc_size, CACHE_LINE_SIZE));
+	state->next_trade_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(trade_flush_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->current_im_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(im_bitmap_alloc_size, CACHE_LINE_SIZE));
 	state->current_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(flush_bitmap_alloc_size, CACHE_LINE_SIZE));
-	
-	if (state->next_im_bitmaps == NULL || state->next_flush_bitmaps == NULL ||
-		state->current_im_bitmaps == NULL || state->current_flush_bitmaps == NULL)
+	state->current_trade_flush_bitmaps = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(trade_flush_bitmap_alloc_size, CACHE_LINE_SIZE));
+
+	if (state->next_im_bitmaps == NULL ||
+		state->next_flush_bitmaps == NULL ||
+		state->next_trade_flush_bitmaps == NULL ||
+		state->current_im_bitmaps == NULL ||
+		state->current_flush_bitmaps == NULL ||
+		state->current_trade_flush_bitmaps == NULL)
 	{
 		errmsg(stderr, "Admin bitmap buffer allocation failed\n");
 		goto cleanup_bitmaps;
@@ -115,21 +135,29 @@ int admin_state_init(struct trcache *tc)
 
 	memset(state->next_im_bitmaps, 0, im_bitmap_alloc_size);
 	memset(state->next_flush_bitmaps, 0, flush_bitmap_alloc_size);
+	memset(state->next_trade_flush_bitmaps, 0,
+		trade_flush_bitmap_alloc_size);
 	memset(state->current_im_bitmaps, 0, im_bitmap_alloc_size);
 	memset(state->current_flush_bitmaps, 0, flush_bitmap_alloc_size);
+	memset(state->current_trade_flush_bitmaps, 0,
+		trade_flush_bitmap_alloc_size);
 
 	return 0;
 
 cleanup_bitmaps:
 	free(state->next_im_bitmaps);
 	free(state->next_flush_bitmaps);
+	free(state->next_trade_flush_bitmaps);
 	free(state->current_im_bitmaps);
 	free(state->current_flush_bitmaps);
+	free(state->current_trade_flush_bitmaps);
 
 cleanup_stats:
 	free(state->stage_snaps);
 	free(state->stage_rates);
 	free(state->task_costs);
+	free(state->trade_chunk_fill_rates);
+	free(state->trade_fill_timestamps);
 
 	return -1;
 }
@@ -149,12 +177,16 @@ void admin_state_destroy(struct admin_state *state)
 	free(state->stage_snaps);
 	free(state->stage_rates);
 	free(state->task_costs);
+	free(state->trade_chunk_fill_rates);
+	free(state->trade_fill_timestamps);
 
 	/* Free the dynamically allocated bitmap buffers */
 	free(state->next_im_bitmaps);
 	free(state->next_flush_bitmaps);
+	free(state->next_trade_flush_bitmaps);
 	free(state->current_im_bitmaps);
 	free(state->current_flush_bitmaps);
+	free(state->current_trade_flush_bitmaps);
 }
 
 #define RATE_EMA_SHIFT (2)     /* 2^2 = 4 */
@@ -198,12 +230,24 @@ static void snapshot_stage(struct symbol_entry *entry, int candle_idx,
 		return;
 	}
 
+	/*
+	 * produced_seq: cumulative number of trades pushed by the feed thread.
+	 * Used as the APPLY demand signal — the diff between two snapshots
+	 * gives how many trades arrived and need processing.
+	 */
 	stage->produced_seq = entry->trd_buf->produced_count;
 
-	mutable_seq = atomic_load_explicit(&list->mutable_seq, 
+	/*
+	 * mutable_seq: the *next* candle slot to be written.
+	 * The last *completed* candle is therefore (mutable_seq - 1).
+	 * UINT64_MAX is a sentinel meaning no candle has been completed yet
+	 * (initial state before the first candle closes).
+	 */
+	mutable_seq = atomic_load_explicit(&list->mutable_seq,
 		memory_order_acquire);
 
 	if (mutable_seq == UINT64_MAX) {
+		/* Sentinel: no completed candle yet */
 		stage->completed_seq = UINT64_MAX;
 	} else if (mutable_seq == 0) {
 		stage->completed_seq = 0;
@@ -211,6 +255,11 @@ static void snapshot_stage(struct symbol_entry *entry, int candle_idx,
 		stage->completed_seq = mutable_seq - 1;
 	}
 
+	/*
+	 * unflushed_batch_count: batches that have been CONVERT-completed
+	 * but not yet delivered to the user flush callback.
+	 * Used as the FLUSH demand signal.
+	 */
 	stage->unflushed_batch_count = atomic_load_explicit(
 		&list->unflushed_batch_count, memory_order_acquire);
 }
@@ -229,9 +278,14 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	const struct sched_stage_snapshot *oldc, uint64_t dt_ns,
 	struct trcache *cache)
 {
+	/*
+	 * __uint128_t is used to avoid overflow when multiplying by 1e9.
+	 * For high-frequency symbols, diff can be large enough that
+	 * diff * 1,000,000,000 exceeds 2^64, causing silent truncation.
+	 */
 	__uint128_t tmp;
 	uint64_t diff;
-	
+
 	/*
 	 * If no time passed, or this is the first sample,
 	 * skip the update. The EMA will just keep its previous value.
@@ -241,7 +295,9 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	}
 
 	/*
-	 * Calculate the rate of trades/sec (input to APPLY).
+	 * produced_rate: APPLY demand signal (trades/sec).
+	 * Measures how fast the feed thread is producing trades that need
+	 * to be applied to the in-memory candle pipeline.
 	 */
 	diff = newc->produced_seq - oldc->produced_seq;
 	tmp = (__uint128_t)diff * 1000000000ull;
@@ -249,7 +305,10 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	r->produced_rate = ema_update_u64(r->produced_rate, (uint64_t)tmp);
 
 	/*
-	 * Calculate the rate of completed candles/sec (input to CONVERT).
+	 * completed_rate: CONVERT demand signal (candles/sec).
+	 * When old completed_seq is UINT64_MAX (initial sentinel), treat
+	 * it as -1 so the first real value gives the correct delta
+	 * (newc->completed_seq + 1 candles completed in this interval).
 	 */
 	if (oldc->completed_seq == UINT64_MAX) {
 		diff = (newc->completed_seq == UINT64_MAX) ?
@@ -262,7 +321,10 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	r->completed_rate = ema_update_u64(r->completed_rate, (uint64_t)tmp);
 
 	/*
-	 * Calculate the rate of batches becoming flushable (input to FLUSH).
+	 * flushable_batch_rate: FLUSH demand signal.
+	 * When the unflushed count is at or below the threshold, the rate
+	 * is forced to 0 — there is no urgency to flush yet, and assigning
+	 * workers would waste bandwidth on sub-threshold work.
 	 */
 	if (newc->unflushed_batch_count > cache->flush_threshold) {
 		diff = newc->unflushed_batch_count;
@@ -276,10 +338,59 @@ static void update_stage_rate(struct sched_stage_rate *r,
 }
 
 /**
+ * @brief   Update per-symbol trade chunk fill rates.
+ *
+ * Tracks how many fully-filled unflushed trade chunks each symbol
+ * accumulates per second. This is intentionally kept in dedicated arrays
+ * (separate from stage_snaps/stage_rates) because trade flush is
+ * per-symbol only and has no candle-type dimension — mixing the two
+ * would conflate orthogonal indexing schemes.
+ *
+ * Mirrors the flushable_batch_rate method: unflushed count / elapsed
+ * time gives chunks/sec, fed into an EMA for smoothing.
+ *
+ * @param   cache:       Global cache instance.
+ * @param   admin:       Admin state containing fill-rate arrays.
+ * @param   num_symbols: Current number of registered symbols.
+ * @param   now_ns:      Current timestamp in nanoseconds.
+ */
+static void update_trade_chunk_fill_rates(struct trcache *cache,
+	struct admin_state *admin, int num_symbols, uint64_t now_ns)
+{
+	struct symbol_table *table = cache->symbol_table;
+
+	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+		struct trade_data_buffer *tdb =
+			table->symbol_entries[sym_idx].trd_buf;
+		uint64_t last_ts = admin->trade_fill_timestamps[sym_idx];
+		uint64_t dt_ns = (last_ts == 0) ? 0 : (now_ns - last_ts);
+		__uint128_t tmp;
+		int unflushed;
+
+		admin->trade_fill_timestamps[sym_idx] = now_ns;
+
+		if (dt_ns == 0 || tdb == NULL) {
+			continue;
+		}
+
+		unflushed = atomic_load_explicit(
+			&tdb->num_full_unflushed_chunks,
+			memory_order_acquire);
+		tmp = (__uint128_t)(unflushed > 0 ? (uint64_t)unflushed : 0)
+			* 1000000000ull;
+		tmp /= dt_ns;
+		admin->trade_chunk_fill_rates[sym_idx] =
+			ema_update_u64(admin->trade_chunk_fill_rates[sym_idx],
+				(uint64_t)tmp);
+	}
+}
+
+/**
  * @brief   Refresh pipeline statistics for all symbols.
  *
- * This function polls all symbol entries and updates the admin-thread-local
- * statistics arrays in 'admin_state'.
+ * Updates the admin-thread-local statistics arrays in 'admin_state':
+ *   1. Candle pipeline snapshots and throughput rates (type × symbol).
+ *   2. Trade chunk fill rates (symbol only, when trade flush is enabled).
  *
  * @param   cache:  Global cache instance.
  */
@@ -289,27 +400,28 @@ void update_all_pipeline_stats(struct trcache *cache)
 	struct admin_state *admin = &cache->admin_state;
 	int num_symbols = atomic_load_explicit((int*)&table->num_symbols,
 		memory_order_acquire);
-	
+
 	uint64_t now_ns = tsc_cycles_to_ns(tsc_cycles());
 
 	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
 		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
 			struct symbol_entry *entry = &table->symbol_entries[sym_idx];
-			
+
 			/* Calculate index in the 1D admin-local arrays */
 			size_t idx = (size_t)type_idx * (size_t)table->capacity +
 				(size_t)sym_idx;
-			
+
 			struct sched_stage_snapshot *old_snap = &admin->stage_snaps[idx];
 			struct sched_stage_rate *rate = &admin->stage_rates[idx];
 			struct sched_stage_snapshot new_snap;
-			
+
 			/* 1. Get new snapshot */
 			snapshot_stage(entry, type_idx, &new_snap);
 
 			/*
-			 * 2. Calculate rate
-			 * Check if old snapshot is uninitialized (from calloc or init)
+			 * 2. Calculate rate.
+			 * dt_ns = 0 on the first sample (old_snap is zeroed by calloc
+			 * except completed_seq which is UINT64_MAX from init).
 			 */
 			uint64_t dt_ns = (old_snap->produced_seq == 0 &&
 				old_snap->completed_seq == UINT64_MAX) ?
@@ -321,6 +433,10 @@ void update_all_pipeline_stats(struct trcache *cache)
 			new_snap.timestamp_ns = now_ns;
 			*old_snap = new_snap;
 		}
+	}
+
+	if (cache->trade_flush_ops.flush != NULL) {
+		update_trade_chunk_fill_rates(cache, admin, num_symbols, now_ns);
 	}
 }
 
@@ -375,6 +491,27 @@ static void update_all_task_costs(struct trcache *cache)
 				(cost_flush > 0) ? cost_flush : MIN_COST;
 		}
 	}
+
+	/*
+	 * Trade flush is per-symbol (not per candle-type). Store the cost
+	 * at task_costs[sym_idx] (i.e. type_idx == 0 row).
+	 * Skip when trade flush is not configured or trd_buf is NULL.
+	 */
+	if (cache->trade_flush_ops.flush != NULL) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			struct trade_data_buffer *tdb =
+				table->symbol_entries[sym_idx].trd_buf;
+			if (tdb == NULL) {
+				continue;
+			}
+			double cost_tf = (double)atomic_load_explicit(
+				&tdb->ema_cycles_per_trade_flush,
+				memory_order_acquire);
+
+			admin->task_costs[sym_idx].cost_trade_flush =
+				(cost_tf > 0) ? cost_tf : MIN_COST;
+		}
+	}
 }
 
 /**
@@ -403,7 +540,11 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 			struct sched_stage_rate *demand = &admin->stage_rates[idx];
 			struct admin_task_costs *cost = &admin->task_costs[idx];
 
-			/* Add demand (items per sec) * cost (cycles per item) */
+			/*
+			 * rate (items/sec) × cost (cycles/item) = cycles/sec demand.
+			 * Summing across all symbols gives the total CPU throughput
+			 * each group needs to keep up with the current workload.
+			 */
 			total_im_cycles
 				+= (double)demand->produced_rate * cost->cost_apply;
 			total_im_cycles
@@ -411,6 +552,19 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 			total_flush_cycles
 				+= (double)demand->flushable_batch_rate * cost->cost_flush;
 		}
+	}
+
+	/*
+	 * Add trade flush cycle needs using the rate-based model so that
+	 * the units match the candle-pipeline stages (cycles/sec).
+	 * trade_chunk_fill_rates is a dedicated per-symbol array indexed
+	 * by sym_idx alone; cost_trade_flush sits in the type_idx==0 row
+	 * of task_costs (also sym_idx only).
+	 */
+	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+		total_flush_cycles +=
+			(double)admin->trade_chunk_fill_rates[sym_idx]
+			* admin->task_costs[sym_idx].cost_trade_flush;
 	}
 
 	*out_in_memory_cycles = total_im_cycles;
@@ -436,13 +590,22 @@ static void calculate_worker_group_distribution(int num_workers,
 		*out_num_im_workers = num_workers; /* Default: all to in-memory */
 		*out_num_flush_workers = 0;
 	} else {
+		/*
+		 * Proportional allocation:
+		 *   num_im_workers = ceil(im_cycles / total_cycles × num_workers)
+		 *
+		 * ceil() biases toward the In-Memory group, which is
+		 * latency-sensitive (Apply/Convert touch live candle data).
+		 * Over-allocating one worker to in-memory work is preferable
+		 * to under-allocating and stalling the hot path.
+		 */
 		*out_num_im_workers = (int)ceil(
 			(total_im_cycles / total_cycles) * num_workers);
 		*out_num_flush_workers = num_workers - *out_num_im_workers;
 
 		/*
-		 * Ensure flush always gets at least one worker if it has work,
-		 * and In-Memory always gets one if it has work.
+		 * Guarantee at least 1 worker per active group so that no
+		 * pipeline starves even under extreme workload imbalance.
 		 */
 		if (total_flush_cycles > 0 && *out_num_flush_workers == 0 &&
 				*out_num_im_workers > 0) {
@@ -485,8 +648,10 @@ static void assign_task_to_budget_group(struct budget_assign_state *state,
 	}
 
 	/*
-	 * Check if budget is exceeded AND we can move to a new worker.
-	 * (The last worker in the group takes all remaining tasks)
+	 * Advance to the next worker when the current budget is exhausted,
+	 * but only if there is another worker available in the group.
+	 * The last worker absorbs all remaining tasks regardless of budget —
+	 * every task must be assigned to someone, and we must not drop work.
 	 */
 	int max_worker_idx_in_group = state->start_worker_idx +
 		state->num_workers_in_group - 1;
@@ -494,7 +659,6 @@ static void assign_task_to_budget_group(struct budget_assign_state *state,
 	if (state->current_budget < task_cost &&
 		state->current_worker_idx < max_worker_idx_in_group)
 	{
-		/* Move to next worker */
 		state->current_worker_idx++;
 		state->current_budget = state->budget_per_worker;
 	}
@@ -502,9 +666,101 @@ static void assign_task_to_budget_group(struct budget_assign_state *state,
 	/* Assign task to the current worker's bitmap */
 	uint64_t *worker_bitmap_start = local_bitmaps_all +
 		(state->current_worker_idx * words_per_bitmap);
-	
+
 	set_bitmap_bit(worker_bitmap_start, bit_index);
 	state->current_budget -= task_cost;
+}
+
+/**
+ * @brief   Assign Apply/Convert/Flush tasks for all candle pipelines.
+ *
+ * Iterates (type → symbol) for cache locality and distributes each of
+ * the three candle-pipeline tasks across the appropriate budget group.
+ *
+ * @param   cache:       Global cache instance.
+ * @param   admin:       Admin state containing demand and cost stats.
+ * @param   symtab:      Symbol table.
+ * @param   im_state:    Mutable budget state for the In-Memory group.
+ * @param   flush_state: Mutable budget state for the Flush group.
+ */
+static void assign_candle_tasks(struct trcache *cache,
+	struct admin_state *admin, struct symbol_table *symtab,
+	struct budget_assign_state *im_state,
+	struct budget_assign_state *flush_state)
+{
+	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
+		memory_order_acquire);
+	int max_syms = symtab->capacity;
+	size_t in_mem_words = admin->in_mem_words_per_worker;
+	size_t flush_words = admin->flush_words_per_worker;
+
+	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
+		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+			size_t task_idx = (size_t)type_idx * (size_t)max_syms +
+				(size_t)sym_idx;
+			struct sched_stage_rate *demand = &admin->stage_rates[task_idx];
+			struct admin_task_costs *cost = &admin->task_costs[task_idx];
+
+			/* Assign In-Memory (Apply) */
+			double apply_task_cost =
+				(double)demand->produced_rate * cost->cost_apply;
+			assign_task_to_budget_group(im_state, apply_task_cost,
+				admin->next_im_bitmaps, in_mem_words, (task_idx * 2));
+
+			/* Assign In-Memory (Convert) */
+			double convert_task_cost =
+				(double)demand->completed_rate * cost->cost_convert;
+			assign_task_to_budget_group(im_state, convert_task_cost,
+				admin->next_im_bitmaps, in_mem_words, (task_idx * 2) + 1);
+
+			/* Assign Flush (candle) */
+			double flush_task_cost =
+				(double)demand->flushable_batch_rate * cost->cost_flush;
+			assign_task_to_budget_group(flush_state, flush_task_cost,
+				admin->next_flush_bitmaps, flush_words, task_idx);
+		}
+	}
+}
+
+/**
+ * @brief   Assign trade-chunk flush tasks for all symbols.
+ *
+ * One bit per symbol (independent of candle type). Uses the same
+ * flush_state budget so candle flush and trade flush work are balanced
+ * across the same flush workers.
+ *
+ * Bits are assigned based on EMA fill rate alone, consistent with how
+ * Apply/Convert/Flush tasks are assigned. This keeps bitmap assignments
+ * stable across admin cycles and lets the EMA decay naturally after a
+ * burst rather than toggling bits on every cycle.
+ * trade_data_buffer_flush_full_chunks() handles the empty case
+ * gracefully with an immediate return when no full chunks exist.
+ *
+ * @param   admin:       Admin state containing fill-rate and cost arrays.
+ * @param   symtab:      Symbol table.
+ * @param   flush_state: Mutable budget state for the Flush group.
+ */
+static void assign_trade_flush_tasks(struct admin_state *admin,
+	struct symbol_table *symtab,
+	struct budget_assign_state *flush_state)
+{
+	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
+		memory_order_acquire);
+	size_t trade_flush_words = admin->trade_flush_words_per_worker;
+
+	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
+		struct trade_data_buffer *tdb =
+			symtab->symbol_entries[sym_idx].trd_buf;
+		if (tdb == NULL) {
+			continue;
+		}
+		double tf_cost =
+			(double)admin->trade_chunk_fill_rates[sym_idx]
+			* admin->task_costs[sym_idx].cost_trade_flush;
+		assign_task_to_budget_group(flush_state, tf_cost,
+			admin->next_trade_flush_bitmaps, trade_flush_words,
+			sym_idx);
+	}
 }
 
 /**
@@ -522,23 +778,23 @@ static void assign_task_to_budget_group(struct budget_assign_state *state,
  * @param   total_flush_cycles: Total cycle budget for the Flush group.
  */
 static void assign_tasks_to_bitmaps(struct trcache *cache,
-	struct admin_state *admin,	struct symbol_table *symtab,
+	struct admin_state *admin, struct symbol_table *symtab,
 	int num_im_workers, int num_flush_workers,
 	double total_im_cycles, double total_flush_cycles)
 {
-	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
-		memory_order_acquire);
-	int max_syms = symtab->capacity;
 	size_t in_mem_words = admin->in_mem_words_per_worker;
 	size_t flush_words = admin->flush_words_per_worker;
-	
+	size_t trade_flush_words = admin->trade_flush_words_per_worker;
+
 	/* Clear the 'next' buffers for recalculation */
 	memset(admin->next_im_bitmaps, 0,
 		cache->num_workers * in_mem_words * sizeof(uint64_t));
 	memset(admin->next_flush_bitmaps, 0,
 		cache->num_workers * flush_words * sizeof(uint64_t));
+	memset(admin->next_trade_flush_bitmaps, 0,
+		cache->num_workers * trade_flush_words * sizeof(uint64_t));
 
-	/* Initialize state for the In-Memory group */
+	/* Initialize budget state for the In-Memory group (workers 0..num_im-1) */
 	struct budget_assign_state im_state = {
 		.budget_per_worker = (num_im_workers > 0) ?
 			total_im_cycles / num_im_workers : 0,
@@ -548,7 +804,7 @@ static void assign_tasks_to_bitmaps(struct trcache *cache,
 	};
 	im_state.current_budget = im_state.budget_per_worker;
 
-	/* Initialize state for the Flush group */
+	/* Initialize budget state for the Flush group (workers num_im..end) */
 	struct budget_assign_state flush_state = {
 		.budget_per_worker = (num_flush_workers > 0) ?
 			total_flush_cycles / num_flush_workers : 0,
@@ -557,33 +813,11 @@ static void assign_tasks_to_bitmaps(struct trcache *cache,
 		.start_worker_idx = num_im_workers
 	};
 	flush_state.current_budget = flush_state.budget_per_worker;
-	
-	/* Main assignment loop: (Type -> Symbol) for cache locality */
-	for (int type_idx = 0; type_idx < cache->num_candle_configs; type_idx++) {
-		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
-			size_t task_idx = (size_t)type_idx * (size_t)max_syms +
-				(size_t)sym_idx;
-			struct sched_stage_rate *demand = &admin->stage_rates[task_idx];
-			struct admin_task_costs *cost = &admin->task_costs[task_idx];
-			
-			/* Assign In-Memory (Apply) */
-			double apply_task_cost
-				= (double)demand->produced_rate * cost->cost_apply;
-			assign_task_to_budget_group(&im_state, apply_task_cost,
-				admin->next_im_bitmaps, in_mem_words, (task_idx * 2));
 
-			/* Assign In-Memory (Convert) */
-			double convert_task_cost
-				= (double)demand->completed_rate * cost->cost_convert;
-			assign_task_to_budget_group(&im_state, convert_task_cost,
-				admin->next_im_bitmaps, in_mem_words, (task_idx * 2) + 1);
+	assign_candle_tasks(cache, admin, symtab, &im_state, &flush_state);
 
-			/* Assign Flush */
-			double flush_task_cost
-				= (double)demand->flushable_batch_rate * cost->cost_flush;
-			assign_task_to_budget_group(&flush_state, flush_task_cost,
-				admin->next_flush_bitmaps, flush_words, task_idx);
-		}
+	if (cache->trade_flush_ops.flush != NULL) {
+		assign_trade_flush_tasks(admin, symtab, &flush_state);
 	}
 }
 
@@ -600,12 +834,14 @@ static void publish_new_assignments_to_workers(struct trcache *cache,
 {
 	size_t in_mem_bytes = admin->in_mem_words_per_worker * sizeof(uint64_t);
 	size_t flush_bytes = admin->flush_words_per_worker * sizeof(uint64_t);
+	size_t tf_bytes =
+		admin->trade_flush_words_per_worker * sizeof(uint64_t);
 
 	for (int i = 0; i < cache->num_workers; i++) {
 		struct worker_state *state = &cache->worker_state_arr[i];
 		int old_group = atomic_load_explicit(&state->group_id,
 			memory_order_acquire);
-		
+
 		if (i < num_im_workers) {
 			/* This is an In-Memory worker */
 			int new_group = GROUP_IN_MEMORY;
@@ -614,19 +850,33 @@ static void publish_new_assignments_to_workers(struct trcache *cache,
 			uint64_t *current_bitmap = admin->current_im_bitmaps +
 				(i * admin->in_mem_words_per_worker);
 
-			/* Check if group or bitmap content has changed */
+			/*
+			 * memcmp detects whether the assignment actually changed;
+			 * only then do we pay the cost of memcpy to the worker.
+			 * This avoids false cache-line invalidations on the hot
+			 * worker path when the assignment is stable.
+			 */
 			if (old_group != new_group ||
 				memcmp(next_bitmap, current_bitmap, in_mem_bytes) != 0)
 			{
 				atomic_store_explicit(&state->group_id, new_group,
 					memory_order_release);
 				memcpy(state->in_memory_bitmap, next_bitmap, in_mem_bytes);
+				/*
+				 * Clear the opposite-group bitmaps to prevent stale bits
+				 * from a previous group assignment from being acted upon.
+				 * A worker checks its active bitmap every iteration, so
+				 * any residual non-zero bits would cause spurious work.
+				 */
 				memset(state->flush_bitmap, 0, flush_bytes);
-				
-				/* Save copy of new bitmap */
+				memset(state->trade_flush_bitmap, 0, tf_bytes);
+
+				/* Save copy of new bitmaps for next-cycle comparison */
 				memcpy(current_bitmap, next_bitmap, in_mem_bytes);
 				memset(admin->current_flush_bitmaps +
 					(i * admin->flush_words_per_worker), 0, flush_bytes);
+				memset(admin->current_trade_flush_bitmaps +
+					(i * admin->trade_flush_words_per_worker), 0, tf_bytes);
 			}
 
 		} else {
@@ -636,18 +886,32 @@ static void publish_new_assignments_to_workers(struct trcache *cache,
 				(i * admin->flush_words_per_worker);
 			uint64_t *current_bitmap = admin->current_flush_bitmaps +
 				(i * admin->flush_words_per_worker);
+			uint64_t *next_tf_bitmap = admin->next_trade_flush_bitmaps +
+				(i * admin->trade_flush_words_per_worker);
+			uint64_t *current_tf_bitmap =
+				admin->current_trade_flush_bitmaps +
+				(i * admin->trade_flush_words_per_worker);
 
-			/* Check if group or bitmap content has changed */
-			if (old_group != new_group ||
-				memcmp(next_bitmap, current_bitmap, flush_bytes) != 0)
-			{
+			/*
+			 * Both candle-flush and trade-flush bitmaps must be checked;
+			 * either changing triggers a full update to keep the two
+			 * bitmaps consistent with each other on the worker side.
+			 */
+			bool changed = (old_group != new_group) ||
+				memcmp(next_bitmap, current_bitmap, flush_bytes) != 0 ||
+				memcmp(next_tf_bitmap, current_tf_bitmap, tf_bytes) != 0;
+
+			if (changed) {
 				atomic_store_explicit(&state->group_id, new_group,
 					memory_order_release);
 				memcpy(state->flush_bitmap, next_bitmap, flush_bytes);
+				memcpy(state->trade_flush_bitmap, next_tf_bitmap, tf_bytes);
+				/* Clear opposite-group bitmap to remove stale bits */
 				memset(state->in_memory_bitmap, 0, in_mem_bytes);
 
-				/* Save copy of new bitmap */
+				/* Save copy of new bitmaps for next-cycle comparison */
 				memcpy(current_bitmap, next_bitmap, flush_bytes);
+				memcpy(current_tf_bitmap, next_tf_bitmap, tf_bytes);
 				memset(admin->current_im_bitmaps +
 					(i * admin->in_mem_words_per_worker), 0, in_mem_bytes);
 			}

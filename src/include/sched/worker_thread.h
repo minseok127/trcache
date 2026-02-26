@@ -20,13 +20,15 @@ enum worker_group_type {
 /**
  * worker_state - Per-worker runtime data.
  *
- * @worker_id:         Numeric ID assigned to the worker thread.
- * @done:              Flag signalled during shutdown.
- * @group_id:          Identifier for the worker's current assigned group.
- * @in_memory_bitmap:  Pointer to the cacheline-aligned bitmap for
- *                     Apply/Convert tasks.
- * @flush_bitmap:      Pointer to the cacheline-aligned bitmap for
- *                     Flush tasks.
+ * @worker_id:           Numeric ID assigned to the worker thread.
+ * @done:                Flag signalled during shutdown.
+ * @group_id:            Identifier for the worker's current assigned group.
+ * @in_memory_bitmap:    Pointer to the cacheline-aligned bitmap for
+ *                       Apply/Convert tasks.
+ * @flush_bitmap:        Pointer to the cacheline-aligned bitmap for
+ *                       candle batch Flush tasks.
+ * @trade_flush_bitmap:  Pointer to the cacheline-aligned bitmap for
+ *                       raw trade chunk Flush tasks.
  */
 struct worker_state {
 	int worker_id;
@@ -34,6 +36,7 @@ struct worker_state {
 	_Atomic(int) group_id;
 	uint64_t *in_memory_bitmap;
 	uint64_t *flush_bitmap;
+	uint64_t *trade_flush_bitmap;
 };
 
 /**

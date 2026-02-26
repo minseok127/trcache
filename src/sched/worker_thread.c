@@ -166,6 +166,25 @@ static void worker_do_flush(struct symbol_entry *entry, int candle_idx)
 }
 
 /**
+ * @brief   Flush raw trade chunks for one symbol (TRADE FLUSH stage).
+ *
+ * @param   cache: The main trcache instance.
+ * @param   entry: Target symbol entry.
+ */
+static void worker_do_trade_flush(struct trcache *cache,
+	struct symbol_entry *entry)
+{
+	uint64_t start_cycles = tsc_cycles();
+	int completed = trade_data_buffer_flush_full_chunks(
+		entry->trd_buf, &cache->trade_flush_ops);
+
+	if (completed > 0) {
+		update_ema_cycles(&entry->trd_buf->ema_cycles_per_trade_flush,
+			tsc_cycles() - start_cycles, (uint64_t)completed);
+	}
+}
+
+/**
  * @brief   Initialise the worker thread state.
  *
  * @param   tc:        Owner of the admin state.
@@ -178,6 +197,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	struct worker_state *state;
 	int num_tasks;
 	size_t in_memory_bitmap_bytes, flush_bitmap_bytes;
+	size_t trade_flush_bitmap_bytes;
 
 	if (!tc) {
 		errmsg(stderr, "Invalid trcache pointer\n");
@@ -192,11 +212,13 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	 * Calculate bitmap sizes.
 	 * Total tasks = num_candle_types * max_symbols
 	 * In-memory bitmap needs 2 bits per task (Apply, Convert).
-	 * Flush bitmap needs 1 bit per task (Flush).
+	 * Flush bitmap needs 1 bit per task (candle batch Flush).
+	 * Trade flush bitmap needs 1 bit per symbol (trade chunk Flush).
 	 */
 	num_tasks = tc->num_candle_configs * tc->max_symbols;
 	in_memory_bitmap_bytes = get_bitmap_bytes(num_tasks * 2);
 	flush_bitmap_bytes = get_bitmap_bytes(num_tasks);
+	trade_flush_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
 
 	/* Allocate cacheline-aligned bitmaps */
 	state->in_memory_bitmap = aligned_alloc(
@@ -214,9 +236,19 @@ int worker_state_init(struct trcache *tc, int worker_id)
 		return -1;
 	}
 
+	state->trade_flush_bitmap = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(trade_flush_bitmap_bytes, CACHE_LINE_SIZE));
+	if (state->trade_flush_bitmap == NULL) {
+		errmsg(stderr, "trade_flush_bitmap allocation failed\n");
+		free(state->flush_bitmap);
+		free(state->in_memory_bitmap);
+		return -1;
+	}
+
 	/* Clear bitmaps */
 	memset(state->in_memory_bitmap, 0, in_memory_bitmap_bytes);
 	memset(state->flush_bitmap, 0, flush_bitmap_bytes);
+	memset(state->trade_flush_bitmap, 0, trade_flush_bitmap_bytes);
 
 	/* Default to in-memory group */
 	atomic_init(&state->group_id, GROUP_IN_MEMORY);
@@ -238,8 +270,10 @@ void worker_state_destroy(struct worker_state *state)
 	/* Free bitmaps */
 	free(state->in_memory_bitmap);
 	free(state->flush_bitmap);
+	free(state->trade_flush_bitmap);
 	state->in_memory_bitmap = NULL;
 	state->flush_bitmap = NULL;
+	state->trade_flush_bitmap = NULL;
 }
 
 /**
@@ -507,6 +541,110 @@ static bool worker_run_flush_tasks(struct trcache *cache,
 }
 
 /**
+ * @brief   Processes a single 64-bit word from the trade flush bitmap.
+ *
+ * @param   cache:      The main trcache instance.
+ * @param   work_word:  The 64-bit word containing work bits.
+ * @param   word_idx:   The index of this word in the overall bitmap.
+ *
+ * @return  true if any work was successfully claimed and executed,
+ *          false otherwise.
+ */
+static inline bool process_trade_flush_word(struct trcache *cache,
+	uint64_t work_word, int word_idx)
+{
+	struct symbol_table *symtab = cache->symbol_table;
+	int num_symbols = atomic_load_explicit(
+		(int *)&symtab->num_symbols, memory_order_acquire);
+
+	const int taken_value = 1;
+	bool work_done = false;
+
+	while (work_word != 0) {
+		int expected_free = -1;
+		int bit_offset = get_next_bit_offset(work_word);
+		int sym_idx = (word_idx * BITS_PER_WORD) + bit_offset;
+
+		if (sym_idx < num_symbols) {
+			_Atomic(int) *flag =
+				&symtab->trade_flush_ownership_flags[sym_idx];
+
+			/*
+			 * Cheap read first; CAS only when flag appears free.
+			 */
+			if (atomic_load_explicit(flag, memory_order_acquire)
+					== expected_free) {
+				if (atomic_compare_exchange_strong(
+						flag, &expected_free, taken_value)) {
+					struct symbol_entry *entry =
+						&symtab->symbol_entries[sym_idx];
+
+					worker_do_trade_flush(cache, entry);
+
+					atomic_store_explicit(
+						flag, -1, memory_order_release);
+					work_done = true;
+				}
+			}
+		}
+		work_word &= ~(1ULL << bit_offset);
+	}
+	return work_done;
+}
+
+/**
+ * @brief   Scans the trade flush bitmap and executes raw trade chunk
+ *          Flush tasks.
+ *
+ * @param   cache: The main trcache instance.
+ * @param   state: The worker's state.
+ *
+ * @return  true if any work was successfully claimed and executed,
+ *          false otherwise.
+ */
+static bool worker_run_trade_flush_tasks(struct trcache *cache,
+	struct worker_state *state)
+{
+	const int max_syms = cache->symbol_table->capacity;
+	const int num_bits = max_syms;
+	const int total_words = (get_bitmap_bytes(num_bits) / 8);
+
+	bool work_done = false;
+	uint64_t *bitmap = state->trade_flush_bitmap;
+
+	const int words_per_chunk = 4; /* 4 * uint64_t = 32 bytes */
+	const int num_chunks = total_words / words_per_chunk;
+
+	/* Main loop to skip empty 32-byte chunks */
+	for (int i = 0; i < num_chunks; i++) {
+		int base_word_idx = i * words_per_chunk;
+		uint64_t *chunk_ptr = &bitmap[base_word_idx];
+
+		if (memcmp(chunk_ptr, g_zero_chunk_32b, 32) != 0) {
+			for (int j = 0; j < words_per_chunk; j++) {
+				int word_idx = base_word_idx + j;
+				uint64_t work_word = bitmap[word_idx];
+				if (work_word != 0) {
+					work_done |= process_trade_flush_word(
+						cache, work_word, word_idx);
+				}
+			}
+		}
+	}
+
+	/* Handle any remaining words that don't fit in a full chunk */
+	for (int i = num_chunks * words_per_chunk; i < total_words; i++) {
+		uint64_t work_word = bitmap[i];
+		if (work_word != 0) {
+			work_done |= process_trade_flush_word(
+				cache, work_word, i);
+		}
+	}
+
+	return work_done;
+}
+
+/**
  * @brief   Entry point for a worker thread.
  *
  * Accepts a pointer to ::worker_thread_args.
@@ -546,6 +684,7 @@ void *worker_thread_main(void *arg)
 			work_done = worker_run_in_memory_tasks(cache, state);
 		} else if (group == GROUP_FLUSH) {
 			work_done = worker_run_flush_tasks(cache, state);
+			work_done |= worker_run_trade_flush_tasks(cache, state);
 		}
 
 		/* Busy-wait (Low Latency) */
