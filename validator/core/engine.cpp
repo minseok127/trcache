@@ -350,7 +350,7 @@ struct trcache* engine_init(const struct validator_config& config)
 	ctx.max_symbols = (config.top_n > 0 ? config.top_n : 1000) + 50;
 	ctx.trade_data_size = sizeof(trcache_trade_data);
 
-	/* 3. Set up io_uring trade flush */
+	/* 3. Set up trade flush */
 	{
 		const std::string default_dir = "./trade_data";
 		auto it = config.options.find("trade_output_dir");
