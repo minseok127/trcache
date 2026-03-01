@@ -9,10 +9,11 @@
 - **User-Defined Input & Output**:
   - Accepts user-defined trade data structures.
   - Accepts user-defined candle structures (time-based, tick-based, or custom aggregations).
-- **Lock-Free 3-Stage Pipeline**:
+- **Lock-Free Candle Pipeline**:
   - **Apply**: Aggregates trades into row-oriented candles.
   - **Convert**: Transforms rows into SIMD-aligned column batches.
-  - **Flush**: Passes completed batches to user callbacks for persistence.
+  - **Batch Flush**: Passes completed batches to user callbacks for persistence.
+- **Raw Trade Flush**: Raw trade records are collected into fixed-size chunks per symbol and flushed to storage independently of candle batch flush.
 - **Lock-Free Queries**: Reads candle data without locks during concurrent updates.
 - **Adaptive Scheduling**: Admin thread monitors pipeline throughput and rebalances worker threads across stages.
 
@@ -211,20 +212,27 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
 ### Pipeline Overview
 
 ```
-┌──────────────┐       ┌──────────────┐       ┌──────────────┐
-│    APPLY     │─────▶│   CONVERT    │─────▶│    FLUSH     │
-│  (Row AoS)   │       │ (Column SoA) │       │  (Persist)   │
-└──────────────┘       └──────────────┘       └──────────────┘
-       │                     │                      │
-   Trade Data          Immutable Rows        Completed Batches
-   Aggregation         → SIMD Columns        → User Callbacks
+trcache_feed_trade_data()
+         │
+         ▼
+  trade_data_buffer (per-symbol)
+         │
+         ├──────────────────────────────────────────────────┐
+         │                                                  │
+         ▼                                                  ▼
+  ┌──────────────┐    ┌──────────────┐    ┌─────────────┐  ┌──────────────┐
+  │    APPLY     │───▶│   CONVERT    │───▶│ BATCH FLUSH │  │ TRADE FLUSH  │
+  │  (Row AoS)   │    │ (Column SoA) │    │  (Persist)  │  │  (Persist)   │
+  └──────────────┘    └──────────────┘    └─────────────┘  └──────────────┘
 ```
 
 1. **APPLY**: Worker threads consume trades from lock-free buffers and update row-oriented candles. Only the most recent candle is mutable; prior candles are immutable.
 
 2. **CONVERT**: When a candle completes, a worker transforms the immutable row (Array of Structs) into a column-oriented batch (Struct of Arrays) with SIMD alignment.
 
-3. **FLUSH**: When unflushed batch count exceeds a threshold, a worker invokes user-provided callbacks to persist data (supports sync and async I/O).
+3. **BATCH FLUSH**: When unflushed batch count exceeds a threshold, a worker invokes user-provided callbacks to persist candle batches (supports sync and async I/O).
+
+4. **TRADE FLUSH**: Raw trade chunks are flushed to storage independently of the candle pipeline.
 
 ### Implementation Details
 
@@ -279,7 +287,7 @@ typedef struct {
     double high;
     double low;
     double close;
-    uint64_t volume;
+    double volume;
     uint32_t trade_count;      // This field won't be in column arrays
 } MyOHLCV;
 ```
@@ -294,7 +302,7 @@ const trcache_field_def my_fields[] = {
     {offsetof(MyOHLCV, high),   sizeof(double),   FIELD_TYPE_DOUBLE},
     {offsetof(MyOHLCV, low),    sizeof(double),   FIELD_TYPE_DOUBLE},
     {offsetof(MyOHLCV, close),  sizeof(double),   FIELD_TYPE_DOUBLE},
-    {offsetof(MyOHLCV, volume), sizeof(uint64_t), FIELD_TYPE_UINT64},
+    {offsetof(MyOHLCV, volume), sizeof(double),   FIELD_TYPE_DOUBLE},
     // Note: trade_count is omitted - it's scratch space not stored in batches
 };
 ```
@@ -307,27 +315,24 @@ The `init` and `update` callbacks receive `void *` for trade data. Cast it to th
 void init_tick(trcache_candle_base *c, void *trade_data) {
     MyOHLCV *candle = (MyOHLCV *)c;
     const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
-    
-    c->key.trade_id = d->trade_id;  // Use trade_id for tick candles
+
+    c->key.trade_id = d->id;  // Use trade_id for tick candles
     c->is_closed = false;
-    
-    double price = d->price.as_double;
-    candle->open = candle->high = candle->low = candle->close = price;
-    candle->volume = d->volume.as_double;
+
+    candle->open = candle->high = candle->low = candle->close = d->price;
+    candle->volume = d->volume;
     candle->trade_count = 1;
 }
 
 bool update_tick(trcache_candle_base *c, void *trade_data) {
     MyOHLCV *candle = (MyOHLCV *)c;
     const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
-    
-    double price = d->price.as_double;
-    
-    if (price > candle->high) candle->high = price;
-    if (price < candle->low) candle->low = price;
-    candle->close = price;
-    candle->volume += d->volume.as_double;
-    
+
+    if (d->price > candle->high) candle->high = d->price;
+    if (d->price < candle->low) candle->low = d->price;
+    candle->close = d->price;
+    candle->volume += d->volume;
+
     if (++candle->trade_count == 100) {  // 100-tick candle
         c->is_closed = true; // Next trade will be used in the init_tick()
     }
@@ -335,13 +340,13 @@ bool update_tick(trcache_candle_base *c, void *trade_data) {
 }
 
 void init_time(trcache_candle_base *c, void *trade_data) {
-    MyCandle *candle = (MyCandle *)c;
+    MyOHLCV *candle = (MyOHLCV *)c;
     const MyTrade *d = (const MyTrade *)trade_data; // Cast to your custom type
-    
+
     c->key.timestamp = d->timestamp - (d->timestamp % 60000);  // 1-min window
     c->is_closed = false;
-    candle->open = candle->high = candle->low = candle->close = d->price.as_double;
-    candle->volume = d->volume.as_double;
+    candle->open = candle->high = candle->low = candle->close = d->price;
+    candle->volume = d->volume;
 }
 
 bool update_time(trcache_candle_base *c, void *trade_data) {
@@ -351,12 +356,11 @@ bool update_time(trcache_candle_base *c, void *trade_data) {
         c->is_closed = true;
         return false;  // This trade will be used in the init_time()
     }
-    MyCandle *candle = (MyCandle *)c;
-    double price = d->price.as_double;
-    if (price > candle->high) candle->high = price;
-    if (price < candle->low) candle->low = price;
-    candle->close = price;
-    candle->volume += d->volume.as_double;
+    MyOHLCV *candle = (MyOHLCV *)c;
+    if (d->price > candle->high) candle->high = d->price;
+    if (d->price < candle->low) candle->low = d->price;
+    candle->close = d->price;
+    candle->volume += d->volume;
     return true; // Trade is consumed
 }
 ```
@@ -368,12 +372,12 @@ The routing of `trade_data` to either the `update` or `init` callback is determi
   - If `is_closed` is `true`: The next trade data is automatically routed to `init`.
   - If `is_closed` is `false`: The next trade data is routed to `update`.
 
-### Step 4: Configure Candle Batch Flush (Optional)
+### Step 4: Configure Candle Batch Flush
 
 When a column batch is complete, trcache calls `flush()` once to submit the write,
 then calls `is_done()` immediately after. If `is_done()` returns false, the worker
 moves on to other work and calls `is_done()` again on the next pass — it does not
-block or retry in place. Set `flush_ops = {}` (all NULL) to skip persistence;
+block or retry in place. Set `batch_flush_ops = {}` (all NULL) to skip persistence;
 candle data remains queryable in memory.
 
 #### Synchronous example
@@ -429,7 +433,7 @@ bool my_is_done(trcache *cache, trcache_candle_batch *batch, void *ctx) {
 }
 ```
 
-### Step 5: Configure Trade Data Flush (Optional)
+### Step 5: Configure Trade Data Flush
 
 Raw trade records fed via `trcache_feed_trade_data` are collected into fixed-size
 chunks per symbol and can be persisted independently of candle batch flush.
@@ -448,7 +452,7 @@ chunk is also flushed automatically.
 void trade_flush(trcache *cache, int symbol_id,
                  const void *data, int num_trades, void *ctx) {
     MyCtx *c = (MyCtx *)ctx;
-    size_t size = (size_t)num_trades * trade_data_size;
+    size_t size = (size_t)num_trades * sizeof(MyTrade);
     pwrite(c->fds[symbol_id], data, size, c->offsets[symbol_id]);
     c->offsets[symbol_id] += size;
 }
@@ -510,14 +514,14 @@ trcache_candle_config configs[] = {
         .field_definitions = my_fields,
         .num_fields = 5,
         .update_ops = {.init = init_tick, .update = update_tick},
-        .flush_ops = flush_ops,
+        .batch_flush_ops = flush_ops,
     },
     [1] = {  // 1-minute candle
         .user_candle_size = sizeof(MyOHLCV),
         .field_definitions = my_fields,
         .num_fields = 5,
         .update_ops = {.init = init_time, .update = update_time},
-        .flush_ops = flush_ops,
+        .batch_flush_ops = flush_ops,
     },
 };
 ```
