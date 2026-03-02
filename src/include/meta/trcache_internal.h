@@ -6,7 +6,7 @@
 
 #include "concurrent/scalable_queue.h"
 #include "meta/symbol_table.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "utils/hash_table.h"
 #include "utils/list_head.h"
 #include "utils/memstat.h"

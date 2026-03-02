@@ -14,7 +14,7 @@
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "pipeline/candle_chunk_list.h"
 #include "pipeline/candle_chunk_index.h"
 #include "sched/sched_pipeline_stats.h"
@@ -366,7 +366,7 @@ static void update_trade_chunk_fill_rates(struct trcache *cache,
 	struct symbol_table *table = cache->symbol_table;
 
 	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
-		struct trade_data_buffer *tdb =
+		struct event_data_buffer *tdb =
 			table->symbol_entries[sym_idx].trd_buf;
 		uint64_t last_ts = admin->trade_fill_timestamps[sym_idx];
 		uint64_t dt_ns = (last_ts == 0) ? 0 : (now_ns - last_ts);
@@ -504,13 +504,13 @@ static void update_all_task_costs(struct trcache *cache)
 	 */
 	if (cache->trade_flush_ops.flush != NULL) {
 		for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
-			struct trade_data_buffer *tdb =
+			struct event_data_buffer *tdb =
 				table->symbol_entries[sym_idx].trd_buf;
 			if (tdb == NULL) {
 				continue;
 			}
 			double cost_tf = (double)atomic_load_explicit(
-				&tdb->ema_cycles_per_trade_flush,
+				&tdb->ema_cycles_per_flush,
 				memory_order_acquire);
 
 			admin->trade_flush_costs[sym_idx] =
@@ -526,14 +526,14 @@ static void update_all_task_costs(struct trcache *cache)
  * @param   admin:                 Admin state containing demand stats.
  * @param   symtab:                Symbol table.
  * @param   out_in_memory_cycles:  Total cycles needed for Apply+Convert.
- * @param   out_batch_flush_cycles: Total cycles needed for Batch Flush.
+ * @param   out_flush_cycles: Total cycles needed for Flush group.
  */
 static void calculate_total_cycle_needs(struct trcache *cache,
 	struct admin_state *admin, struct symbol_table *symtab,
-	double *out_in_memory_cycles, double *out_batch_flush_cycles)
+	double *out_in_memory_cycles, double *out_flush_cycles)
 {
 	double total_im_cycles = 0.0;
-	double total_batch_flush_cycles = 0.0;
+	double total_flush_cycles = 0.0;
 	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
 		memory_order_acquire);
 	
@@ -554,7 +554,7 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 				+= (double)demand->produced_rate * cost->cost_apply;
 			total_im_cycles
 				+= (double)demand->completed_rate * cost->cost_convert;
-			total_batch_flush_cycles
+			total_flush_cycles
 				+= (double)demand->flushable_batch_rate * cost->cost_batch_flush;
 		}
 	}
@@ -566,13 +566,13 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 	 * arrays indexed by sym_idx alone.
 	 */
 	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
-		total_batch_flush_cycles +=
+		total_flush_cycles +=
 			(double)admin->trade_chunk_fill_rates[sym_idx]
 			* admin->trade_flush_costs[sym_idx];
 	}
 
 	*out_in_memory_cycles = total_im_cycles;
-	*out_batch_flush_cycles = total_batch_flush_cycles;
+	*out_flush_cycles = total_flush_cycles;
 }
 
 /**
@@ -580,20 +580,20 @@ static void calculate_total_cycle_needs(struct trcache *cache,
  *
  * @param   num_workers:            Total workers available.
  * @param   total_im_cycles:        Total cycles needed for Apply+Convert.
- * @param   total_batch_flush_cycles:    Total cycles needed for Batch Flush.
+ * @param   total_flush_cycles:    Total cycles needed for Flush group.
  * @param   out_num_im_workers:          (out) Number of workers for In-Memory.
- * @param   out_num_batch_flush_workers: (out) Number of workers for
- *                                       Batch Flush.
+ * @param   out_num_flush_workers: (out) Number of workers for
+ *                                       Flush group.
  */
 static void calculate_worker_group_distribution(int num_workers,
-	double total_im_cycles, double total_batch_flush_cycles,
-	int *out_num_im_workers, int *out_num_batch_flush_workers)
+	double total_im_cycles, double total_flush_cycles,
+	int *out_num_im_workers, int *out_num_flush_workers)
 {
-	double total_cycles = total_im_cycles + total_batch_flush_cycles;
+	double total_cycles = total_im_cycles + total_flush_cycles;
 
 	if (total_cycles == 0) {
 		*out_num_im_workers = num_workers; /* Default: all to in-memory */
-		*out_num_batch_flush_workers = 0;
+		*out_num_flush_workers = 0;
 	} else {
 		/*
 		 * Proportional allocation:
@@ -606,20 +606,20 @@ static void calculate_worker_group_distribution(int num_workers,
 		 */
 		*out_num_im_workers = (int)ceil(
 			(total_im_cycles / total_cycles) * num_workers);
-		*out_num_batch_flush_workers = num_workers - *out_num_im_workers;
+		*out_num_flush_workers = num_workers - *out_num_im_workers;
 
 		/*
 		 * Guarantee at least 1 worker per active group so that no
 		 * pipeline starves even under extreme workload imbalance.
 		 */
-		if (total_batch_flush_cycles > 0 && *out_num_batch_flush_workers == 0 &&
+		if (total_flush_cycles > 0 && *out_num_flush_workers == 0 &&
 				*out_num_im_workers > 0) {
-			*out_num_batch_flush_workers = 1;
+			*out_num_flush_workers = 1;
 			*out_num_im_workers = num_workers - 1;
 		} else if (total_im_cycles > 0 && *out_num_im_workers == 0 &&
-				*out_num_batch_flush_workers > 0) {
+				*out_num_flush_workers > 0) {
 			*out_num_im_workers = 1;
-			*out_num_batch_flush_workers = num_workers - 1;
+			*out_num_flush_workers = num_workers - 1;
 		}
 	}
 }
@@ -686,12 +686,12 @@ static void assign_task_to_budget_group(struct budget_assign_state *state,
  * @param   admin:       Admin state containing demand and cost stats.
  * @param   symtab:      Symbol table.
  * @param   im_state:    Mutable budget state for the In-Memory group.
- * @param   batch_flush_state: Mutable budget state for the Batch Flush group.
+ * @param   flush_state: Mutable budget state for the Flush group.
  */
 static void assign_candle_tasks(struct trcache *cache,
 	struct admin_state *admin, struct symbol_table *symtab,
 	struct budget_assign_state *im_state,
-	struct budget_assign_state *batch_flush_state)
+	struct budget_assign_state *flush_state)
 {
 	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
 		memory_order_acquire);
@@ -723,7 +723,7 @@ static void assign_candle_tasks(struct trcache *cache,
 			/* Assign Batch Flush (candle) */
 			double batch_flush_task_cost =
 				(double)demand->flushable_batch_rate * cost->cost_batch_flush;
-			assign_task_to_budget_group(batch_flush_state,
+			assign_task_to_budget_group(flush_state,
 				batch_flush_task_cost,
 				admin->next_batch_flush_bitmaps, batch_flush_words,
 				task_idx);
@@ -735,30 +735,30 @@ static void assign_candle_tasks(struct trcache *cache,
  * @brief   Assign trade-chunk flush tasks for all symbols.
  *
  * One bit per symbol (independent of candle type). Uses the same
- * batch_flush_state budget so candle batch flush and trade flush work are
+ * flush_state budget so candle batch flush and trade flush work are
  * balanced across the same flush workers.
  *
  * Bits are assigned based on EMA fill rate alone, consistent with how
  * Apply/Convert/Batch Flush tasks are assigned. This keeps bitmap assignments
  * stable across admin cycles and lets the EMA decay naturally after a
  * burst rather than toggling bits on every cycle.
- * trade_data_buffer_flush_full_chunks() handles the empty case
+ * event_data_buffer_flush_full_chunks() handles the empty case
  * gracefully with an immediate return when no full chunks exist.
  *
  * @param   admin:       Admin state containing fill-rate and cost arrays.
  * @param   symtab:      Symbol table.
- * @param   batch_flush_state: Mutable budget state for the Flush group.
+ * @param   flush_state: Mutable budget state for the Flush group.
  */
 static void assign_trade_flush_tasks(struct admin_state *admin,
 	struct symbol_table *symtab,
-	struct budget_assign_state *batch_flush_state)
+	struct budget_assign_state *flush_state)
 {
 	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
 		memory_order_acquire);
 	size_t trade_flush_words = admin->trade_flush_words_per_worker;
 
 	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
-		struct trade_data_buffer *tdb =
+		struct event_data_buffer *tdb =
 			symtab->symbol_entries[sym_idx].trd_buf;
 		if (tdb == NULL) {
 			continue;
@@ -766,7 +766,7 @@ static void assign_trade_flush_tasks(struct admin_state *admin,
 		double tf_cost =
 			(double)admin->trade_chunk_fill_rates[sym_idx]
 			* admin->trade_flush_costs[sym_idx];
-		assign_task_to_budget_group(batch_flush_state, tf_cost,
+		assign_task_to_budget_group(flush_state, tf_cost,
 			admin->next_trade_flush_bitmaps, trade_flush_words,
 			TF_BIT(sym_idx));
 	}
@@ -782,14 +782,14 @@ static void assign_trade_flush_tasks(struct admin_state *admin,
  * @param   admin:              Admin state containing demand stats.
  * @param   symtab:             Symbol table.
  * @param   num_im_workers:     Number of workers in In-Memory group.
- * @param   num_batch_flush_workers:    Number of workers in Batch Flush group.
+ * @param   num_flush_workers:    Number of workers in Flush group.
  * @param   total_im_cycles:         Total cycle budget for In-Memory group.
- * @param   total_batch_flush_cycles: Total cycle budget for Batch Flush group.
+ * @param   total_flush_cycles: Total cycle budget for Flush group.
  */
 static void assign_tasks_to_bitmaps(struct trcache *cache,
 	struct admin_state *admin, struct symbol_table *symtab,
-	int num_im_workers, int num_batch_flush_workers,
-	double total_im_cycles, double total_batch_flush_cycles)
+	int num_im_workers, int num_flush_workers,
+	double total_im_cycles, double total_flush_cycles)
 {
 	size_t in_mem_words = admin->in_mem_words_per_worker;
 	size_t batch_flush_words = admin->batch_flush_words_per_worker;
@@ -813,20 +813,20 @@ static void assign_tasks_to_bitmaps(struct trcache *cache,
 	};
 	im_state.current_budget = im_state.budget_per_worker;
 
-	/* Initialize budget state for the Batch Flush group (workers num_im..end) */
-	struct budget_assign_state batch_flush_state = {
-		.budget_per_worker = (num_batch_flush_workers > 0) ?
-			total_batch_flush_cycles / num_batch_flush_workers : 0,
+	/* Initialize budget state for the Flush group (workers num_im..end) */
+	struct budget_assign_state flush_state = {
+		.budget_per_worker = (num_flush_workers > 0) ?
+			total_flush_cycles / num_flush_workers : 0,
 		.current_worker_idx = num_im_workers,
-		.num_workers_in_group = num_batch_flush_workers,
+		.num_workers_in_group = num_flush_workers,
 		.start_worker_idx = num_im_workers
 	};
-	batch_flush_state.current_budget = batch_flush_state.budget_per_worker;
+	flush_state.current_budget = flush_state.budget_per_worker;
 
-	assign_candle_tasks(cache, admin, symtab, &im_state, &batch_flush_state);
+	assign_candle_tasks(cache, admin, symtab, &im_state, &flush_state);
 
 	if (cache->trade_flush_ops.flush != NULL) {
-		assign_trade_flush_tasks(admin, symtab, &batch_flush_state);
+		assign_trade_flush_tasks(admin, symtab, &flush_state);
 	}
 }
 
@@ -891,7 +891,7 @@ static void publish_new_assignments_to_workers(struct trcache *cache,
 
 		} else {
 			/* This is a Batch Flush worker */
-			int new_group = GROUP_BATCH_FLUSH;
+			int new_group = GROUP_FLUSH;
 			uint64_t *next_bitmap = admin->next_batch_flush_bitmaps +
 				(i * admin->batch_flush_words_per_worker);
 			uint64_t *current_bitmap = admin->current_batch_flush_bitmaps +
@@ -949,20 +949,20 @@ static void balance_workers(struct trcache *cache)
 	struct symbol_table *symtab = cache->symbol_table;
 	int num_workers = cache->num_workers;
 	double total_im_cycles = 0.0;
-	double total_batch_flush_cycles = 0.0;
+	double total_flush_cycles = 0.0;
 	int num_im_workers = 0;
-	int num_batch_flush_workers = 0;
+	int num_flush_workers = 0;
 
 	/*
 	 * 1. Calculate total cycle needs.
 	 *    (reads from admin->stage_rates and admin->task_costs)
 	 */
 	calculate_total_cycle_needs(
-		cache, admin, symtab, &total_im_cycles, &total_batch_flush_cycles);
+		cache, admin, symtab, &total_im_cycles, &total_flush_cycles);
 
 	/* 2. Determine worker group sizes */
 	calculate_worker_group_distribution(num_workers, total_im_cycles,
-		total_batch_flush_cycles, &num_im_workers, &num_batch_flush_workers);
+		total_flush_cycles, &num_im_workers, &num_flush_workers);
 
 	/*
 	 * 3. Assign tasks to the 'next' local bitmaps.
@@ -970,7 +970,7 @@ static void balance_workers(struct trcache *cache)
 	 *     reads from admin->stage_rates and admin->task_costs)
 	 */
 	assign_tasks_to_bitmaps(cache, admin, symtab, num_im_workers,
-		num_batch_flush_workers, total_im_cycles, total_batch_flush_cycles);
+		num_flush_workers, total_im_cycles, total_flush_cycles);
 
 	/*
 	 * 4. Publish new assignments to workers,

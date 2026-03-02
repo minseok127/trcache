@@ -6,7 +6,7 @@
 #include <stdatomic.h>
 
 #include "pipeline/candle_chunk_list.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "utils/hash_table.h"
 
 #include "trcache.h"
@@ -21,7 +21,7 @@
  */
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[MAX_CANDLE_TYPES];
-	struct trade_data_buffer *trd_buf;
+	struct event_data_buffer *trd_buf;
 	char *symbol_str;
 	int id;
 };

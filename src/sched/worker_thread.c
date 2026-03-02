@@ -12,7 +12,7 @@
 #include "sched/worker_thread.h"
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
 #include "utils/tsc_clock.h"
@@ -87,8 +87,8 @@ static inline void update_ema_cycles(_Atomic(uint64_t) *ema_ptr,
  */
 static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 {
-	struct trade_data_buffer *buf = entry->trd_buf;
-	struct trade_data_buffer_cursor *cur;
+	struct event_data_buffer *buf = entry->trd_buf;
+	struct event_data_buffer_cursor *cur;
 	struct candle_chunk_list *list;
 	size_t trade_data_size;
 	uint64_t start_cycles, work_count = 0;
@@ -96,7 +96,7 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 	void *array = NULL;
 	void *trade_data = NULL;
 
-	cur = trade_data_buffer_acquire_cursor(buf, candle_idx);
+	cur = event_data_buffer_acquire_cursor(buf, candle_idx);
 	if (cur == NULL) {
 		/* Cursor is busy (e.g., user thread is applying) */
 		return;
@@ -106,13 +106,13 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 	list = entry->candle_chunk_list_ptrs[candle_idx];
 	trade_data_size = list->trc->trade_data_size;
 
-	while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
+	while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
 			trade_data = (uint8_t *)array + (i * trade_data_size);
 			candle_chunk_list_apply_trade(list, trade_data);
 		}
 
-		trade_data_buffer_consume(buf, cur, count);
+		event_data_buffer_consume(buf, cur, count);
 		work_count += (uint64_t)count;
 	}
 
@@ -122,7 +122,7 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 			tsc_cycles() - start_cycles, work_count);
 	}
 
-	trade_data_buffer_release_cursor(cur);
+	event_data_buffer_release_cursor(cur);
 }
 
 /**
@@ -175,11 +175,11 @@ static void worker_do_trade_flush(struct trcache *cache,
 	struct symbol_entry *entry)
 {
 	uint64_t start_cycles = tsc_cycles();
-	int completed = trade_data_buffer_flush_full_chunks(
+	int completed = event_data_buffer_flush_full_chunks(
 		entry->trd_buf, &cache->trade_flush_ops);
 
 	if (completed > 0) {
-		update_ema_cycles(&entry->trd_buf->ema_cycles_per_trade_flush,
+		update_ema_cycles(&entry->trd_buf->ema_cycles_per_flush,
 			tsc_cycles() - start_cycles, (uint64_t)completed);
 	}
 }
@@ -685,7 +685,7 @@ void *worker_thread_main(void *arg)
 
 		if (group == GROUP_IN_MEMORY) {
 			work_done = worker_run_in_memory_tasks(cache, state);
-		} else if (group == GROUP_BATCH_FLUSH) {
+		} else if (group == GROUP_FLUSH) {
 			work_done = worker_run_batch_flush_tasks(cache, state);
 			work_done |= worker_run_trade_flush_tasks(cache, state);
 		}

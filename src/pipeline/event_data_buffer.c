@@ -1,8 +1,8 @@
 /**
- * @file   trade_data_buffer.c
- * @brief  Chunk‐based buffer for trcache_trade_data
+ * @file   event_data_buffer.c
+ * @brief  Chunk-based buffer for event data (trade, book, etc.)
  *
- * Producer pushes trade data into chunks; when full, obtains a free
+ * Producer pushes event data into chunks; when full, obtains a free
  * chunk from free list or mallocs a new one. Consumers use a cursor to peek
  * and consume entries; when threshold reached, chunk is enqueued back
  * to free list by producer's context.
@@ -15,7 +15,7 @@
 #include <stdatomic.h>
 
 #include "meta/trcache_internal.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "utils/list_head.h"
 #include "utils/log.h"
 
@@ -26,37 +26,29 @@
  */
 static size_t calculate_chunk_struct_size(void)
 {
-	return ALIGN_UP(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE);
+	return ALIGN_UP(sizeof(struct event_data_chunk), CACHE_LINE_SIZE);
 }
 
 /**
- * @brief   Helper to calculate the 4 KiB-aligned data buffer size.
+ * @brief   Create and initialize an event_data_buffer.
  *
- * The result is rounded up to TRADE_DATA_BUF_ALIGN so that
- * aligned_alloc(TRADE_DATA_BUF_ALIGN, ...) satisfies its requirement that
- * size is a multiple of the requested alignment.
- */
-static size_t calculate_data_buf_size(struct trcache *tc)
-{
-	size_t raw = (size_t)tc->trades_per_chunk * tc->trade_data_size;
-	return ALIGN_UP(raw, TRADE_DATA_BUF_ALIGN);
-}
-
-/**
- * @brief   Create and initialize a trade_data_buffer.
- *
- * @param   tc: Pointer to the #trcache.
- * @param   symbol_id: Integer symbol ID.
+ * @param   tc:               Pointer to the #trcache.
+ * @param   symbol_id:        Integer symbol ID.
+ * @param   event_size:       Size of one event record in bytes.
+ * @param   events_per_chunk: Number of events per chunk.
+ * @param   event_buf_size:   4 KiB-aligned data buffer size per chunk.
+ * @param   num_cursors:      Number of cursors to initialize.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
-struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
-	int symbol_id)
+struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
+	int symbol_id, size_t event_size, int events_per_chunk,
+	size_t event_buf_size, int num_cursors)
 {
-	struct trade_data_buffer *buf = NULL;
-	struct trade_data_chunk *chunk = NULL;
-	struct trade_data_buffer_cursor *c = NULL;
-	size_t chunk_struct_size, data_buf_size, chunk_total_size;
+	struct event_data_buffer *buf = NULL;
+	struct event_data_chunk *chunk = NULL;
+	struct event_data_buffer_cursor *c = NULL;
+	size_t chunk_struct_size, chunk_total_size;
 
 	if (tc == NULL) {
 		errmsg(stderr, "Invalid argument\n");
@@ -64,18 +56,21 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	}
 
 	buf = aligned_alloc(CACHE_LINE_SIZE,
-		ALIGN_UP(sizeof(struct trade_data_buffer), CACHE_LINE_SIZE));
+		ALIGN_UP(sizeof(struct event_data_buffer), CACHE_LINE_SIZE));
 
 	if (buf == NULL) {
-		errmsg(stderr, "#trade_data_buffer allocation failed\n");
+		errmsg(stderr, "#event_data_buffer allocation failed\n");
 		return NULL;
 	}
 
-	memset(buf, 0, sizeof(struct trade_data_buffer));
+	memset(buf, 0, sizeof(struct event_data_buffer));
 
 	buf->trc = tc;
+	buf->event_size = event_size;
+	buf->events_per_chunk = events_per_chunk;
+	buf->event_buf_size = event_buf_size;
 	atomic_init(&buf->memory_usage.value, 0);
-	mem_add_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
+	mem_add_atomic(&buf->memory_usage.value, sizeof(struct event_data_buffer));
 
 	/*
 	 * Allocate the chunk struct and its data buffer separately.
@@ -83,21 +78,20 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	 * the struct size plus the 4 KiB-aligned data buffer size.
 	 */
 	chunk_struct_size = calculate_chunk_struct_size();
-	data_buf_size = calculate_data_buf_size(tc);
-	chunk_total_size = chunk_struct_size + data_buf_size;
+	chunk_total_size = chunk_struct_size + event_buf_size;
 
 	chunk = aligned_alloc(CACHE_LINE_SIZE, chunk_struct_size);
 	if (chunk == NULL) {
-		errmsg(stderr, "#trade_data_chunk allocation failed\n");
+		errmsg(stderr, "#event_data_chunk allocation failed\n");
 		free(buf);
 		return NULL;
 	}
 
-	memset(chunk, 0, sizeof(struct trade_data_chunk));
+	memset(chunk, 0, sizeof(struct event_data_chunk));
 
-	chunk->data = aligned_alloc(TRADE_DATA_BUF_ALIGN, data_buf_size);
+	chunk->data = aligned_alloc(EVENT_DATA_BUF_ALIGN, event_buf_size);
 	if (chunk->data == NULL) {
-		errmsg(stderr, "trade_data_chunk data buffer allocation failed\n");
+		errmsg(stderr, "event_data_chunk data buffer allocation failed\n");
 		free(chunk);
 		free(buf);
 		return NULL;
@@ -111,11 +105,11 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 	INIT_LIST_HEAD(&chunk->list_node);
 	atomic_store(&chunk->write_idx, 0);
 	atomic_store(&chunk->num_consumed_cursor, 0);
-	atomic_store(&chunk->flush_state, TRADE_CHUNK_FLUSH_NOT_READY);
+	atomic_store(&chunk->flush_state, EVENT_CHUNK_FLUSH_NOT_READY);
 	list_add_tail(&chunk->list_node, &buf->chunk_list);
 
 	/* Init cursors */
-	for (int i = 0; i < tc->num_candle_configs; i++) {
+	for (int i = 0; i < num_cursors; i++) {
 		c = &buf->cursor_arr[i];
 		c->consume_chunk = chunk;
 		c->consume_count = 0;
@@ -126,12 +120,12 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
 
 	buf->produced_count = 0;
 	buf->next_tail_write_idx = 0;
-	buf->num_cursor = tc->num_candle_configs;
+	buf->num_cursor = num_cursors;
 	buf->trc = tc;
 	buf->symbol_id = symbol_id;
 	buf->chunk_allocation_size = chunk_total_size;
 	atomic_store(&buf->num_full_unflushed_chunks, 0);
-	atomic_store(&buf->ema_cycles_per_trade_flush, 0);
+	atomic_store(&buf->ema_cycles_per_flush, 0);
 
 	return buf;
 }
@@ -141,9 +135,9 @@ struct trade_data_buffer *trade_data_buffer_init(struct trcache *tc,
  *
  * @param   buf: Buffer to destroy.
  */
-void trade_data_buffer_destroy(struct trade_data_buffer *buf)
+void event_data_buffer_destroy(struct event_data_buffer *buf)
 {
-	struct trade_data_chunk *chunk = NULL;
+	struct event_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
 
 	if (buf == NULL) {
@@ -155,7 +149,7 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 		c = list_get_first(&buf->chunk_list);
 		while (c != &buf->chunk_list) {
 			n = c->next;
-			chunk = __get_trd_chunk_ptr(c);
+			chunk = __get_evt_chunk_ptr(c);
 			free(chunk->data);
 			free(chunk);
 			mem_sub_atomic(&buf->memory_usage.value,
@@ -164,25 +158,25 @@ void trade_data_buffer_destroy(struct trade_data_buffer *buf)
 		}
 	}
 
-	mem_sub_atomic(&buf->memory_usage.value, sizeof(struct trade_data_buffer));
+	mem_sub_atomic(&buf->memory_usage.value, sizeof(struct event_data_buffer));
 	free(buf);
 }
 
 /**
- * @brief   Push one trade record into buffer.
+ * @brief   Push one event record into buffer.
  *
  * @param   buf:       Buffer to push into.
- * @param   data:      Trade record to copy.
+ * @param   data:      Event record to copy.
  * @param   free_list: Linked list pointer holding recycled chunks.
  * @param   thread_id: The feed thread's unique ID.
  *
  * @return  0 on success, -1 on error.
  */
-int trade_data_buffer_push(struct trade_data_buffer *buf,
+int event_data_buffer_push(struct event_data_buffer *buf,
 	const void *data, struct list_head *free_list,
 	int thread_id)
 {
-	struct trade_data_chunk *tail = NULL, *new_chunk = NULL;
+	struct event_data_chunk *tail = NULL, *new_chunk = NULL;
 	_Atomic(size_t) *free_list_mem_counter =
 		&buf->trc->mem_acc.feed_thread_free_list_mem[thread_id].value;
 	void *dst_ptr;
@@ -191,7 +185,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		return -1;
 	}
 
-	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+	tail = __get_evt_chunk_ptr(list_get_last(&buf->chunk_list));
 
 	/*
 	 * The user thread exclusively manages chunk allocation and maintains the
@@ -205,10 +199,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 * user thread links a new chunk just before writing the last piece of data
 	 * to ensure the consumer's cursor never points to a fully consumed chunk.
 	 */
-	if ((tail->write_idx + 1) == buf->trc->trades_per_chunk) {
+	if ((tail->write_idx + 1) == buf->events_per_chunk) {
 		if (free_list != NULL && !list_empty(free_list)) {
 			list_move_tail(free_list->next, &buf->chunk_list);
-			new_chunk = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+			new_chunk = __get_evt_chunk_ptr(list_get_last(&buf->chunk_list));
 
 			/* Transfer memory ownership from free list to this buffer */
 			mem_sub_atomic(free_list_mem_counter,
@@ -243,7 +237,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 				calculate_chunk_struct_size());
 
 			if (new_chunk == NULL) {
-				errmsg(stderr, "#trade_data_chunk allocation failed\n");
+				errmsg(stderr, "#event_data_chunk allocation failed\n");
 				return -1;
 			}
 
@@ -251,14 +245,14 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 			 * Zero only the struct. The data buffer is allocated
 			 * separately below to preserve 4 KiB alignment for DMA.
 			 */
-			memset(new_chunk, 0, sizeof(struct trade_data_chunk));
+			memset(new_chunk, 0, sizeof(struct event_data_chunk));
 
-			new_chunk->data = aligned_alloc(TRADE_DATA_BUF_ALIGN,
-				buf->trc->trade_data_buf_size);
+			new_chunk->data = aligned_alloc(EVENT_DATA_BUF_ALIGN,
+				buf->event_buf_size);
 
 			if (new_chunk->data == NULL) {
 				errmsg(stderr,
-					"trade_data_chunk data buffer allocation failed\n");
+					"event_data_chunk data buffer allocation failed\n");
 				free(new_chunk);
 				return -1;
 			}
@@ -278,7 +272,7 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 		atomic_store_explicit(&new_chunk->num_consumed_cursor, 0,
 			memory_order_release);
 		atomic_store_explicit(&new_chunk->flush_state,
-			TRADE_CHUNK_FLUSH_NOT_READY, memory_order_relaxed);
+			EVENT_CHUNK_FLUSH_NOT_READY, memory_order_relaxed);
 		/*
 		 * new_chunk->data is intentionally not reset here:
 		 * it points to the chunk's permanent 4 KiB-aligned buffer
@@ -291,8 +285,8 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 
 	/* Copy user data into the 4 KiB-aligned data buffer. */
 	dst_ptr = (uint8_t *)tail->data +
-		(tail->write_idx * buf->trc->trade_data_size);
-	memcpy(dst_ptr, data, buf->trc->trade_data_size);
+		(tail->write_idx * buf->event_size);
+	memcpy(dst_ptr, data, buf->event_size);
 
 	/*
 	 * Consumers must access the last entry only after
@@ -306,10 +300,10 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
 	 * The new tail was already linked above, so 'tail' is now the
 	 * second-to-last chunk and will no longer be written to.
 	 */
-	if (tail->write_idx == buf->trc->trades_per_chunk &&
+	if (tail->write_idx == buf->events_per_chunk &&
 			buf->trc->trade_flush_ops.flush != NULL) {
 		atomic_store_explicit(&tail->flush_state,
-			TRADE_CHUNK_FLUSH_NEEDED, memory_order_release);
+			EVENT_CHUNK_FLUSH_NEEDED, memory_order_release);
 		atomic_fetch_add_explicit(&buf->num_full_unflushed_chunks,
 			1, memory_order_release);
 	}
@@ -329,12 +323,12 @@ int trade_data_buffer_push(struct trade_data_buffer *buf,
  *
  * @return  1 if some entries are available, 0 if empty or error.
  */
-int trade_data_buffer_peek(struct trade_data_buffer *buf,
-	struct trade_data_buffer_cursor *cursor,
+int event_data_buffer_peek(struct event_data_buffer *buf,
+	struct event_data_buffer_cursor *cursor,
 	void **data_array,
 	int *count)
 {
-	struct trade_data_chunk *chunk = NULL;
+	struct event_data_chunk *chunk = NULL;
 	int write_idx;
 
 	if (!buf || !cursor || !data_array || !count) {
@@ -352,18 +346,18 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
 	if (cursor->peek_idx == write_idx) {
 		*count = 0;
 		return 0;
-	} 
+	}
 
 	*data_array = (uint8_t *)chunk->data +
-		(cursor->peek_idx * buf->trc->trade_data_size);
+		(cursor->peek_idx * buf->event_size);
 	*count = write_idx - cursor->peek_idx;
 
 	/* advance peek cursor */
 	cursor->peek_idx += *count;
 
-	if (cursor->peek_idx == buf->trc->trades_per_chunk) {
+	if (cursor->peek_idx == buf->events_per_chunk) {
 		assert(&chunk->list_node != list_get_last(&buf->chunk_list));
-		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
+		chunk = __get_evt_chunk_ptr(chunk->list_node.next);
 		cursor->peek_chunk = chunk;
 		cursor->peek_idx = 0;
 	}
@@ -378,10 +372,10 @@ int trade_data_buffer_peek(struct trade_data_buffer *buf,
  * @param   cursor:	 Caller-managed cursor (same one used for peek).
  * @param   count:   Number of data items fetched via peek().
  */
-void trade_data_buffer_consume(struct trade_data_buffer	*buf,
-	struct trade_data_buffer_cursor *cursor, int count)
+void event_data_buffer_consume(struct event_data_buffer *buf,
+	struct event_data_buffer_cursor *cursor, int count)
 {
-	struct trade_data_chunk *chunk = NULL;
+	struct event_data_chunk *chunk = NULL;
 	struct list_head *c = NULL;
 
 	if (!buf || !cursor) {
@@ -412,7 +406,7 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
 		atomic_fetch_add_explicit(&chunk->num_consumed_cursor, 1,
 			memory_order_release);
 
-		chunk = __get_trd_chunk_ptr(c);
+		chunk = __get_evt_chunk_ptr(c);
 	}
 
 	cursor->consume_chunk = chunk;
@@ -428,11 +422,12 @@ void trade_data_buffer_consume(struct trade_data_buffer	*buf,
  * @param   buf:                 Buffer to reap the free chunks.
  * @param   free_list:           Linked list pointer holding recycled chunks.
  * @param   thread_id:           The feed thread's unique ID.
+ * @param   flush_enabled:       Non-zero if flush ops are configured.
  */
-void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
+void event_data_buffer_reap_free_chunks(struct event_data_buffer *buf,
 	struct list_head *free_list, int thread_id, int flush_enabled)
 {
-	struct trade_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
+	struct event_data_chunk *tail = NULL, *chunk = NULL, *c = NULL;
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
 	bool memory_pressure = atomic_load_explicit(
 		&buf->trc->mem_acc.memory_pressure, memory_order_acquire);
@@ -444,18 +439,18 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		return;
 	}
 
-	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+	tail = __get_evt_chunk_ptr(list_get_last(&buf->chunk_list));
 
 	first = list_get_first(&buf->chunk_list);
 
-	chunk = __get_trd_chunk_ptr(first);
+	chunk = __get_evt_chunk_ptr(first);
 
 	/*
 	 * Note that we should remain at least one node in the list.
-	 * See the comment in the trade_data_buffer_push().
+	 * See the comment in the event_data_buffer_push().
 	 *
-	 * A chunk is reclaimable when all candle-type cursors have moved
-	 * past it AND, if trade flush is configured, its flush is done.
+	 * A chunk is reclaimable when all cursors have moved past it
+	 * AND, if flush is configured, its flush is done.
 	 */
 	while (chunk != tail) {
 		if (atomic_load_explicit(&chunk->num_consumed_cursor,
@@ -466,13 +461,13 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		if (flush_enabled &&
 				atomic_load_explicit(&chunk->flush_state,
 					memory_order_acquire)
-				!= TRADE_CHUNK_FLUSH_DONE) {
+				!= EVENT_CHUNK_FLUSH_DONE) {
 			break;
 		}
 
 		last = (struct list_head *) &chunk->list_node;
 		total_reaped_size += buf->chunk_allocation_size;
-		chunk = __get_trd_chunk_ptr(chunk->list_node.next);
+		chunk = __get_evt_chunk_ptr(chunk->list_node.next);
 	}
 
 	if (last != NULL) {
@@ -484,7 +479,7 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
 		if (memory_pressure) {
 			node = first;
 			while (node != NULL) {
-				c = __get_trd_chunk_ptr(node);
+				c = __get_evt_chunk_ptr(node);
 				next = (node == last) ? NULL : node->next;
 				free(c->data);
 				free(c);
@@ -508,9 +503,9 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
  * IN_FLIGHT. Then polls ops->is_done(); if done, transitions to DONE
  * and decrements num_full_unflushed_chunks.
  *
- * Reads the actual trade count from @chunk->write_idx so it works
- * correctly for both full non-tail chunks (write_idx == trades_per_chunk)
- * and partial tail chunks (write_idx < trades_per_chunk).
+ * Reads the actual event count from @chunk->write_idx so it works
+ * correctly for both full non-tail chunks (write_idx == events_per_chunk)
+ * and partial tail chunks (write_idx < events_per_chunk).
  *
  * @param   buf:   Owning buffer (for context and counters).
  * @param   chunk: Target chunk; flush_state must be NEEDED or IN_FLIGHT.
@@ -518,25 +513,25 @@ void trade_data_buffer_reap_free_chunks(struct trade_data_buffer *buf,
  *
  * @return  1 if the chunk transitioned to DONE, 0 if still in progress.
  */
-static int trade_flush_drive_chunk(struct trade_data_buffer *buf,
-	struct trade_data_chunk *chunk,
+static int event_flush_drive_chunk(struct event_data_buffer *buf,
+	struct event_data_chunk *chunk,
 	const struct trcache_trade_flush_ops *ops)
 {
 	if (atomic_load_explicit(&chunk->flush_state, memory_order_acquire)
-			== TRADE_CHUNK_FLUSH_NEEDED) {
+			== EVENT_CHUNK_FLUSH_NEEDED) {
 		/*
 		 * flush() has not been called yet. Read write_idx for the
 		 * actual count; for completed non-tail chunks this equals
-		 * trades_per_chunk, for a partial tail it is the real count.
+		 * events_per_chunk, for a partial tail it is the real count.
 		 */
-		int num_trades = atomic_load_explicit(
+		int num_events = atomic_load_explicit(
 			&chunk->write_idx, memory_order_acquire);
 
 		ops->flush(buf->trc, buf->symbol_id,
-			chunk->data, num_trades, ops->ctx);
+			chunk->data, num_events, ops->ctx);
 
 		atomic_store_explicit(&chunk->flush_state,
-			TRADE_CHUNK_FLUSH_IN_FLIGHT, memory_order_release);
+			EVENT_CHUNK_FLUSH_IN_FLIGHT, memory_order_release);
 	}
 
 	/* flush() was already called; poll for completion. */
@@ -545,29 +540,29 @@ static int trade_flush_drive_chunk(struct trade_data_buffer *buf,
 	}
 
 	atomic_store_explicit(&chunk->flush_state,
-		TRADE_CHUNK_FLUSH_DONE, memory_order_release);
+		EVENT_CHUNK_FLUSH_DONE, memory_order_release);
 	atomic_fetch_sub_explicit(&buf->num_full_unflushed_chunks,
 		1, memory_order_release);
 	return 1;
 }
 
 /**
- * @brief   Flush full trade chunks using the provided flush callbacks.
+ * @brief   Flush full event chunks using the provided flush callbacks.
  *
  * Iterates all chunks ahead of the current tail. For each chunk in the
- * NEEDED or IN_FLIGHT state, drives the flush via trade_flush_drive_chunk().
+ * NEEDED or IN_FLIGHT state, drives the flush via event_flush_drive_chunk().
  * The active tail chunk is never touched here; use
- * trade_data_buffer_finalize() to flush it during shutdown.
+ * event_data_buffer_finalize() to flush it during shutdown.
  *
  * @param   buf:  Buffer whose chunks to flush.
- * @param   ops:  Trade flush callback operations.
+ * @param   ops:  Flush callback operations.
  *
  * @return  Number of chunks whose flush completed in this call.
  */
-int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
+int event_data_buffer_flush_full_chunks(struct event_data_buffer *buf,
 	const struct trcache_trade_flush_ops *ops)
 {
-	struct trade_data_chunk *tail, *chunk;
+	struct event_data_chunk *tail, *chunk;
 	struct list_head *node;
 	int completed = 0;
 
@@ -575,11 +570,11 @@ int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
 		return 0;
 	}
 
-	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+	tail = __get_evt_chunk_ptr(list_get_last(&buf->chunk_list));
 
 	node = list_get_first(&buf->chunk_list);
 	while (node != &buf->chunk_list) {
-		chunk = __get_trd_chunk_ptr(node);
+		chunk = __get_evt_chunk_ptr(node);
 		node = node->next;
 
 		/* Never touch the active tail chunk. */
@@ -590,14 +585,14 @@ int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
 		/*
 		 * Skip DONE chunks explicitly: unlike batch flush, where the
 		 * atomsnap head advances past DONE chunks before the next call,
-		 * DONE trade chunks remain in the list until reaped. The state
-		 * check here prevents calling trade_flush_drive_chunk() on them.
+		 * DONE chunks remain in the list until reaped. The state
+		 * check here prevents calling event_flush_drive_chunk() on them.
 		 */
 		int state = atomic_load_explicit(&chunk->flush_state,
 			memory_order_acquire);
-		if (state == TRADE_CHUNK_FLUSH_NEEDED ||
-				state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
-			completed += trade_flush_drive_chunk(buf, chunk, ops);
+		if (state == EVENT_CHUNK_FLUSH_NEEDED ||
+				state == EVENT_CHUNK_FLUSH_IN_FLIGHT) {
+			completed += event_flush_drive_chunk(buf, chunk, ops);
 		}
 	}
 
@@ -605,45 +600,45 @@ int trade_data_buffer_flush_full_chunks(struct trade_data_buffer *buf,
 }
 
 /**
- * @brief   Flush all remaining trade chunks, including any partial tail.
+ * @brief   Flush all remaining event chunks, including any partial tail.
  *
  * Intended for use during trcache_destroy(). Marks the current tail chunk
  * as needing a flush if it contains any data, then busy-polls until all
  * chunks (full and partial) have completed their flush.
  *
  * The tail chunk is handled directly here because
- * trade_data_buffer_flush_full_chunks() deliberately skips it during
+ * event_data_buffer_flush_full_chunks() deliberately skips it during
  * normal operation (the producer may still be writing to it).
  *
  * @param   buf:  Buffer to finalize.
- * @param   ops:  Trade flush callback operations.
+ * @param   ops:  Flush callback operations.
  */
-void trade_data_buffer_finalize(struct trade_data_buffer *buf,
+void event_data_buffer_finalize(struct event_data_buffer *buf,
 	const struct trcache_trade_flush_ops *ops)
 {
-	struct trade_data_chunk *tail;
+	struct event_data_chunk *tail;
 	int write_idx;
 
 	if (buf == NULL || ops == NULL || ops->flush == NULL) {
 		return;
 	}
 
-	tail = __get_trd_chunk_ptr(list_get_last(&buf->chunk_list));
+	tail = __get_evt_chunk_ptr(list_get_last(&buf->chunk_list));
 	write_idx = atomic_load_explicit(&tail->write_idx,
 		memory_order_acquire);
 
 	/*
 	 * If the tail contains data that has not yet been marked for flush,
 	 * mark it now. write_idx is intentionally NOT overridden so that
-	 * trade_flush_drive_chunk() passes the real trade count to the callback.
-	 * The producer has already stopped (destroy path), so write_idx is
-	 * stable and this write is race-free.
+	 * event_flush_drive_chunk() passes the real event count to the
+	 * callback. The producer has already stopped (destroy path), so
+	 * write_idx is stable and this write is race-free.
 	 */
 	if (write_idx > 0 &&
 			atomic_load_explicit(&tail->flush_state, memory_order_acquire)
-				== TRADE_CHUNK_FLUSH_NOT_READY) {
+				== EVENT_CHUNK_FLUSH_NOT_READY) {
 		atomic_store_explicit(&tail->flush_state,
-			TRADE_CHUNK_FLUSH_NEEDED, memory_order_release);
+			EVENT_CHUNK_FLUSH_NEEDED, memory_order_release);
 		atomic_fetch_add_explicit(&buf->num_full_unflushed_chunks,
 			1, memory_order_release);
 	}
@@ -658,13 +653,13 @@ void trade_data_buffer_finalize(struct trade_data_buffer *buf,
 	 */
 	while (atomic_load_explicit(&buf->num_full_unflushed_chunks,
 			memory_order_acquire) > 0) {
-		trade_data_buffer_flush_full_chunks(buf, ops);
+		event_data_buffer_flush_full_chunks(buf, ops);
 
 		int tail_state = atomic_load_explicit(&tail->flush_state,
 			memory_order_acquire);
-		if (tail_state == TRADE_CHUNK_FLUSH_NEEDED ||
-				tail_state == TRADE_CHUNK_FLUSH_IN_FLIGHT) {
-			trade_flush_drive_chunk(buf, tail, ops);
+		if (tail_state == EVENT_CHUNK_FLUSH_NEEDED ||
+				tail_state == EVENT_CHUNK_FLUSH_IN_FLIGHT) {
+			event_flush_drive_chunk(buf, tail, ops);
 		}
 	}
 }

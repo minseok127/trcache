@@ -274,9 +274,9 @@ typedef struct trcache_field_request {
  * @num_worker_threads:        Number of worker threads.
  * @max_symbols:               Maximum number of symbols that can be registered.
  * @trade_data_size:           Size of the user-defined trade data structure.
- * @trade_io_block_size:       Target I/O block size for raw trade chunks in
- *                             bytes. The number of trades per chunk is
- *                             computed as trade_io_block_size/trade_data_size.
+ * @feed_block_size:           Target I/O block size for event data chunks in
+ *                             bytes. The number of events per chunk is
+ *                             computed as feed_block_size / trade_data_size.
  *                             Set to 0 to use the default (64 KiB), which
  *                             aligns well with typical NVMe write granularity.
  *                             The data buffer of each chunk is allocated with
@@ -297,7 +297,7 @@ typedef struct trcache_init_ctx {
 	int num_worker_threads;
 	int max_symbols;
 	size_t trade_data_size;
-	size_t trade_io_block_size;
+	size_t feed_block_size;
 	struct trcache_trade_flush_ops trade_flush_ops;
 } trcache_init_ctx;
 

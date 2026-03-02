@@ -215,7 +215,7 @@ make BUILD_MODE=debug   # build with debug symbols and assertions
 trcache_feed_trade_data()
          │
          ▼
-  trade_data_buffer (per-symbol)
+  event_data_buffer (per-symbol)
          │
          ├──────────────────────────────────────────────────┐
          │                                                  │
@@ -500,7 +500,7 @@ Configure in `trcache_init_ctx`:
 ctx.trade_flush_ops.flush   = trade_flush;
 ctx.trade_flush_ops.is_done = trade_is_done;
 ctx.trade_flush_ops.ctx     = my_ctx;
-// ctx.trade_io_block_size: chunk size in bytes (default: 64 KiB)
+// ctx.feed_block_size: chunk size in bytes (default: 64 KiB)
 ```
 
 Leave `trade_flush_ops.flush = NULL` (or zero-initialize) to disable.

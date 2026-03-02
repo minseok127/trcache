@@ -75,7 +75,7 @@
  */
 enum worker_group_type {
 	GROUP_IN_MEMORY,
-	GROUP_BATCH_FLUSH
+	GROUP_FLUSH
 };
 
 /**

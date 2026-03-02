@@ -12,7 +12,7 @@
 
 #include "concurrent/scalable_queue.h"
 #include "meta/trcache_internal.h"
-#include "pipeline/trade_data_buffer.h"
+#include "pipeline/event_data_buffer.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/hash_table_callbacks.h"
 #include "utils/log.h"
@@ -179,7 +179,7 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
-	struct trade_data_chunk *chunk = NULL;
+	struct event_data_chunk *chunk = NULL;
 	struct list_head *c = NULL, *n = NULL;
 	struct trcache *tc;
 	_Atomic(size_t) *free_list_mem_counter;
@@ -198,9 +198,9 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 	 * Each chunk in the free list owns a separately allocated 4 KiB-
 	 * aligned data buffer. The total tracked size per chunk is the
 	 * struct size plus that data buffer size, matching the value stored
-	 * in trade_data_buffer.chunk_allocation_size.
+	 * in event_data_buffer.chunk_allocation_size.
 	 */
-	chunk_size = align_up(sizeof(struct trade_data_chunk), CACHE_LINE_SIZE)
+	chunk_size = align_up(sizeof(struct event_data_chunk), CACHE_LINE_SIZE)
 		+ tc->trade_data_buf_size;
 
 	if (tls_data->local_symbol_id_map != NULL) {
@@ -212,7 +212,7 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		c = list_get_first(&tls_data->local_free_list);
 		while (c != &tls_data->local_free_list) {
 			n = c->next;
-			chunk = __get_trd_chunk_ptr(c);
+			chunk = __get_evt_chunk_ptr(c);
 			total_freed += chunk_size;
 			free(chunk->data);
 			free(chunk);
@@ -423,11 +423,11 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	 * Clamp to at least one record so that a very large trade_data_size
 	 * never yields zero.
 	 * trade_data_buf_size is rounded up to the data-buffer alignment so
-	 * that aligned_alloc(TRADE_DATA_BUF_ALIGN, ...) is always valid.
+	 * that aligned_alloc(EVENT_DATA_BUF_ALIGN, ...) is always valid.
 	 */
 	{
-		size_t io_block = (ctx->trade_io_block_size > 0) ?
-			ctx->trade_io_block_size : 65536;
+		size_t io_block = (ctx->feed_block_size > 0) ?
+			ctx->feed_block_size : 65536;
 		tc->trades_per_chunk =
 			(int)(io_block / tc->trade_data_size);
 		if (tc->trades_per_chunk < 1) {
@@ -713,7 +713,7 @@ void trcache_destroy(struct trcache *tc)
 			struct symbol_entry *entry =
 				&tc->symbol_table->symbol_entries[i];
 			if (entry->trd_buf != NULL) {
-				trade_data_buffer_finalize(
+				event_data_buffer_finalize(
 					entry->trd_buf, &tc->trade_flush_ops);
 			}
 		}
@@ -903,17 +903,17 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
  * @brief   Apply trades from the buffer by the user thread.
  *
  * This function is called by the user thread (producer) when the
- * trade_data_buffer is under memory pressure. It attempts to acquire a cursor
+ * event_data_buffer is under memory pressure. It attempts to acquire a cursor
  * for each candle type and process pending trades, thereby freeing up space
  * in the buffer. This helps to alleviate back-pressure without blocking.
  *
  * @param   buf:           Buffer to consume from.
  * @param   symbol_entry:  Target symbol entry.
  */
-static void user_thread_apply_trades(struct trade_data_buffer *buf,
+static void user_thread_apply_trades(struct event_data_buffer *buf,
 	struct symbol_entry *symbol_entry)
 {
-	struct trade_data_buffer_cursor *cur;
+	struct event_data_buffer_cursor *cur;
 	struct candle_chunk_list *list;
 	struct trcache *tc = buf->trc;
 	void *trade_data;
@@ -927,22 +927,22 @@ static void user_thread_apply_trades(struct trade_data_buffer *buf,
 			return;
 		}
 
-		cur = trade_data_buffer_acquire_cursor(buf, i);
+		cur = event_data_buffer_acquire_cursor(buf, i);
 
 		/* This candle type is being processed by a worker thread. */
 		if (cur == NULL) {
 			continue;
 		}
 
-		while (trade_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
+		while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 			for (int j = 0; j < count; j++) {
 				trade_data = (uint8_t *)array + (j * tc->trade_data_size);
 				candle_chunk_list_apply_trade(list, trade_data);
 			}
-			trade_data_buffer_consume(buf, cur, count);
+			event_data_buffer_consume(buf, cur, count);
 		}
 
-		trade_data_buffer_release_cursor(cur);
+		event_data_buffer_release_cursor(cur);
 
 		/*
 		 * Unregister from the pools we *just used* for this candle type
@@ -972,7 +972,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 	const void *data, int symbol_id)
 {
 	struct trcache_tls_data *tls_data_ptr = get_tls_data_or_create(tc);
-	struct trade_data_buffer *trd_databuf;
+	struct event_data_buffer *trd_databuf;
 	struct symbol_entry *symbol_entry;
 	bool is_memory_pressure;
 
@@ -1008,7 +1008,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 			user_thread_apply_trades(trd_databuf, symbol_entry);
 		}
 
-		trade_data_buffer_reap_free_chunks(trd_databuf,
+		event_data_buffer_reap_free_chunks(trd_databuf,
 			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id,
 			tc->trade_flush_ops.flush != NULL);
 	}
@@ -1016,7 +1016,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 	/*
 	 * Push the trade record into the buffer.
 	 */
-	if (trade_data_buffer_push(trd_databuf, data,
+	if (event_data_buffer_push(trd_databuf, data,
 			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id) == -1) {
 		return -1;
 	}

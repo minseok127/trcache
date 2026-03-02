@@ -160,7 +160,7 @@ void symbol_table_destroy(struct symbol_table *table)
 			}
 		}
 
-		trade_data_buffer_destroy(entry->trd_buf);
+		event_data_buffer_destroy(entry->trd_buf);
 		free(entry->symbol_str);
 	}
 
@@ -245,10 +245,12 @@ static int init_symbol_entry(struct trcache *tc,
 		return -1;
 	}
 
-	entry->trd_buf = trade_data_buffer_init(tc, id);
+	entry->trd_buf = event_data_buffer_init(tc, id,
+		tc->trade_data_size, tc->trades_per_chunk,
+		tc->trade_data_buf_size, tc->num_candle_configs);
 
 	if (entry->trd_buf == NULL) {
-		errmsg(stderr, "Allocation of trade_data_buffer is failed\n");
+		errmsg(stderr, "Allocation of event_data_buffer failed\n");
 		free(entry->symbol_str);
 		entry->symbol_str = NULL;
 		return -1;
@@ -267,7 +269,7 @@ static int init_symbol_entry(struct trcache *tc,
 				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
 			}
 
-			trade_data_buffer_destroy(entry->trd_buf);
+			event_data_buffer_destroy(entry->trd_buf);
 			free(entry->symbol_str);
 			entry->symbol_str = NULL;
 			entry->trd_buf = NULL;
