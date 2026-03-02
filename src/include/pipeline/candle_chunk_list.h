@@ -148,8 +148,9 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list);
 /**
  * @brief    Apply trade data to the appropriate candle.
  *
- * @param    list:  Pointer to the candle chunk list.
- * @param    trade: Trade data to apply.
+ * @param    list:       Pointer to the candle chunk list.
+ * @param    trade:      Trade data to apply.
+ * @param    book_state: Current book state (NULL if not configured).
  *
  * @return   0 on success, or -1 if the trade data is not applied.
  *
@@ -160,7 +161,7 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list);
  * is executed by only one worker thread at a time.
  */
 int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
-	void *trade);
+	void *trade, const void *book_state);
 
 /**
  * @brief    Convert all immutable row candles into a column batch.

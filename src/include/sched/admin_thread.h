@@ -26,9 +26,9 @@ struct admin_task_costs {
  *                            Indexed [type_idx * max_symbols + sym_idx].
  * @task_costs:               Admin-local array for task costs (EMA cycles).
  *                            Indexed [type_idx * max_symbols + sym_idx].
- * @trade_flush_costs:        Per-symbol EMA cycles per trade-chunk flush.
+ * @trade_flush_costs:        Per-symbol EMA cycles per trade-block flush.
  *                            Indexed [sym_idx] only.
- * @trade_chunk_fill_rates:   Per-symbol EMA of trade chunks filled per
+ * @trade_chunk_fill_rates:   Per-symbol EMA of trade blocks filled per
  *                            second. Indexed [sym_idx] only; independent
  *                            of candle type.
  * @trade_fill_timestamps:    Per-symbol timestamp (ns) of the last
@@ -39,19 +39,19 @@ struct admin_task_costs {
  * @next_batch_flush_bitmaps:      Reusable buffer for calculating the next
  *                                 Batch Flush assignment.
  * @next_trade_flush_bitmaps:      Reusable buffer for calculating the next
- *                                 trade-chunk Flush assignment.
+ *                                 trade-block Flush assignment.
  * @current_im_bitmaps:            Stores a copy of the last published
  *                                 In-Memory assignment.
  * @current_batch_flush_bitmaps:         Stores a copy of the last published
  *                                 Flush assignment.
  * @current_trade_flush_bitmaps:   Stores a copy of the last published
- *                                 trade-chunk Flush assignment.
+ *                                 trade-block Flush assignment.
  * @in_mem_words_per_worker:       Size (in uint64_t words) of a single
  *                                 worker's In-Memory bitmap.
  * @batch_flush_words_per_worker:        Size (in uint64_t words) of a single
  *                                 worker's Flush bitmap.
  * @trade_flush_words_per_worker:  Size (in uint64_t words) of a single
- *                                 worker's trade-chunk Flush bitmap.
+ *                                 worker's trade-block Flush bitmap.
  * @done:                          Flag signalled during shutdown.
  */
 struct admin_state {

@@ -344,16 +344,16 @@ static void update_stage_rate(struct sched_stage_rate *r,
 }
 
 /**
- * @brief   Update per-symbol trade chunk fill rates.
+ * @brief   Update per-symbol trade block fill rates.
  *
- * Tracks how many fully-filled unflushed trade chunks each symbol
+ * Tracks how many fully-filled unflushed trade blocks each symbol
  * accumulates per second. This is intentionally kept in dedicated arrays
  * (separate from stage_snaps/stage_rates) because trade flush is
  * per-symbol only and has no candle-type dimension — mixing the two
  * would conflate orthogonal indexing schemes.
  *
  * Mirrors the flushable_batch_rate method: unflushed count / elapsed
- * time gives chunks/sec, fed into an EMA for smoothing.
+ * time gives blocks/sec, fed into an EMA for smoothing.
  *
  * @param   cache:       Global cache instance.
  * @param   admin:       Admin state containing fill-rate arrays.
@@ -380,7 +380,7 @@ static void update_trade_chunk_fill_rates(struct trcache *cache,
 		}
 
 		unflushed = atomic_load_explicit(
-			&tdb->num_full_unflushed_chunks,
+			&tdb->num_full_unflushed_blocks,
 			memory_order_acquire);
 		tmp = (__uint128_t)(unflushed > 0 ? (uint64_t)unflushed : 0)
 			* 1000000000ull;
@@ -396,7 +396,7 @@ static void update_trade_chunk_fill_rates(struct trcache *cache,
  *
  * Updates the admin-thread-local statistics arrays in 'admin_state':
  *   1. Candle pipeline snapshots and throughput rates (type × symbol).
- *   2. Trade chunk fill rates (symbol only, when trade flush is enabled).
+ *   2. Trade block fill rates (symbol only, when trade flush is enabled).
  *
  * @param   cache:  Global cache instance.
  */
@@ -732,7 +732,7 @@ static void assign_candle_tasks(struct trcache *cache,
 }
 
 /**
- * @brief   Assign trade-chunk flush tasks for all symbols.
+ * @brief   Assign trade-block flush tasks for all symbols.
  *
  * One bit per symbol (independent of candle type). Uses the same
  * flush_state budget so candle batch flush and trade flush work are
@@ -742,8 +742,8 @@ static void assign_candle_tasks(struct trcache *cache,
  * Apply/Convert/Batch Flush tasks are assigned. This keeps bitmap assignments
  * stable across admin cycles and lets the EMA decay naturally after a
  * burst rather than toggling bits on every cycle.
- * event_data_buffer_flush_full_chunks() handles the empty case
- * gracefully with an immediate return when no full chunks exist.
+ * event_data_buffer_flush_full_blocks() handles the empty case
+ * gracefully with an immediate return when no full blocks exist.
  *
  * @param   admin:       Admin state containing fill-rate and cost arrays.
  * @param   symtab:      Symbol table.

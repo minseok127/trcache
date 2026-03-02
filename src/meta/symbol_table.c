@@ -246,7 +246,7 @@ static int init_symbol_entry(struct trcache *tc,
 	}
 
 	entry->trd_buf = event_data_buffer_init(tc, id,
-		tc->trade_data_size, tc->trades_per_chunk,
+		tc->trade_data_size, tc->trades_per_block,
 		tc->trade_data_buf_size, tc->num_candle_configs);
 
 	if (entry->trd_buf == NULL) {

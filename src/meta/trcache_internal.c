@@ -179,11 +179,11 @@ static struct trcache_tls_data *get_tls_data_or_create(struct trcache *tc)
  */
 static void destroy_tls_data(struct trcache_tls_data *tls_data)
 {
-	struct event_data_chunk *chunk = NULL;
+	struct event_data_block *block = NULL;
 	struct list_head *c = NULL, *n = NULL;
 	struct trcache *tc;
 	_Atomic(size_t) *free_list_mem_counter;
-	size_t chunk_size;
+	size_t block_size;
 	size_t total_freed = 0;
 
 	if (tls_data == NULL) {
@@ -195,12 +195,12 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		&tc->mem_acc.feed_thread_free_list_mem[tls_data->thread_id].value;
 
 	/*
-	 * Each chunk in the free list owns a separately allocated 4 KiB-
-	 * aligned data buffer. The total tracked size per chunk is the
+	 * Each block in the free list owns a separately allocated 4 KiB-
+	 * aligned data buffer. The total tracked size per block is the
 	 * struct size plus that data buffer size, matching the value stored
-	 * in event_data_buffer.chunk_allocation_size.
+	 * in event_data_buffer.block_allocation_size.
 	 */
-	chunk_size = align_up(sizeof(struct event_data_chunk), CACHE_LINE_SIZE)
+	block_size = align_up(sizeof(struct event_data_block), CACHE_LINE_SIZE)
 		+ tc->trade_data_buf_size;
 
 	if (tls_data->local_symbol_id_map != NULL) {
@@ -212,10 +212,10 @@ static void destroy_tls_data(struct trcache_tls_data *tls_data)
 		c = list_get_first(&tls_data->local_free_list);
 		while (c != &tls_data->local_free_list) {
 			n = c->next;
-			chunk = __get_evt_chunk_ptr(c);
-			total_freed += chunk_size;
-			free(chunk->data);
-			free(chunk);
+			block = __get_evt_block_ptr(c);
+			total_freed += block_size;
+			free(block->data);
+			free(block);
 			c = n;
 		}
 	}
@@ -417,7 +417,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->trade_flush_ops = ctx->trade_flush_ops;
 
 	/*
-	 * Derive the number of trade records per chunk from the requested
+	 * Derive the number of trade records per block from the requested
 	 * I/O block size. Default to 64 KiB when the caller leaves the
 	 * field at zero, which aligns well with NVMe write granularity.
 	 * Clamp to at least one record so that a very large trade_data_size
@@ -428,13 +428,13 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	{
 		size_t io_block = (ctx->feed_block_size > 0) ?
 			ctx->feed_block_size : 65536;
-		tc->trades_per_chunk =
+		tc->trades_per_block =
 			(int)(io_block / tc->trade_data_size);
-		if (tc->trades_per_chunk < 1) {
-			tc->trades_per_chunk = 1;
+		if (tc->trades_per_block < 1) {
+			tc->trades_per_block = 1;
 		}
 		tc->trade_data_buf_size = align_up(
-			(size_t)tc->trades_per_chunk * tc->trade_data_size,
+			(size_t)tc->trades_per_block * tc->trade_data_size,
 			4096);
 	}
 
@@ -702,7 +702,7 @@ void trcache_destroy(struct trcache *tc)
 	
 	/*
 	 * If raw trade flush is configured, busy-flush every symbol's
-	 * remaining chunks (including partial tails) before we tear down
+	 * remaining blocks (including partial tails) before we tear down
 	 * the symbol table.
 	 */
 	if (tc->trade_flush_ops.flush != NULL) {
@@ -721,7 +721,7 @@ void trcache_destroy(struct trcache *tc)
 
 	/*
 	 * Destroy symbol table. This finalizes all candle lists,
-	 * flushing data and returning all chunks/pages to the SCQ pools.
+	 * flushing data and returning all objects to the SCQ pools.
 	 */
 	symbol_table_destroy(tc->symbol_table);
 	
@@ -937,7 +937,7 @@ static void user_thread_apply_trades(struct event_data_buffer *buf,
 		while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 			for (int j = 0; j < count; j++) {
 				trade_data = (uint8_t *)array + (j * tc->trade_data_size);
-				candle_chunk_list_apply_trade(list, trade_data);
+				candle_chunk_list_apply_trade(list, trade_data, NULL);
 			}
 			event_data_buffer_consume(buf, cur, count);
 		}
@@ -996,9 +996,9 @@ int trcache_feed_trade_data(struct trcache *tc,
 		return -1;
 	}
 
-	/* If we need free chunk, reap it from data buffer. */
+	/* If we need free block, reap it from data buffer. */
 	if (trd_databuf->next_tail_write_idx ==
-			tc->trades_per_chunk - 1 &&
+			tc->trades_per_block - 1 &&
 			list_empty(&tls_data_ptr->local_free_list)) {
 
 		is_memory_pressure = atomic_load_explicit(
@@ -1008,7 +1008,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 			user_thread_apply_trades(trd_databuf, symbol_entry);
 		}
 
-		event_data_buffer_reap_free_chunks(trd_databuf,
+		event_data_buffer_reap_free_blocks(trd_databuf,
 			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id,
 			tc->trade_flush_ops.flush != NULL);
 	}

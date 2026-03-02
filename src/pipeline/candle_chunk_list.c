@@ -345,7 +345,7 @@ void destroy_candle_chunk_list(struct candle_chunk_list *chunk_list)
  * @brief   Initialise the very first candle/page of a brand‑new list.
  */
 static int init_first_candle(struct candle_chunk_list *list,
-	void *trade)
+	void *trade, const void *book_state)
 {
 	struct candle_chunk *new_chunk = create_candle_chunk(
 		list->trc, list->candle_idx, list->symbol_id, list->row_page_count,
@@ -361,7 +361,9 @@ static int init_first_candle(struct candle_chunk_list *list,
 		return -1;
 	}
 
-	if (candle_chunk_page_init(new_chunk, 0, ops, trade, &first_key) == -1) {
+	int ret = candle_chunk_page_init(new_chunk, 0, ops,
+		trade, book_state, &first_key);
+	if (ret == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		candle_chunk_destroy(new_chunk);
 		return -1;
@@ -414,17 +416,17 @@ static int init_first_candle(struct candle_chunk_list *list,
 /**
  * @brief   Start the next candle within the same page.
  */
-static void advance_within_same_page(struct candle_chunk *chunk, 
+static void advance_within_same_page(struct candle_chunk *chunk,
 	struct candle_row_page *row_page,
 	const struct trcache_candle_update_ops *ops,
-	void *trade)
+	void *trade, const void *book_state)
 {
 	const struct trcache_candle_config *config
 		= &chunk->trc->candle_configs[chunk->column_batch->candle_idx];
 	struct trcache_candle_base *next_candle
 		= (struct trcache_candle_base *)(row_page->data +
 			(++chunk->mutable_row_idx * config->user_candle_size));
-	ops->init(next_candle, trade);
+	ops->init(next_candle, trade, book_state);
 	candle_chunk_write_key(chunk,
 		chunk->mutable_page_idx, chunk->mutable_row_idx,
 		next_candle->key.value);
@@ -436,12 +438,15 @@ static void advance_within_same_page(struct candle_chunk *chunk,
  */
 static int advance_to_next_page(struct candle_chunk *chunk,
 	const struct trcache_candle_update_ops *ops,
-	void *trade)
+	void *trade, const void *book_state)
 {
 	int new_page_idx = chunk->mutable_page_idx + 1;
 	uint64_t dummy;
+	int ret;
 
-	if (candle_chunk_page_init(chunk, new_page_idx, ops, trade, &dummy) == -1) {
+	ret = candle_chunk_page_init(chunk, new_page_idx,
+		ops, trade, book_state, &dummy);
+	if (ret == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		return -1;
 	}
@@ -455,7 +460,7 @@ static int advance_to_next_page(struct candle_chunk *chunk,
  * @brief   Allocate a fresh chunk and start its first candle.
  */
 static int advance_to_new_chunk(struct candle_chunk_list *list,
-	struct candle_chunk *prev_chunk, void *trade)
+	struct candle_chunk *prev_chunk, void *trade, const void *book_state)
 {
 	const struct trcache_candle_update_ops *ops
 		= &list->config->update_ops;
@@ -469,7 +474,9 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
 		return -1;
 	}
 
-	if (candle_chunk_page_init(new_chunk, 0, ops, trade, &first_key) == -1) {
+	int ret = candle_chunk_page_init(new_chunk, 0, ops,
+		trade, book_state, &first_key);
+	if (ret == -1) {
 		errmsg(stderr, "Failure on candle_chunk_page_init()\n");
 		candle_chunk_destroy(new_chunk);
 		return -1;
@@ -510,7 +517,7 @@ static int advance_to_new_chunk(struct candle_chunk_list *list,
  * is executed by only one worker thread at a time.
  */
 int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
-	void *trade)
+	void *trade, const void *book_state)
 {
 	struct candle_chunk *chunk = list->candle_mutable_chunk;
 	const struct trcache_candle_config *config = list->config;
@@ -529,7 +536,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 * the list init function.
 	 */
 	if (chunk == NULL) {
-		if (init_first_candle(list, trade) == -1) {
+		if (init_first_candle(list, trade, book_state) == -1) {
 			return -1;
 		}
 
@@ -549,7 +556,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	 */
 	if (!candle->is_closed) {
 		pthread_spin_lock(&chunk->spinlock);
-		consumed = ops->update(candle, trade);
+		consumed = ops->update(candle, trade, book_state);
 		pthread_spin_unlock(&chunk->spinlock);
 
 		if (consumed) {
@@ -570,7 +577,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 	if (chunk->mutable_row_idx != TRCACHE_ROWS_PER_PAGE - 1 &&
 			expected_num_completed != list->trc->batch_candle_count) {
 		/* Initialize the next candle */
-		advance_within_same_page(chunk, row_page, ops, trade);
+		advance_within_same_page(chunk, row_page, ops, trade, book_state);
 
 		/* Then release the page */
 		atomsnap_release_version(row_page_version);
@@ -580,7 +587,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 
 		/* Then move to the next page */
-		if (advance_to_next_page(chunk, ops, trade) == -1) {
+		if (advance_to_next_page(chunk, ops, trade, book_state) == -1) {
 			errmsg(stderr, "Failure on advance_to_next_page()\n");
 			return -1;
 		}
@@ -589,7 +596,7 @@ int candle_chunk_list_apply_trade(struct candle_chunk_list *list,
 		atomsnap_release_version(row_page_version);
 
 		/* Then move to the next chunk */
-		if (advance_to_new_chunk(list, chunk, trade) == -1) {
+		if (advance_to_new_chunk(list, chunk, trade, book_state) == -1) {
 			errmsg(stderr, "Failure on advance_to_new_chunk()\n");
 			return -1;
 		}

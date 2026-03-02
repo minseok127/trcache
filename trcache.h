@@ -155,15 +155,15 @@ typedef struct trcache_batch_flush_ops {
 } trcache_batch_flush_ops;
 
 /*
- * trcache_trade_flush_ops - User-defined raw trade chunk flush callbacks.
+ * trcache_trade_flush_ops - User-defined raw trade block flush callbacks.
  *
- * @flush:   Initiate a flush for one completed raw trade chunk.
+ * @flush:   Initiate a flush for one completed raw trade block.
  *           The implementation tracks async state internally via @ctx,
- *           keyed by @data (the chunk's unique buffer pointer).
- * @is_done: Poll for flush completion. Returns true when done (success or
- *           error). Always called after @flush; never called before it.
- *           The implementation must clean up any internal async state before
- *           returning true.
+ *           keyed by @io_block (the block's unique buffer pointer).
+ * @is_done: Poll for flush completion. Returns true when done (success
+ *           or error). Always called after @flush; never called before
+ *           it. The implementation must clean up any internal async
+ *           state before returning true.
  * @ctx:     User-supplied pointer passed to both @flush and @is_done.
  *
  * Setting @flush to NULL disables raw trade persistence entirely.
@@ -172,8 +172,10 @@ typedef struct trcache_batch_flush_ops {
  */
 typedef struct trcache_trade_flush_ops {
 	void (*flush)(trcache *cache, int symbol_id,
-		const void *data, int num_trades, void *ctx);
-	bool (*is_done)(trcache *cache, const void *data, void *ctx);
+		const void *io_block, int num_trades,
+		void *ctx);
+	bool (*is_done)(trcache *cache,
+		const void *io_block, void *ctx);
 	void *ctx;
 } trcache_trade_flush_ops;
 
@@ -191,8 +193,10 @@ typedef struct trcache_trade_flush_ops {
  * Users must cast this 'void *' to their own structure type.
  */
 typedef struct trcache_candle_update_ops {
-	void (*init)(struct trcache_candle_base *c, void *trade_data);
-	bool (*update)(struct trcache_candle_base *c, void *trade_data);
+	void (*init)(struct trcache_candle_base *c, void *trade_data,
+		const void *book_state);
+	bool (*update)(struct trcache_candle_base *c, void *trade_data,
+		const void *book_state);
 } trcache_candle_update_ops;
 
 /*
@@ -274,14 +278,11 @@ typedef struct trcache_field_request {
  * @num_worker_threads:        Number of worker threads.
  * @max_symbols:               Maximum number of symbols that can be registered.
  * @trade_data_size:           Size of the user-defined trade data structure.
- * @feed_block_size:           Target I/O block size for event data chunks in
- *                             bytes. The number of events per chunk is
- *                             computed as feed_block_size / trade_data_size.
- *                             Set to 0 to use the default (64 KiB), which
- *                             aligns well with typical NVMe write granularity.
- *                             The data buffer of each chunk is allocated with
- *                             4 KiB alignment to support DMA transfers.
- * @trade_flush_ops:           Optional callbacks to persist raw trade chunks.
+ * @feed_block_size:           Target I/O block size for event data blocks
+ *                             in bytes. Set to 0 to use the default (64 KiB).
+ *                             Each block's data buffer is allocated with
+ *                             4 KiB alignment.
+ * @trade_flush_ops:           Optional callbacks to persist raw trade blocks.
  *                             Set .flush = NULL to disable.
  *
  * Putting every knob in a single structure keeps the public API compact and

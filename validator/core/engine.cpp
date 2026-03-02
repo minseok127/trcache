@@ -108,7 +108,7 @@ static void update_common(val_candle* candle, trcache_trade_data* d)
 
 /* TICK_MODULO Logic */
 template <int SLOT>
-void init_tick_modulo(trcache_candle_base* c, void *data)
+void init_tick_modulo(trcache_candle_base* c, void *data, const void *)
 {
 	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
@@ -130,7 +130,7 @@ void init_tick_modulo(trcache_candle_base* c, void *data)
 }
 
 template <int SLOT>
-bool update_tick_modulo(trcache_candle_base* c, void *data)
+bool update_tick_modulo(trcache_candle_base* c, void *data, const void *)
 {
 	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
@@ -174,7 +174,7 @@ bool update_tick_modulo(trcache_candle_base* c, void *data)
 
 /* TIME_FIXED Logic */
 template <int SLOT>
-void init_time_fixed(trcache_candle_base* c, void *data)
+void init_time_fixed(trcache_candle_base* c, void *data, const void *)
 {
 	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
@@ -206,7 +206,7 @@ void init_time_fixed(trcache_candle_base* c, void *data)
 }
 
 template <int SLOT>
-bool update_time_fixed(trcache_candle_base* c, void* data)
+bool update_time_fixed(trcache_candle_base* c, void* data, const void *)
 {
 	trcache_trade_data *d = (trcache_trade_data *)data;
 	val_candle* candle = (val_candle*)c;
@@ -243,8 +243,8 @@ bool update_time_fixed(trcache_candle_base* c, void* data)
  * These lookup tables map a runtime slot index to the compiled
  * template instance.
  */
-typedef void (*init_func_t)(trcache_candle_base*, void *);
-typedef bool (*update_func_t)(trcache_candle_base*, void *);
+typedef void (*init_func_t)(trcache_candle_base*, void *, const void *);
+typedef bool (*update_func_t)(trcache_candle_base*, void *, const void *);
 
 /* Define instances for slots 0 to 7 */
 static const init_func_t INIT_TICK_OPS[] = {

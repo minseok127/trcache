@@ -13,7 +13,7 @@
   - **Apply**: Aggregates trades into row-oriented candles.
   - **Convert**: Transforms rows into SIMD-aligned column batches.
   - **Batch Flush**: Passes completed batches to user callbacks for persistence.
-- **Raw Trade Flush**: Raw trade records are collected into fixed-size chunks per symbol and flushed to storage independently of candle batch flush.
+- **Raw Trade Flush**: Raw trade records are collected into fixed-size blocks per symbol and flushed to storage independently of candle batch flush.
 - **Lock-Free Queries**: Reads candle data without locks during concurrent updates.
 - **Adaptive Scheduling**: Admin thread monitors pipeline throughput and rebalances worker threads across stages.
 
@@ -232,7 +232,7 @@ trcache_feed_trade_data()
 
 3. **BATCH FLUSH**: When unflushed batch count exceeds a threshold, a worker invokes user-provided callbacks to persist candle batches (supports sync and async I/O).
 
-4. **TRADE FLUSH**: Raw trade chunks are flushed to storage independently of the candle pipeline.
+4. **TRADE FLUSH**: Raw trade blocks are flushed to storage independently of the candle pipeline.
 
 ### Implementation Details
 
@@ -436,60 +436,66 @@ bool my_is_done(trcache *cache, trcache_candle_batch *batch, void *ctx) {
 ### Step 5: Configure Trade Data Flush
 
 Raw trade records fed via `trcache_feed_trade_data` are collected into fixed-size
-chunks per symbol and can be persisted independently of candle batch flush.
+blocks per symbol and can be persisted independently of candle batch flush.
 This allows the raw feed to be replayed or audited.
 
-`flush()` is called once per chunk when it is full. `is_done()` is called
+`flush()` is called once per block when it is full. `is_done()` is called
 immediately after and on each subsequent worker pass until it returns true — the
-worker does not block in place. The `data` pointer passed to `is_done()` is the
-same pointer passed to `flush()`, and is unique per in-flight chunk; use it as
-the map key for async tracking. At shutdown, any partial (not-yet-full) tail
-chunk is also flushed automatically.
+worker does not block in place. The `io_block` pointer passed to `is_done()` is
+the same pointer passed to `flush()`, and is unique per in-flight block; use it
+as the map key for async tracking. At shutdown, any partial (not-yet-full) tail
+block is also flushed automatically.
 
 #### Synchronous example
 
 ```c
 void trade_flush(trcache *cache, int symbol_id,
-                 const void *data, int num_trades, void *ctx) {
+                 const void *io_block, int num_trades,
+                 void *ctx) {
     MyCtx *c = (MyCtx *)ctx;
     size_t size = (size_t)num_trades * sizeof(MyTrade);
-    pwrite(c->fds[symbol_id], data, size, c->offsets[symbol_id]);
+    pwrite(c->fds[symbol_id], io_block, size,
+           c->offsets[symbol_id]);
     c->offsets[symbol_id] += size;
 }
 
-bool trade_is_done(trcache *cache, const void *data, void *ctx) {
+bool trade_is_done(trcache *cache,
+                   const void *io_block, void *ctx) {
     return true;  /* pwrite completed synchronously */
 }
 ```
 
 #### Asynchronous example
 
-`data` is a unique pointer per in-flight chunk; use it as the map key.
+`io_block` is a unique pointer per in-flight block; use it as the map key.
 
 ```cpp
 struct MyHandle { bool done; };
 
 struct MyAsyncCtx {
     std::unordered_map<const void *, MyHandle *> handle_map;
-    /* ... async I/O backend state (fds, ring, offsets, etc.) ... */
+    /* ... async I/O backend state ... */
 };
 
 void trade_flush(trcache *cache, int symbol_id,
-                 const void *data, int num_trades, void *ctx) {
+                 const void *io_block, int num_trades,
+                 void *ctx) {
     MyAsyncCtx *c = (MyAsyncCtx *)ctx;
     MyHandle *h = new MyHandle{false};
-    c->handle_map[data] = h;
-    /* submit async write; completion sets h->done = true */
-    my_submit_write(c, symbol_id, data, num_trades, h);
+    c->handle_map[io_block] = h;
+    /* submit async write; completion sets h->done */
+    my_submit_write(c, symbol_id, io_block,
+                    num_trades, h);
 }
 
-bool trade_is_done(trcache *cache, const void *data, void *ctx) {
+bool trade_is_done(trcache *cache,
+                   const void *io_block, void *ctx) {
     MyAsyncCtx *c = (MyAsyncCtx *)ctx;
-    my_drain_completions(c);   /* process events → sets h->done */
-    MyHandle *h = c->handle_map[data];
+    my_drain_completions(c);
+    MyHandle *h = c->handle_map[io_block];
     if (!h->done)
         return false;
-    c->handle_map.erase(data);
+    c->handle_map.erase(io_block);
     delete h;
     return true;
 }
@@ -500,7 +506,7 @@ Configure in `trcache_init_ctx`:
 ctx.trade_flush_ops.flush   = trade_flush;
 ctx.trade_flush_ops.is_done = trade_is_done;
 ctx.trade_flush_ops.ctx     = my_ctx;
-// ctx.feed_block_size: chunk size in bytes (default: 64 KiB)
+// ctx.feed_block_size: block size in bytes (default: 64 KiB)
 ```
 
 Leave `trade_flush_ops.flush = NULL` (or zero-initialize) to disable.

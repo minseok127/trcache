@@ -141,8 +141,9 @@ static struct phase_summary_stats g_phase_summary[NUM_PHASES];
 
 /* Candle callbacks (same as static_read_benchmark) */
 static void candle_init_tick(struct trcache_candle_base *c,
-	void *data)
+	void *data, const void *book_state)
 {
+	(void)book_state;
 	struct trcache_trade_data *d = (struct trcache_trade_data *)data;
 	struct my_candle *candle = (struct my_candle *)c;
 	double price = d->price.as_double;
@@ -160,8 +161,9 @@ static void candle_init_tick(struct trcache_candle_base *c,
 
 #define DEFINE_TICK_UPDATE_FUNC(N) \
 static bool candle_update_tick_##N(struct trcache_candle_base *c, \
-	void *data) \
+	void *data, const void *book_state) \
 { \
+	(void)book_state; \
 	struct trcache_trade_data *d = (struct trcache_trade_data *)data; \
 	struct my_candle *candle = (struct my_candle *)c; \
 	double price = d->price.as_double; \
@@ -181,8 +183,9 @@ static bool candle_update_tick_##N(struct trcache_candle_base *c, \
 DEFINE_TICK_UPDATE_FUNC(3)
 
 static void candle_init_time(struct trcache_candle_base *c,
-	void *data)
+	void *data, const void *book_state)
 {
+	(void)book_state;
 	struct trcache_trade_data *d = (struct trcache_trade_data *)data;
 	struct my_candle *candle = (struct my_candle *)c;
 	double price = d->price.as_double;
@@ -200,8 +203,9 @@ static void candle_init_time(struct trcache_candle_base *c,
 
 #define DEFINE_TIME_UPDATE_FUNC(SUFFIX, DURATION_MS) \
 static bool candle_update_time_##SUFFIX(struct trcache_candle_base *c, \
-	void *data) \
+	void *data, const void *book_state) \
 { \
+	(void)book_state; \
 	struct trcache_trade_data *d = (struct trcache_trade_data *)data; \
 	if (d->timestamp >= c->key.timestamp + (DURATION_MS)) { \
 		c->is_closed = true; \

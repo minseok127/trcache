@@ -21,7 +21,7 @@ typedef struct trcache trcache;
  * trcache_tls_data - Per-thread cache.
  *   
  * @local_symbol_id_map:   Thread-local map from symbol string to ID.
- * @local_free_list:       Thread-local chunk free-list used by trd_databufs.
+ * @local_free_list:       Thread-local block free-list used by trd_databufs.
  * @trcache_ptr:           Back-pointer to owner trcache instance.
  * @thread_id:             Assigned index in tls_data_ptr_arr[].
  */
@@ -59,13 +59,13 @@ struct trcache_tls_data {
  * @chunk_pools:             Per-candle-type SCQ pools for candle_chunks.
  * @row_page_pools:          Per-candle-type SCQ pools for candle_row_pages.
  * @trade_data_size:         User-defined trade data size.
- * @trades_per_chunk:        Number of trade records per chunk data buffer.
+ * @trades_per_block:        Number of trade records per event data block.
  *                           Computed as io_block_size / trade_data_size.
- * @trade_data_buf_size:     Byte size of one chunk's data buffer (4 KiB-
- *                           aligned allocation that holds trades_per_chunk
- *                           records). Used when freeing chunks from the
+ * @trade_data_buf_size:     Byte size of one block's data buffer (4 KiB-
+ *                           aligned allocation that holds trades_per_block
+ *                           records). Used when freeing blocks from the
  *                           thread-local free list.
- * @trade_flush_ops:         Optional callbacks to persist raw trade chunks.
+ * @trade_flush_ops:         Optional callbacks to persist raw trade blocks.
  *                           .flush == NULL means raw trade flush is disabled.
 */
 struct trcache {
@@ -116,7 +116,7 @@ struct trcache {
 	struct scalable_queue *chunk_pools[MAX_CANDLE_TYPES];
 	struct scalable_queue *row_page_pools[MAX_CANDLE_TYPES];
 	size_t trade_data_size;
-	int trades_per_chunk;
+	int trades_per_block;
 	size_t trade_data_buf_size;
 	struct trcache_trade_flush_ops trade_flush_ops;
 

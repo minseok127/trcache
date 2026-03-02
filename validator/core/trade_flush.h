@@ -1,7 +1,7 @@
 /*
  * validator/core/trade_flush.h
  *
- * Synchronous pwrite-based raw trade chunk flush for the validator.
+ * Synchronous pwrite-based raw trade block flush for the validator.
  *
  * Each symbol's trade data is appended to a file named after the symbol
  * string (e.g. "BTCUSDT") under a configurable output directory.
@@ -43,7 +43,7 @@ void trade_flush_ctx_destroy(struct trade_flush_ctx *ctx);
  * to the pwrite callbacks.  Pass the result directly to
  * trcache_init_ctx::trade_flush_ops.
  *
- * Write failures are printed to stderr; the failed chunk is treated as done
+ * Write failures are printed to stderr; the failed block is treated as done
  * so the pipeline keeps running.
  */
 struct trcache_trade_flush_ops trade_flush_get_ops(struct trade_flush_ctx *ctx);

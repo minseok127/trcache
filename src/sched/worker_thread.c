@@ -109,7 +109,7 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 	while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
 			trade_data = (uint8_t *)array + (i * trade_data_size);
-			candle_chunk_list_apply_trade(list, trade_data);
+			candle_chunk_list_apply_trade(list, trade_data, NULL);
 		}
 
 		event_data_buffer_consume(buf, cur, count);
@@ -166,7 +166,7 @@ static void worker_do_batch_flush(struct symbol_entry *entry, int candle_idx)
 }
 
 /**
- * @brief   Flush raw trade chunks for one symbol (TRADE FLUSH stage).
+ * @brief   Flush raw trade blocks for one symbol (TRADE FLUSH stage).
  *
  * @param   cache: The main trcache instance.
  * @param   entry: Target symbol entry.
@@ -175,7 +175,7 @@ static void worker_do_trade_flush(struct trcache *cache,
 	struct symbol_entry *entry)
 {
 	uint64_t start_cycles = tsc_cycles();
-	int completed = event_data_buffer_flush_full_chunks(
+	int completed = event_data_buffer_flush_full_blocks(
 		entry->trd_buf, &cache->trade_flush_ops);
 
 	if (completed > 0) {
@@ -213,7 +213,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	 * Total tasks = num_candle_types * max_symbols
 	 * In-memory bitmap needs 2 bits per task (Apply, Convert).
 	 * Flush bitmap needs 1 bit per task (candle batch Flush).
-	 * Trade flush bitmap needs 1 bit per symbol (trade chunk Flush).
+	 * Trade flush bitmap needs 1 bit per symbol (trade block Flush).
 	 */
 	num_tasks = tc->num_candle_configs * tc->max_symbols;
 	in_memory_bitmap_bytes = get_bitmap_bytes(num_tasks * 2);
@@ -596,7 +596,7 @@ static inline bool process_trade_flush_word(struct trcache *cache,
 }
 
 /**
- * @brief   Scans the trade flush bitmap and executes raw trade chunk
+ * @brief   Scans the trade flush bitmap and executes raw trade block
  *          Flush tasks.
  *
  * @param   cache: The main trcache instance.

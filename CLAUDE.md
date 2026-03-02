@@ -72,7 +72,7 @@ Query APIs read from immutable column batches lock-free, concurrently with write
 | Candle chunk | `src/pipeline/candle_chunk.c` | Row-page storage; tracks mutable vs. immutable rows |
 | Chunk list | `src/pipeline/candle_chunk_list.c` | Per-(symbol, candle_type) linked list; bulk row→column conversion |
 | Chunk index | `src/pipeline/candle_chunk_index.c` | Fast lookup from (symbol_id, candle_type) to chunk list |
-| Trade buffer | `src/pipeline/trade_data_buffer.c` | Fixed-size trade chunks buffered per symbol |
+| Event buffer | `src/pipeline/event_data_buffer.c` | Fixed-size event blocks buffered per symbol |
 | Worker threads | `src/sched/worker_thread.c` | Task execution via 64-bit bitmap CAS scan |
 | Admin thread | `src/sched/admin_thread.c` | EMA-based throughput monitoring; dynamic worker rebalancing |
 | Atomic snapshot | `src/concurrent/atomsnap.c` | Versioned atomic pointer for lock-free reads |

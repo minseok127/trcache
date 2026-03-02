@@ -47,7 +47,8 @@ struct trade_flush_ctx {
  * -------------------------------------------------------------------------- */
 
 static void flush_cb(struct trcache *cache, int symbol_id,
-		const void *data, int num_trades, void *ctx_ptr)
+		const void *io_block, int num_trades,
+		void *ctx_ptr)
 {
 	struct trade_flush_ctx *ctx = (struct trade_flush_ctx *)ctx_ptr;
 
@@ -70,7 +71,7 @@ static void flush_cb(struct trcache *cache, int symbol_id,
 	size_t offset = ctx->write_offsets[symbol_id];
 	ctx->write_offsets[symbol_id] += write_size;
 
-	ssize_t n = pwrite(fd, data, write_size, (off_t)offset);
+	ssize_t n = pwrite(fd, io_block, write_size, (off_t)offset);
 	if (n < 0 || (size_t)n != write_size) {
 		const char *sym = trcache_lookup_symbol_str(cache, symbol_id);
 		std::cerr << "[TradeFlush] pwrite failed: sym=" << sym
@@ -84,7 +85,7 @@ static void flush_cb(struct trcache *cache, int symbol_id,
  * is_done_cb - pwrite is synchronous; flush is always complete immediately.
  */
 static bool is_done_cb(struct trcache * /*cache*/,
-		const void * /*data*/, void * /*ctx_ptr*/)
+		const void * /*io_block*/, void * /*ctx_ptr*/)
 {
 	return true;
 }

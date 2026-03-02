@@ -290,13 +290,14 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
  * @param   page_idx:        Index of the page to initialize.
  * @param   ops:             Callback operations for candle initialization.
  * @param   trade:           First trade data used to initialize the candle.
+ * @param   book_state:      Current book state (NULL if not configured).
  * @param   first_key (out): Pointer to store the key of the first candle.
  *
  * @return  0 on success, -1 on failure.
  */
 int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	const struct trcache_candle_update_ops *ops,
-	void *trade, uint64_t *first_key)
+	void *trade, const void *book_state, uint64_t *first_key)
 {
 	struct candle_row_page *row_page = NULL;
 	struct atomsnap_version *row_page_version = NULL;
@@ -324,7 +325,7 @@ int candle_chunk_page_init(struct candle_chunk *chunk, int page_idx,
 	 * initialization process is not visible to readers. Therefore, no locking
 	 * is required.
 	 */
-	ops->init(first_candle, trade);
+	ops->init(first_candle, trade, book_state);
 
 	*first_key = first_candle->key.value;
 
