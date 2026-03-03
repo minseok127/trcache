@@ -319,13 +319,21 @@ int worker_state_init(struct trcache *tc, int worker_id)
 		return -1;
 	}
 
-	state->trade_flush_bitmap = aligned_alloc(CACHE_LINE_SIZE,
-		ALIGN_UP(trade_flush_bitmap_bytes, CACHE_LINE_SIZE));
-	if (state->trade_flush_bitmap == NULL) {
-		errmsg(stderr, "trade_flush_bitmap allocation failed\n");
-		free(state->batch_flush_bitmap);
-		free(state->in_memory_bitmap);
-		return -1;
+	if (tc->trade_flush_ops.flush != NULL) {
+		state->trade_flush_bitmap = aligned_alloc(
+			CACHE_LINE_SIZE,
+			ALIGN_UP(trade_flush_bitmap_bytes,
+				CACHE_LINE_SIZE));
+		if (state->trade_flush_bitmap == NULL) {
+			errmsg(stderr,
+				"trade_flush_bitmap "
+				"alloc failed\n");
+			free(state->batch_flush_bitmap);
+			free(state->in_memory_bitmap);
+			return -1;
+		}
+	} else {
+		state->trade_flush_bitmap = NULL;
 	}
 
 	/* Allocate book bitmaps if book pipeline is enabled */
@@ -375,8 +383,10 @@ int worker_state_init(struct trcache *tc, int worker_id)
 		in_memory_bitmap_bytes);
 	memset(state->batch_flush_bitmap, 0,
 		batch_flush_bitmap_bytes);
-	memset(state->trade_flush_bitmap, 0,
-		trade_flush_bitmap_bytes);
+	if (state->trade_flush_bitmap != NULL) {
+		memset(state->trade_flush_bitmap, 0,
+			trade_flush_bitmap_bytes);
+	}
 
 	/* Default to in-memory group */
 	atomic_init(&state->group_id, GROUP_IN_MEMORY);
@@ -1034,8 +1044,11 @@ void *worker_thread_main(void *arg)
 		} else if (group == GROUP_FLUSH) {
 			work_done =
 				worker_run_batch_flush_tasks(cache, state);
-			work_done |=
-				worker_run_trade_flush_tasks(cache, state);
+			if (cache->trade_flush_ops.flush != NULL) {
+				work_done |=
+					worker_run_trade_flush_tasks(
+						cache, state);
+			}
 			if (cache->book_enabled) {
 				work_done |=
 					worker_run_book_event_flush_tasks(
