@@ -739,7 +739,7 @@ static void update_all_task_costs(struct trcache *cache)
  * @param   admin:                 Admin state containing demand stats.
  * @param   symtab:                Symbol table.
  * @param   out_in_memory_cycles:  Total cycles needed for Apply+Convert.
- * @param   out_flush_cycles: Total cycles needed for Flush group.
+ * @param   out_flush_cycles:      Total cycles needed for Flush group.
  */
 static void calculate_total_cycle_needs(struct trcache *cache,
 	struct admin_state *admin, struct symbol_table *symtab,
