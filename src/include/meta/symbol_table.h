@@ -22,6 +22,8 @@
 struct symbol_entry {
 	struct candle_chunk_list *candle_chunk_list_ptrs[MAX_CANDLE_TYPES];
 	struct event_data_buffer *trd_buf;
+	struct event_data_buffer *book_buf;
+	void *book_state;
 	char *symbol_str;
 	int id;
 };
@@ -53,7 +55,7 @@ struct in_memory_owner {
  * @batch_flush_ownership_flags:  Array of ownership flags for candle batch
  *                                Flush. Indexed by
  *                                (type_idx * capacity + sym_idx).
- * @trade_flush_ownership_flags:  Array of ownership flags for raw trade chunk
+ * @trade_flush_ownership_flags:  Array of ownership flags for raw trade block
  *                                Flush. Indexed by sym_idx only (one entry
  *                                per symbol, independent of candle type).
  *
@@ -69,6 +71,8 @@ struct symbol_table {
 	struct in_memory_owner *in_memory_ownership_flags;
 	_Atomic(int) *batch_flush_ownership_flags;
 	_Atomic(int) *trade_flush_ownership_flags;
+	_Atomic(int) *book_update_ownership_flags;
+	_Atomic(int) *book_event_flush_ownership_flags;
 };
 
 /**

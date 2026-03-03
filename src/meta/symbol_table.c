@@ -104,7 +104,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	memset(table->batch_flush_ownership_flags, -1, batch_flush_size);
 
 	/*
-	 * Allocate per-symbol ownership flags for raw trade chunk flush.
+	 * Allocate per-symbol ownership flags for raw trade block flush.
 	 * Unlike batch_flush_ownership_flags, this array is indexed by sym_idx
 	 * only and is independent of candle type.
 	 */
@@ -125,7 +125,58 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		return NULL;
 	}
 	/* Initialize all flags to -1 (free) */
-	memset(table->trade_flush_ownership_flags, -1, trade_flush_size);
+	memset(table->trade_flush_ownership_flags, -1,
+		trade_flush_size);
+
+	/*
+	 * Book ownership flags — 1 per symbol, same layout
+	 * as trade_flush_ownership_flags.
+	 */
+	size_t book_flags_size =
+		(size_t)max_capacity * sizeof(_Atomic(int));
+
+	table->book_update_ownership_flags = aligned_alloc(
+		CACHE_LINE_SIZE,
+		ALIGN_UP(book_flags_size, CACHE_LINE_SIZE));
+	if (table->book_update_ownership_flags == NULL) {
+		errmsg(stderr,
+			"book_update_ownership_flags "
+			"allocation failed\n");
+		free(table->trade_flush_ownership_flags);
+		free(table->batch_flush_ownership_flags);
+		free(table->in_memory_ownership_flags);
+		free(table->symbol_entries);
+		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(
+			&table->ht_hash_table_mutex);
+		free(table);
+		return NULL;
+	}
+	memset(table->book_update_ownership_flags, -1,
+		book_flags_size);
+
+	table->book_event_flush_ownership_flags =
+		aligned_alloc(CACHE_LINE_SIZE,
+			ALIGN_UP(book_flags_size,
+				CACHE_LINE_SIZE));
+	if (table->book_event_flush_ownership_flags
+			== NULL) {
+		errmsg(stderr,
+			"book_event_flush_ownership_flags "
+			"allocation failed\n");
+		free(table->book_update_ownership_flags);
+		free(table->trade_flush_ownership_flags);
+		free(table->batch_flush_ownership_flags);
+		free(table->in_memory_ownership_flags);
+		free(table->symbol_entries);
+		ht_destroy(table->symbol_id_map);
+		pthread_mutex_destroy(
+			&table->ht_hash_table_mutex);
+		free(table);
+		return NULL;
+	}
+	memset(table->book_event_flush_ownership_flags,
+		-1, book_flags_size);
 
 	table->capacity = max_capacity;
 	table->num_symbols = 0;
@@ -161,12 +212,20 @@ void symbol_table_destroy(struct symbol_table *table)
 		}
 
 		event_data_buffer_destroy(entry->trd_buf);
+
+		if (entry->book_buf != NULL) {
+			event_data_buffer_destroy(
+				entry->book_buf);
+		}
+
 		free(entry->symbol_str);
 	}
 
 	free(table->in_memory_ownership_flags);
 	free(table->batch_flush_ownership_flags);
 	free(table->trade_flush_ownership_flags);
+	free(table->book_update_ownership_flags);
+	free(table->book_event_flush_ownership_flags);
 
 	free(table->symbol_entries);
 	free(table);
@@ -256,6 +315,26 @@ static int init_symbol_entry(struct trcache *tc,
 		return -1;
 	}
 
+	if (tc->book_enabled) {
+		entry->book_buf = event_data_buffer_init(tc, id,
+			tc->book_event_size,
+			tc->book_events_per_block,
+			tc->book_event_buf_size, 1);
+		if (entry->book_buf == NULL) {
+			errmsg(stderr,
+				"book event_data_buffer alloc failed\n");
+			event_data_buffer_destroy(entry->trd_buf);
+			free(entry->symbol_str);
+			entry->symbol_str = NULL;
+			entry->trd_buf = NULL;
+			return -1;
+		}
+		entry->book_state = NULL;
+	} else {
+		entry->book_buf = NULL;
+		entry->book_state = NULL;
+	}
+
 	for (int i = 0; i < tc->num_candle_configs; i++) {
 		ctx.trc = tc;
 		ctx.candle_idx = i;
@@ -263,20 +342,28 @@ static int init_symbol_entry(struct trcache *tc,
 
 		candle_chunk_list_ptr = create_candle_chunk_list(&ctx);
 		if (candle_chunk_list_ptr == NULL) {
-			errmsg(stderr, "Candle chunk list allocation is failed\n");
+			errmsg(stderr,
+				"Candle chunk list alloc failed\n");
 
 			for (int j = 0; j < i; j++) {
-				destroy_candle_chunk_list(entry->candle_chunk_list_ptrs[j]);
+				destroy_candle_chunk_list(
+					entry->candle_chunk_list_ptrs[j]);
 			}
 
+			if (entry->book_buf != NULL) {
+				event_data_buffer_destroy(
+					entry->book_buf);
+			}
 			event_data_buffer_destroy(entry->trd_buf);
 			free(entry->symbol_str);
 			entry->symbol_str = NULL;
 			entry->trd_buf = NULL;
+			entry->book_buf = NULL;
 			return -1;
 		}
 
-		entry->candle_chunk_list_ptrs[i] = candle_chunk_list_ptr;
+		entry->candle_chunk_list_ptrs[i] =
+			candle_chunk_list_ptr;
 	}
 
 	entry->id = id;

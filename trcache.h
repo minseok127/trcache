@@ -180,6 +180,46 @@ typedef struct trcache_trade_flush_ops {
 } trcache_trade_flush_ops;
 
 /*
+ * trcache_book_state_ops - User-defined book state management callbacks.
+ *
+ * @ctx:      User-supplied pointer passed to all callbacks.
+ * @init:     Create and return a new book state for a symbol. Called
+ *            lazily on the first book event, not at registration.
+ * @update:   Update the book state with a single book event.
+ * @destroy:  Free all resources owned by the book state.
+ *
+ * Setting @init to NULL disables the book pipeline entirely.
+ */
+typedef struct trcache_book_state_ops {
+	void *ctx;
+	void *(*init)(trcache *cache, int symbol_id,
+		void *ctx);
+	void (*update)(void *state, const void *event,
+		void *ctx);
+	void (*destroy)(void *state, void *ctx);
+} trcache_book_state_ops;
+
+/*
+ * trcache_book_event_flush_ops - User-defined book event block flush
+ *                                callbacks.
+ *
+ * @flush:   Initiate a flush for one completed book event block.
+ *           Same async pattern as trcache_trade_flush_ops.
+ * @is_done: Poll for flush completion. Returns true when done.
+ * @ctx:     User-supplied pointer passed to both callbacks.
+ *
+ * Setting @flush to NULL disables book event persistence.
+ */
+typedef struct trcache_book_event_flush_ops {
+	void (*flush)(trcache *cache, int symbol_id,
+		const void *io_block, int num_events,
+		void *ctx);
+	bool (*is_done)(trcache *cache,
+		const void *io_block, void *ctx);
+	void *ctx;
+} trcache_book_event_flush_ops;
+
+/*
  * trcache_candle_update_ops - Callbacks for updating candles.
  *
  * @init:    Initialise a new candle using the first trade. This is
@@ -284,6 +324,12 @@ typedef struct trcache_field_request {
  *                             4 KiB alignment.
  * @trade_flush_ops:           Optional callbacks to persist raw trade blocks.
  *                             Set .flush = NULL to disable.
+ * @book_state_ops:            Optional book state management callbacks.
+ *                             Set .init = NULL to disable.
+ * @book_event_flush_ops:      Optional callbacks to persist book event
+ *                             blocks. Set .flush = NULL to disable.
+ * @book_event_size:           Size of the user-defined book event structure.
+ *                             Required when book_state_ops.init != NULL.
  *
  * Putting every knob in a single structure keeps the public API compact and
  * makes it forward-compatible (new members can be appended without changing the
@@ -300,6 +346,9 @@ typedef struct trcache_init_ctx {
 	size_t trade_data_size;
 	size_t feed_block_size;
 	struct trcache_trade_flush_ops trade_flush_ops;
+	struct trcache_book_state_ops book_state_ops;
+	struct trcache_book_event_flush_ops book_event_flush_ops;
+	size_t book_event_size;
 } trcache_init_ctx;
 
 /**
@@ -372,6 +421,20 @@ int trcache_lookup_symbol_id(struct trcache *cache, const char *symbol_str);
  */
 int trcache_feed_trade_data(struct trcache *cache, const void *trade_data,
 	int symbol_id);
+
+/**
+ * @brief   Push a single book event into the internal pipeline.
+ *
+ * @param   cache:       Handle from trcache_init().
+ * @param   book_event:  Pointer to user-defined book event (copied).
+ * @param   symbol_id:   ID obtained via trcache_register_symbol().
+ *
+ * @return  0 on success, -1 on error.
+ *
+ * Requires book_state_ops.init != NULL (book pipeline enabled).
+ */
+int trcache_feed_book_data(struct trcache *cache,
+	const void *book_event, int symbol_id);
 
 /**
  * @brief   Copy @count candles ending at the candle with key @key.

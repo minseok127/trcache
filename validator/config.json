@@ -8,7 +8,8 @@
     "memory_limit_mb": 2048,
     "worker_threads": 3,
     "batch_size_pow2": 12,
-    "cached_batch_count_pow2": 0
+    "cached_batch_count_pow2": 0,
+    "enable_order_book": false
   },
   "candles": [
     {

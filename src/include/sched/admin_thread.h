@@ -28,11 +28,11 @@ struct admin_task_costs {
  *                            Indexed [type_idx * max_symbols + sym_idx].
  * @trade_flush_costs:        Per-symbol EMA cycles per trade-block flush.
  *                            Indexed [sym_idx] only.
- * @trade_chunk_fill_rates:   Per-symbol EMA of trade blocks filled per
+ * @trade_block_fill_rates:   Per-symbol EMA of trade blocks filled per
  *                            second. Indexed [sym_idx] only; independent
  *                            of candle type.
  * @trade_fill_timestamps:    Per-symbol timestamp (ns) of the last
- *                            trade_chunk_fill_rates update. Indexed
+ *                            trade_block_fill_rates update. Indexed
  *                            [sym_idx] only.
  * @next_im_bitmaps:               Reusable buffer for calculating the next
  *                                 In-Memory assignment.
@@ -59,7 +59,7 @@ struct admin_state {
 	struct sched_stage_rate *stage_rates;
 	struct admin_task_costs *task_costs;
 	double *trade_flush_costs;
-	uint64_t *trade_chunk_fill_rates;
+	uint64_t *trade_block_fill_rates;
 	uint64_t *trade_fill_timestamps;
 	uint64_t *next_im_bitmaps;
 	uint64_t *next_batch_flush_bitmaps;
@@ -67,9 +67,21 @@ struct admin_state {
 	uint64_t *current_im_bitmaps;
 	uint64_t *current_batch_flush_bitmaps;
 	uint64_t *current_trade_flush_bitmaps;
+	double *book_update_costs;
+	uint64_t *book_update_rates;
+	uint64_t *book_produced_snaps;
+	uint64_t *book_block_fill_rates;
+	uint64_t *book_fill_timestamps;
+	double *book_event_flush_costs;
+	uint64_t *next_book_update_bitmaps;
+	uint64_t *next_book_event_flush_bitmaps;
+	uint64_t *current_book_update_bitmaps;
+	uint64_t *current_book_event_flush_bitmaps;
 	size_t in_mem_words_per_worker;
 	size_t batch_flush_words_per_worker;
 	size_t trade_flush_words_per_worker;
+	size_t book_update_words_per_worker;
+	size_t book_event_flush_words_per_worker;
 	_Atomic(bool) done;
 };
 

@@ -39,6 +39,9 @@ struct validator_config {
 	int batch_size_pow2;
 	int cached_batch_count_pow2;
 
+	/* Order Book Settings */
+	bool enable_order_book;
+
 	/* Candle Settings */
 	std::vector<val_candle_config> candles;
 

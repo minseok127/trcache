@@ -80,11 +80,19 @@ bool load_config(const std::string& path, struct validator_config* config)
 				config->cached_batch_count_pow2 = (int)val;
 			else
 				config->cached_batch_count_pow2 = 4;
+
+			bool ob;
+			if (eng["enable_order_book"].get(ob) ==
+			    simdjson::SUCCESS)
+				config->enable_order_book = ob;
+			else
+				config->enable_order_book = false;
 		} else {
 			config->memory_limit_mb = 1024;
 			config->worker_threads = 4;
 			config->batch_size_pow2 = 10;
 			config->cached_batch_count_pow2 = 4;
+			config->enable_order_book = false;
 		}
 
 		/* 4. Candle Specifications */

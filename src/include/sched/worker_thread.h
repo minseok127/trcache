@@ -27,6 +27,14 @@
  * trade_flush_bitmap — 1 bit per symbol:
  *   bit [sym_idx] → Trade Flush task for sym_idx
  *   Independent of candle type; one bit per symbol.
+ *
+ * book_update_bitmap — 1 bit per symbol:
+ *   bit [sym_idx] → Book Update task for sym_idx
+ *   Independent of candle type; one bit per symbol.
+ *
+ * book_event_flush_bitmap — 1 bit per symbol:
+ *   bit [sym_idx] → Book Event Flush task for sym_idx
+ *   Independent of candle type; one bit per symbol.
  */
 
 /*
@@ -64,8 +72,22 @@
  * trade_flush_bitmap — encode/decode.
  * Bit position equals sym_idx directly; no transformation needed.
  */
-#define TF_BIT(sym_idx)                  (sym_idx)
+#define TF_BIT(sym_idx)                 (sym_idx)
 #define TF_BIT_TO_SYM_IDX(bit)          (bit)
+
+/*
+ * book_update_bitmap — encode/decode.
+ * 1 bit per symbol, scanned by GROUP_IN_MEMORY workers.
+ */
+#define BU_BIT(sym_idx)                 (sym_idx)
+#define BU_BIT_TO_SYM_IDX(bit)          (bit)
+
+/*
+ * book_event_flush_bitmap — encode/decode.
+ * 1 bit per symbol, scanned by GROUP_FLUSH workers.
+ */
+#define BF_BIT(sym_idx)                 (sym_idx)
+#define BF_BIT_TO_SYM_IDX(bit)          (bit)
 
 /**
  * @brief Defines the operational group a worker belongs to.
@@ -89,7 +111,7 @@ enum worker_group_type {
  * @batch_flush_bitmap:  Pointer to the cacheline-aligned bitmap for
  *                       candle batch Flush tasks.
  * @trade_flush_bitmap:  Pointer to the cacheline-aligned bitmap for
- *                       raw trade chunk Flush tasks.
+ *                       raw trade block Flush tasks.
  */
 struct worker_state {
 	int worker_id;
@@ -98,6 +120,8 @@ struct worker_state {
 	uint64_t *in_memory_bitmap;
 	uint64_t *batch_flush_bitmap;
 	uint64_t *trade_flush_bitmap;
+	uint64_t *book_update_bitmap;
+	uint64_t *book_event_flush_bitmap;
 };
 
 /**

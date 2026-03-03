@@ -119,6 +119,12 @@ struct trcache {
 	int trades_per_block;
 	size_t trade_data_buf_size;
 	struct trcache_trade_flush_ops trade_flush_ops;
+	struct trcache_book_state_ops book_state_ops;
+	struct trcache_book_event_flush_ops book_event_flush_ops;
+	size_t book_event_size;
+	int book_events_per_block;
+	size_t book_event_buf_size;
+	bool book_enabled;
 
 } ____cacheline_aligned;
 

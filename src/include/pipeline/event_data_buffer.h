@@ -9,6 +9,21 @@
 
 #include "trcache.h"
 
+/*
+ * event_data_flush_ops - Generic flush ops for event_data_buffer.
+ *
+ * Both trcache_trade_flush_ops and trcache_book_event_flush_ops
+ * share this exact layout (flush, is_done, ctx).
+ */
+struct event_data_flush_ops {
+	void (*flush)(trcache *cache, int symbol_id,
+		const void *io_block, int num_events,
+		void *ctx);
+	bool (*is_done)(trcache *cache,
+		const void *io_block, void *ctx);
+	void *ctx;
+};
+
 #ifndef __cacheline_aligned
 #define __cacheline_aligned __attribute__((aligned(64)))
 #endif /* __cacheline_aligned */
@@ -171,6 +186,7 @@ struct event_data_buffer {
 	____cacheline_aligned
 	_Atomic(int) num_full_unflushed_blocks;
 	_Atomic(uint64_t) ema_cycles_per_flush;
+	_Atomic(uint64_t) ema_cycles_per_update;
 
 	/*
 	 * Group 5: Consumer (Apply Thread) hot data area.
@@ -320,12 +336,12 @@ void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
  * for this buffer's symbol.
  *
  * @param   buf:  Buffer whose blocks to flush.
- * @param   ops:  Trade flush callback operations.
+ * @param   ops:  Flush callback operations.
  *
  * @return  Number of blocks whose flush completed in this call.
  */
 int event_data_buffer_flush_full_blocks(struct event_data_buffer *buf,
-	const struct trcache_trade_flush_ops *ops);
+	const struct event_data_flush_ops *ops);
 
 /**
  * @brief   Flush all remaining event blocks, including any partial tail.
@@ -337,9 +353,9 @@ int event_data_buffer_flush_full_blocks(struct event_data_buffer *buf,
  * deliberately skips it during normal operation.
  *
  * @param   buf:  Buffer to finalize.
- * @param   ops:  Trade flush callback operations.
+ * @param   ops:  Flush callback operations.
  */
 void event_data_buffer_finalize(struct event_data_buffer *buf,
-	const struct trcache_trade_flush_ops *ops);
+	const struct event_data_flush_ops *ops);
 
 #endif /* EVENT_DATA_BUFFER_H */

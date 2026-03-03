@@ -515,7 +515,7 @@ void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
  */
 static int event_flush_drive_block(struct event_data_buffer *buf,
 	struct event_data_block *block,
-	const struct trcache_trade_flush_ops *ops)
+	const struct event_data_flush_ops *ops)
 {
 	if (atomic_load_explicit(&block->flush_state, memory_order_acquire)
 			== EVENT_BLOCK_FLUSH_NEEDED) {
@@ -560,7 +560,7 @@ static int event_flush_drive_block(struct event_data_buffer *buf,
  * @return  Number of blocks whose flush completed in this call.
  */
 int event_data_buffer_flush_full_blocks(struct event_data_buffer *buf,
-	const struct trcache_trade_flush_ops *ops)
+	const struct event_data_flush_ops *ops)
 {
 	struct event_data_block *tail, *block;
 	struct list_head *node;
@@ -614,7 +614,7 @@ int event_data_buffer_flush_full_blocks(struct event_data_buffer *buf,
  * @param   ops:  Flush callback operations.
  */
 void event_data_buffer_finalize(struct event_data_buffer *buf,
-	const struct trcache_trade_flush_ops *ops)
+	const struct event_data_flush_ops *ops)
 {
 	struct event_data_block *tail;
 	int write_idx;

@@ -438,6 +438,33 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 			4096);
 	}
 
+	/* Copy book pipeline configuration */
+	tc->book_state_ops = ctx->book_state_ops;
+	tc->book_event_flush_ops = ctx->book_event_flush_ops;
+	tc->book_enabled = (ctx->book_state_ops.init != NULL);
+
+	if (tc->book_enabled) {
+		if (ctx->book_event_size == 0) {
+			errmsg(stderr,
+				"book_event_size must be > 0 "
+				"when book is enabled\n");
+			free(tc);
+			return NULL;
+		}
+		tc->book_event_size = ctx->book_event_size;
+		size_t io_block = (ctx->feed_block_size > 0)
+			? ctx->feed_block_size : 65536;
+		tc->book_events_per_block =
+			(int)(io_block / tc->book_event_size);
+		if (tc->book_events_per_block < 1) {
+			tc->book_events_per_block = 1;
+		}
+		tc->book_event_buf_size = align_up(
+			(size_t)tc->book_events_per_block
+				* tc->book_event_size,
+			4096);
+	}
+
 	/* 4. Initialize SCQ pools */
 	tc->head_version_pool = scq_init(tc);
 	if (tc->head_version_pool == NULL) {
@@ -701,20 +728,35 @@ void trcache_destroy(struct trcache *tc)
 	pthread_mutex_destroy(&tc->tls_id_mutex);
 	
 	/*
-	 * If raw trade flush is configured, busy-flush every symbol's
-	 * remaining blocks (including partial tails) before we tear down
-	 * the symbol table.
+	 * Flush remaining blocks and destroy book states before
+	 * tearing down the symbol table.
 	 */
-	if (tc->trade_flush_ops.flush != NULL) {
+	{
 		int num_syms = atomic_load_explicit(
 			(int *)&tc->symbol_table->num_symbols,
 			memory_order_acquire);
 		for (int i = 0; i < num_syms; i++) {
 			struct symbol_entry *entry =
 				&tc->symbol_table->symbol_entries[i];
-			if (entry->trd_buf != NULL) {
+			if (tc->trade_flush_ops.flush != NULL
+					&& entry->trd_buf != NULL) {
 				event_data_buffer_finalize(
-					entry->trd_buf, &tc->trade_flush_ops);
+					entry->trd_buf,
+					(const struct event_data_flush_ops *)
+						&tc->trade_flush_ops);
+			}
+			if (tc->book_event_flush_ops.flush != NULL
+					&& entry->book_buf != NULL) {
+				event_data_buffer_finalize(
+					entry->book_buf,
+					(const struct event_data_flush_ops *)
+						&tc->book_event_flush_ops);
+			}
+			if (entry->book_state != NULL) {
+				tc->book_state_ops.destroy(
+					entry->book_state,
+					tc->book_state_ops.ctx);
+				entry->book_state = NULL;
 			}
 		}
 	}
@@ -1018,6 +1060,77 @@ int trcache_feed_trade_data(struct trcache *tc,
 	 */
 	if (event_data_buffer_push(trd_databuf, data,
 			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id) == -1) {
+		return -1;
+	}
+
+	return 0;
+}
+
+/**
+ * @brief   Push a single book event into the internal pipeline.
+ *
+ * @param   tc:        Pointer to trcache instance.
+ * @param   data:      Pointer to book event struct.
+ * @param   symbol_id: Symbol ID of book event.
+ *
+ * @return  0 on success, -1 on error.
+ */
+int trcache_feed_book_data(struct trcache *tc,
+	const void *data, int symbol_id)
+{
+	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
+	struct event_data_buffer *book_buf;
+	struct symbol_entry *entry;
+	bool has_flush;
+
+	if (data == NULL || tls == NULL) {
+		errmsg(stderr,
+			"Invalid book event data or tls\n");
+		return -1;
+	}
+
+	if (!tc->book_enabled) {
+		errmsg(stderr,
+			"Book pipeline is not enabled\n");
+		return -1;
+	}
+
+	entry = symbol_table_lookup_entry(
+		tc->symbol_table, symbol_id);
+	if (entry == NULL) {
+		errmsg(stderr,
+			"Symbol id %d not found\n",
+			symbol_id);
+		return -1;
+	}
+
+	book_buf = entry->book_buf;
+	if (book_buf == NULL) {
+		errmsg(stderr,
+			"Book buffer is NULL for symbol %d\n",
+			symbol_id);
+		return -1;
+	}
+
+	has_flush =
+		(tc->book_event_flush_ops.flush != NULL);
+
+	/*
+	 * Reap free blocks from finished flushes when
+	 * the current block is about to become full and
+	 * the local free list is empty.
+	 */
+	if (book_buf->next_tail_write_idx ==
+			tc->book_events_per_block - 1
+			&& list_empty(&tls->local_free_list)) {
+		event_data_buffer_reap_free_blocks(
+			book_buf, &tls->local_free_list,
+			tls->thread_id, has_flush);
+	}
+
+	if (event_data_buffer_push(book_buf, data,
+			&tls->local_free_list,
+			tls->thread_id) == -1) {
 		return -1;
 	}
 

@@ -176,11 +176,94 @@ static void worker_do_trade_flush(struct trcache *cache,
 {
 	uint64_t start_cycles = tsc_cycles();
 	int completed = event_data_buffer_flush_full_blocks(
-		entry->trd_buf, &cache->trade_flush_ops);
+		entry->trd_buf,
+		(const struct event_data_flush_ops *)
+			&cache->trade_flush_ops);
 
 	if (completed > 0) {
 		update_ema_cycles(&entry->trd_buf->ema_cycles_per_flush,
 			tsc_cycles() - start_cycles, (uint64_t)completed);
+	}
+}
+
+/**
+ * @brief   Update book state for one symbol.
+ *
+ * Acquires the single cursor (index 0) from book_buf, performs
+ * lazy init on first call, then consumes all pending events.
+ *
+ * @param   cache: The main trcache instance.
+ * @param   entry: Target symbol entry.
+ */
+static void worker_do_book_update(struct trcache *cache,
+	struct symbol_entry *entry)
+{
+	struct event_data_buffer *buf = entry->book_buf;
+	struct event_data_buffer_cursor *cur;
+	void *ctx = cache->book_state_ops.ctx;
+	uint64_t start_cycles, work_count = 0;
+	void *array;
+	int count;
+
+	cur = event_data_buffer_acquire_cursor(buf, 0);
+	if (cur == NULL) {
+		return;
+	}
+
+	start_cycles = tsc_cycles();
+
+	/* Lazy init: allocate book_state on first event */
+	if (entry->book_state == NULL) {
+		entry->book_state =
+			cache->book_state_ops.init(
+				cache, entry->id, ctx);
+	}
+
+	while (event_data_buffer_peek(
+			buf, cur, &array, &count)
+			&& count > 0) {
+		for (int i = 0; i < count; i++) {
+			void *event = (uint8_t *)array
+				+ (i * buf->event_size);
+			cache->book_state_ops.update(
+				entry->book_state, event, ctx);
+		}
+		event_data_buffer_consume(buf, cur, count);
+		work_count += (uint64_t)count;
+	}
+
+	if (work_count > 0) {
+		update_ema_cycles(
+			&buf->ema_cycles_per_update,
+			tsc_cycles() - start_cycles,
+			work_count);
+	}
+
+	event_data_buffer_release_cursor(cur);
+}
+
+/**
+ * @brief   Flush book event blocks for one symbol.
+ *
+ * @param   cache: The main trcache instance.
+ * @param   entry: Target symbol entry.
+ */
+static void worker_do_book_event_flush(
+	struct trcache *cache,
+	struct symbol_entry *entry)
+{
+	uint64_t start_cycles = tsc_cycles();
+	int completed =
+		event_data_buffer_flush_full_blocks(
+			entry->book_buf,
+			(const struct event_data_flush_ops *)
+				&cache->book_event_flush_ops);
+
+	if (completed > 0) {
+		update_ema_cycles(
+			&entry->book_buf->ema_cycles_per_flush,
+			tsc_cycles() - start_cycles,
+			(uint64_t)completed);
 	}
 }
 
@@ -245,10 +328,55 @@ int worker_state_init(struct trcache *tc, int worker_id)
 		return -1;
 	}
 
+	/* Allocate book bitmaps if book pipeline is enabled */
+	if (tc->book_enabled) {
+		size_t book_bitmap_bytes =
+			get_bitmap_bytes(tc->max_symbols);
+
+		state->book_update_bitmap = aligned_alloc(
+			CACHE_LINE_SIZE,
+			ALIGN_UP(book_bitmap_bytes,
+				CACHE_LINE_SIZE));
+		if (state->book_update_bitmap == NULL) {
+			errmsg(stderr,
+				"book_update_bitmap alloc failed\n");
+			free(state->trade_flush_bitmap);
+			free(state->batch_flush_bitmap);
+			free(state->in_memory_bitmap);
+			return -1;
+		}
+
+		state->book_event_flush_bitmap = aligned_alloc(
+			CACHE_LINE_SIZE,
+			ALIGN_UP(book_bitmap_bytes,
+				CACHE_LINE_SIZE));
+		if (state->book_event_flush_bitmap == NULL) {
+			errmsg(stderr,
+				"book_event_flush_bitmap "
+				"alloc failed\n");
+			free(state->book_update_bitmap);
+			free(state->trade_flush_bitmap);
+			free(state->batch_flush_bitmap);
+			free(state->in_memory_bitmap);
+			return -1;
+		}
+
+		memset(state->book_update_bitmap, 0,
+			book_bitmap_bytes);
+		memset(state->book_event_flush_bitmap, 0,
+			book_bitmap_bytes);
+	} else {
+		state->book_update_bitmap = NULL;
+		state->book_event_flush_bitmap = NULL;
+	}
+
 	/* Clear bitmaps */
-	memset(state->in_memory_bitmap, 0, in_memory_bitmap_bytes);
-	memset(state->batch_flush_bitmap, 0, batch_flush_bitmap_bytes);
-	memset(state->trade_flush_bitmap, 0, trade_flush_bitmap_bytes);
+	memset(state->in_memory_bitmap, 0,
+		in_memory_bitmap_bytes);
+	memset(state->batch_flush_bitmap, 0,
+		batch_flush_bitmap_bytes);
+	memset(state->trade_flush_bitmap, 0,
+		trade_flush_bitmap_bytes);
 
 	/* Default to in-memory group */
 	atomic_init(&state->group_id, GROUP_IN_MEMORY);
@@ -271,9 +399,13 @@ void worker_state_destroy(struct worker_state *state)
 	free(state->in_memory_bitmap);
 	free(state->batch_flush_bitmap);
 	free(state->trade_flush_bitmap);
+	free(state->book_update_bitmap);
+	free(state->book_event_flush_bitmap);
 	state->in_memory_bitmap = NULL;
 	state->batch_flush_bitmap = NULL;
 	state->trade_flush_bitmap = NULL;
+	state->book_update_bitmap = NULL;
+	state->book_event_flush_bitmap = NULL;
 }
 
 /**
@@ -648,6 +780,214 @@ static bool worker_run_trade_flush_tasks(struct trcache *cache,
 }
 
 /**
+ * @brief   Processes a single 64-bit word from the book update bitmap.
+ */
+static inline bool process_book_update_word(
+	struct trcache *cache,
+	uint64_t work_word, int word_idx)
+{
+	struct symbol_table *symtab = cache->symbol_table;
+	int num_symbols = atomic_load_explicit(
+		(int *)&symtab->num_symbols,
+		memory_order_acquire);
+
+	const int taken_value = 1;
+	bool work_done = false;
+
+	while (work_word != 0) {
+		int expected_free = -1;
+		int bit_offset = get_next_bit_offset(work_word);
+		int sym_idx = BU_BIT_TO_SYM_IDX(
+			(word_idx * BITS_PER_WORD) + bit_offset);
+
+		if (sym_idx < num_symbols) {
+			_Atomic(int) *flag =
+				&symtab->book_update_ownership_flags
+					[sym_idx];
+
+			if (atomic_load_explicit(
+					flag, memory_order_acquire)
+					== expected_free) {
+				if (atomic_compare_exchange_strong(
+						flag, &expected_free,
+						taken_value)) {
+					struct symbol_entry *entry =
+						&symtab->symbol_entries
+							[sym_idx];
+
+					worker_do_book_update(
+						cache, entry);
+
+					atomic_store_explicit(flag,
+						-1,
+						memory_order_release);
+					work_done = true;
+				}
+			}
+		}
+		work_word &= ~(1ULL << bit_offset);
+	}
+	return work_done;
+}
+
+/**
+ * @brief   Scans the book update bitmap and executes tasks.
+ */
+static bool worker_run_book_update_tasks(
+	struct trcache *cache,
+	struct worker_state *state)
+{
+	const int max_syms = cache->symbol_table->capacity;
+	const int total_words =
+		(get_bitmap_bytes(max_syms) / 8);
+
+	bool work_done = false;
+	uint64_t *bitmap = state->book_update_bitmap;
+
+	const int words_per_chunk = 4;
+	const int num_chunks = total_words / words_per_chunk;
+
+	for (int i = 0; i < num_chunks; i++) {
+		int base_word_idx = i * words_per_chunk;
+		uint64_t *chunk_ptr =
+			&bitmap[base_word_idx];
+
+		if (memcmp(chunk_ptr,
+				g_zero_chunk_32b, 32) != 0) {
+			for (int j = 0; j < words_per_chunk; j++) {
+				int word_idx = base_word_idx + j;
+				uint64_t work_word =
+					bitmap[word_idx];
+				if (work_word != 0) {
+					work_done |=
+						process_book_update_word(
+							cache,
+							work_word,
+							word_idx);
+				}
+			}
+		}
+	}
+
+	for (int i = num_chunks * words_per_chunk;
+			i < total_words; i++) {
+		uint64_t work_word = bitmap[i];
+		if (work_word != 0) {
+			work_done |=
+				process_book_update_word(
+					cache, work_word, i);
+		}
+	}
+
+	return work_done;
+}
+
+/**
+ * @brief   Processes a single 64-bit word from the book event
+ *          flush bitmap.
+ */
+static inline bool process_book_event_flush_word(
+	struct trcache *cache,
+	uint64_t work_word, int word_idx)
+{
+	struct symbol_table *symtab = cache->symbol_table;
+	int num_symbols = atomic_load_explicit(
+		(int *)&symtab->num_symbols,
+		memory_order_acquire);
+
+	const int taken_value = 1;
+	bool work_done = false;
+
+	while (work_word != 0) {
+		int expected_free = -1;
+		int bit_offset = get_next_bit_offset(work_word);
+		int sym_idx = BF_BIT_TO_SYM_IDX(
+			(word_idx * BITS_PER_WORD) + bit_offset);
+
+		if (sym_idx < num_symbols) {
+			_Atomic(int) *flag =
+				&symtab
+					->book_event_flush_ownership_flags
+					[sym_idx];
+
+			if (atomic_load_explicit(
+					flag, memory_order_acquire)
+					== expected_free) {
+				if (atomic_compare_exchange_strong(
+						flag, &expected_free,
+						taken_value)) {
+					struct symbol_entry *entry =
+						&symtab->symbol_entries
+							[sym_idx];
+
+					worker_do_book_event_flush(
+						cache, entry);
+
+					atomic_store_explicit(flag,
+						-1,
+						memory_order_release);
+					work_done = true;
+				}
+			}
+		}
+		work_word &= ~(1ULL << bit_offset);
+	}
+	return work_done;
+}
+
+/**
+ * @brief   Scans the book event flush bitmap and executes tasks.
+ */
+static bool worker_run_book_event_flush_tasks(
+	struct trcache *cache,
+	struct worker_state *state)
+{
+	const int max_syms = cache->symbol_table->capacity;
+	const int total_words =
+		(get_bitmap_bytes(max_syms) / 8);
+
+	bool work_done = false;
+	uint64_t *bitmap = state->book_event_flush_bitmap;
+
+	const int words_per_chunk = 4;
+	const int num_chunks = total_words / words_per_chunk;
+
+	for (int i = 0; i < num_chunks; i++) {
+		int base_word_idx = i * words_per_chunk;
+		uint64_t *chunk_ptr =
+			&bitmap[base_word_idx];
+
+		if (memcmp(chunk_ptr,
+				g_zero_chunk_32b, 32) != 0) {
+			for (int j = 0; j < words_per_chunk; j++) {
+				int word_idx = base_word_idx + j;
+				uint64_t work_word =
+					bitmap[word_idx];
+				if (work_word != 0) {
+					work_done |=
+						process_book_event_flush_word(
+							cache,
+							work_word,
+							word_idx);
+				}
+			}
+		}
+	}
+
+	for (int i = num_chunks * words_per_chunk;
+			i < total_words; i++) {
+		uint64_t work_word = bitmap[i];
+		if (work_word != 0) {
+			work_done |=
+				process_book_event_flush_word(
+					cache, work_word, i);
+		}
+	}
+
+	return work_done;
+}
+
+/**
  * @brief   Entry point for a worker thread.
  *
  * Accepts a pointer to ::worker_thread_args.
@@ -684,10 +1024,23 @@ void *worker_thread_main(void *arg)
 		old_group = group;
 
 		if (group == GROUP_IN_MEMORY) {
-			work_done = worker_run_in_memory_tasks(cache, state);
+			work_done =
+				worker_run_in_memory_tasks(cache, state);
+			if (cache->book_enabled) {
+				work_done |=
+					worker_run_book_update_tasks(
+						cache, state);
+			}
 		} else if (group == GROUP_FLUSH) {
-			work_done = worker_run_batch_flush_tasks(cache, state);
-			work_done |= worker_run_trade_flush_tasks(cache, state);
+			work_done =
+				worker_run_batch_flush_tasks(cache, state);
+			work_done |=
+				worker_run_trade_flush_tasks(cache, state);
+			if (cache->book_enabled) {
+				work_done |=
+					worker_run_book_event_flush_tasks(
+						cache, state);
+			}
 		}
 
 		/* Busy-wait (Low Latency) */
