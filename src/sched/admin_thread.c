@@ -61,8 +61,7 @@ static inline size_t get_bitmap_bytes(int num_bits)
  * @return  0 on success, -1 on allocation failure.
  */
 static int alloc_zero_bitmap_pair(uint64_t **next_out,
-	uint64_t **curr_out,
-	size_t num_workers, size_t words_per_worker)
+	uint64_t **curr_out, size_t num_workers, size_t words_per_worker)
 {
 	size_t alloc;
 
