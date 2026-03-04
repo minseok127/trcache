@@ -21,6 +21,28 @@
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
 /**
+ * @brief   Allocate and initialise a per-symbol ownership flags array.
+ *
+ * Each element is set to -1 (free). Returns NULL on allocation failure.
+ *
+ * @param   count: Number of flag slots (one per symbol).
+ *
+ * @return  Pointer to the allocated array, or NULL on failure.
+ */
+static _Atomic(int) *alloc_ownership_flags(int count)
+{
+	size_t size = (size_t)count * sizeof(_Atomic(int));
+	_Atomic(int) *flags = aligned_alloc(
+		CACHE_LINE_SIZE, ALIGN_UP(size, CACHE_LINE_SIZE));
+
+	if (flags != NULL) {
+		memset(flags, -1, size);
+	}
+
+	return flags;
+}
+
+/**
  * @brief   Create a new symbol_table.
  *
  * @param   max_capacity:       The maximum number of symbols.
@@ -104,18 +126,16 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	memset(table->batch_flush_ownership_flags, -1, batch_flush_size);
 
 	/*
-	 * Allocate per-symbol ownership flags for raw trade block flush.
-	 * Unlike batch_flush_ownership_flags, this array is indexed by sym_idx
-	 * only and is independent of candle type.
+	 * Per-symbol ownership flags for raw trade block flush, book update,
+	 * and book event flush. Each array is indexed by sym_idx only and is
+	 * independent of candle type. Initialised to -1 (free).
 	 */
-	size_t trade_flush_size = (size_t)max_capacity * sizeof(_Atomic(int));
-
-	table->trade_flush_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(trade_flush_size, CACHE_LINE_SIZE));
+	table->trade_flush_ownership_flags =
+		alloc_ownership_flags(max_capacity);
 	if (table->trade_flush_ownership_flags == NULL) {
 		errmsg(stderr,
-			"trade_flush_ownership_flags allocation failed\n");
+			"trade_flush_ownership_flags "
+			"allocation failed\n");
 		free(table->batch_flush_ownership_flags);
 		free(table->in_memory_ownership_flags);
 		free(table->symbol_entries);
@@ -124,20 +144,9 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		free(table);
 		return NULL;
 	}
-	/* Initialize all flags to -1 (free) */
-	memset(table->trade_flush_ownership_flags, -1,
-		trade_flush_size);
 
-	/*
-	 * Book ownership flags — 1 per symbol, same layout
-	 * as trade_flush_ownership_flags.
-	 */
-	size_t book_flags_size =
-		(size_t)max_capacity * sizeof(_Atomic(int));
-
-	table->book_update_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(book_flags_size, CACHE_LINE_SIZE));
+	table->book_update_ownership_flags =
+		alloc_ownership_flags(max_capacity);
 	if (table->book_update_ownership_flags == NULL) {
 		errmsg(stderr,
 			"book_update_ownership_flags "
@@ -147,20 +156,14 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		free(table->in_memory_ownership_flags);
 		free(table->symbol_entries);
 		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(
-			&table->ht_hash_table_mutex);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
 		free(table);
 		return NULL;
 	}
-	memset(table->book_update_ownership_flags, -1,
-		book_flags_size);
 
 	table->book_event_flush_ownership_flags =
-		aligned_alloc(CACHE_LINE_SIZE,
-			ALIGN_UP(book_flags_size,
-				CACHE_LINE_SIZE));
-	if (table->book_event_flush_ownership_flags
-			== NULL) {
+		alloc_ownership_flags(max_capacity);
+	if (table->book_event_flush_ownership_flags == NULL) {
 		errmsg(stderr,
 			"book_event_flush_ownership_flags "
 			"allocation failed\n");
@@ -170,13 +173,10 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		free(table->in_memory_ownership_flags);
 		free(table->symbol_entries);
 		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(
-			&table->ht_hash_table_mutex);
+		pthread_mutex_destroy(&table->ht_hash_table_mutex);
 		free(table);
 		return NULL;
 	}
-	memset(table->book_event_flush_ownership_flags,
-		-1, book_flags_size);
 
 	table->capacity = max_capacity;
 	table->num_symbols = 0;
@@ -306,7 +306,8 @@ static int init_symbol_entry(struct trcache *tc,
 
 	entry->trd_buf = event_data_buffer_init(tc, id,
 		tc->trade_data_size, tc->trades_per_block,
-		tc->trade_data_buf_size, tc->num_candle_configs);
+		tc->trade_data_buf_size, tc->num_candle_configs,
+		tc->trade_flush_enabled);
 
 	if (entry->trd_buf == NULL) {
 		errmsg(stderr, "Allocation of event_data_buffer failed\n");
@@ -315,11 +316,12 @@ static int init_symbol_entry(struct trcache *tc,
 		return -1;
 	}
 
-	if (tc->book_enabled) {
+	if (tc->book_update_enabled || tc->book_event_flush_enabled) {
 		entry->book_buf = event_data_buffer_init(tc, id,
 			tc->book_event_size,
 			tc->book_events_per_block,
-			tc->book_event_buf_size, 1);
+			tc->book_event_buf_size, 1,
+			tc->book_event_flush_enabled);
 		if (entry->book_buf == NULL) {
 			errmsg(stderr,
 				"book event_data_buffer alloc failed\n");

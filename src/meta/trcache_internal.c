@@ -27,6 +27,156 @@ static size_t align_up(size_t x, size_t a)
 }
 
 /**
+ * @brief   Validate ops structs: each must be all-or-nothing.
+ *
+ * @param   ctx: Pointer to the init context.
+ *
+ * @return  true if valid, false otherwise (with error logged).
+ */
+static bool validate_ops(const struct trcache_init_ctx *ctx)
+{
+	bool tf_flush  = (ctx->trade_flush_ops.flush   != NULL);
+	bool tf_done   = (ctx->trade_flush_ops.is_done != NULL);
+
+	if (tf_flush != tf_done) {
+		errmsg(stderr,
+			"trade_flush_ops: flush and is_done "
+			"must both be set or both NULL\n");
+		return false;
+	}
+
+	bool bs_init    = (ctx->book_state_ops.init    != NULL);
+	bool bs_update  = (ctx->book_state_ops.update  != NULL);
+	bool bs_destroy = (ctx->book_state_ops.destroy != NULL);
+
+	if (bs_init != bs_update || bs_init != bs_destroy) {
+		errmsg(stderr,
+			"book_state_ops: init, update, and destroy "
+			"must all be set or all NULL\n");
+		return false;
+	}
+
+	bool bef_flush = (ctx->book_event_flush_ops.flush   != NULL);
+	bool bef_done  = (ctx->book_event_flush_ops.is_done != NULL);
+
+	if (bef_flush != bef_done) {
+		errmsg(stderr,
+			"book_event_flush_ops: flush and is_done "
+			"must both be set or both NULL\n");
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * @brief   Configure trade pipeline sizing fields on @tc.
+ *
+ * Derives trades_per_block and trade_data_buf_size from ctx.
+ *
+ * @param   tc:  Pointer to trcache (trade_data_size already set).
+ * @param   ctx: Pointer to the init context.
+ */
+static void configure_trade_fields(struct trcache *tc,
+	const struct trcache_init_ctx *ctx)
+{
+	size_t io_block = (ctx->feed_block_size > 0) ?
+		ctx->feed_block_size : 65536;
+
+	tc->trades_per_block =
+		(int)(io_block / tc->trade_data_size);
+	if (tc->trades_per_block < 1) {
+		tc->trades_per_block = 1;
+	}
+	tc->trade_data_buf_size = align_up(
+		(size_t)tc->trades_per_block * tc->trade_data_size,
+		4096);
+}
+
+/**
+ * @brief   Configure book pipeline sizing fields on @tc.
+ *
+ * Called only when book_update_enabled || book_event_flush_enabled.
+ * Validates that book_event_size > 0 and derives block sizing.
+ *
+ * @param   tc:  Pointer to trcache.
+ * @param   ctx: Pointer to the init context.
+ *
+ * @return  0 on success, -1 if book_event_size is invalid.
+ */
+static int configure_book_fields(struct trcache *tc,
+	const struct trcache_init_ctx *ctx)
+{
+	size_t io_block;
+
+	if (ctx->book_event_size == 0) {
+		errmsg(stderr,
+			"book_event_size must be > 0 "
+			"when book pipeline is enabled\n");
+		return -1;
+	}
+
+	tc->book_event_size = ctx->book_event_size;
+	io_block = (ctx->feed_block_size > 0) ?
+		ctx->feed_block_size : 65536;
+
+	tc->book_events_per_block =
+		(int)(io_block / tc->book_event_size);
+	if (tc->book_events_per_block < 1) {
+		tc->book_events_per_block = 1;
+	}
+	tc->book_event_buf_size = align_up(
+		(size_t)tc->book_events_per_block
+			* tc->book_event_size,
+		4096);
+	return 0;
+}
+
+/**
+ * @brief   Finalize all per-symbol event buffers and destroy book states.
+ *
+ * Called from trcache_destroy() before symbol_table_destroy().
+ * Flushes any remaining trade and book event blocks, then calls
+ * book_state_ops.destroy() for every symbol that has an active state.
+ *
+ * @param   tc: Pointer to trcache instance.
+ */
+static void finalize_event_buffers(struct trcache *tc)
+{
+	int num_syms = atomic_load_explicit(
+		(int *)&tc->symbol_table->num_symbols,
+		memory_order_acquire);
+
+	for (int i = 0; i < num_syms; i++) {
+		struct symbol_entry *entry =
+			&tc->symbol_table->symbol_entries[i];
+
+		if (tc->trade_flush_enabled
+				&& entry->trd_buf != NULL) {
+			event_data_buffer_finalize(
+				entry->trd_buf,
+				(const struct event_data_flush_ops *)
+					&tc->trade_flush_ops);
+		}
+
+		if (tc->book_event_flush_enabled
+				&& entry->book_buf != NULL) {
+			event_data_buffer_finalize(
+				entry->book_buf,
+				(const struct event_data_flush_ops *)
+					&tc->book_event_flush_ops);
+		}
+
+		if (entry->book_state != NULL) {
+			tc->book_state_ops.destroy(
+				entry->book_state,
+				tc->book_state_ops.ctx);
+			entry->book_state = NULL;
+		}
+	}
+}
+
+/**
  * @brief   Helper to calculate the memory size of a single chunk + batch.
  */
 static size_t calculate_chunk_plus_batch_size(
@@ -306,7 +456,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	atomic_init(&tc->mem_acc.memory_pressure, false);
 
 	/* Validate ctx input first */
-	if (ctx == NULL || ctx->max_symbols <= 0 || ctx->num_worker_threads <= 2) {
+	if (ctx == NULL || ctx->max_symbols <= 0
+			|| ctx->num_worker_threads <= 2) {
 		errmsg(stderr, "trcache_init_ctx is NULL\n");
 		free(tc);
 		return NULL;
@@ -320,6 +471,11 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		return NULL;
 	} else if (ctx->trade_data_size == 0) {
 		errmsg(stderr, "trade_data_size must be greater than 0\n");
+		free(tc);
+		return NULL;
+	}
+
+	if (!validate_ops(ctx)) {
 		free(tc);
 		return NULL;
 	}
@@ -415,6 +571,8 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->max_symbols = ctx->max_symbols;
 	tc->trade_data_size = ctx->trade_data_size;
 	tc->trade_flush_ops = ctx->trade_flush_ops;
+	tc->trade_flush_enabled =
+		(ctx->trade_flush_ops.flush != NULL);
 
 	/*
 	 * Derive the number of trade records per block from the requested
@@ -425,44 +583,21 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	 * trade_data_buf_size is rounded up to the data-buffer alignment so
 	 * that aligned_alloc(EVENT_DATA_BUF_ALIGN, ...) is always valid.
 	 */
-	{
-		size_t io_block = (ctx->feed_block_size > 0) ?
-			ctx->feed_block_size : 65536;
-		tc->trades_per_block =
-			(int)(io_block / tc->trade_data_size);
-		if (tc->trades_per_block < 1) {
-			tc->trades_per_block = 1;
-		}
-		tc->trade_data_buf_size = align_up(
-			(size_t)tc->trades_per_block * tc->trade_data_size,
-			4096);
-	}
+	configure_trade_fields(tc, ctx);
 
-	/* Copy book pipeline configuration */
+	/* Copy book pipeline configuration and set enable flags */
 	tc->book_state_ops = ctx->book_state_ops;
 	tc->book_event_flush_ops = ctx->book_event_flush_ops;
-	tc->book_enabled = (ctx->book_state_ops.init != NULL);
+	tc->book_update_enabled =
+		(ctx->book_state_ops.init != NULL);
+	tc->book_event_flush_enabled =
+		(ctx->book_event_flush_ops.flush != NULL);
 
-	if (tc->book_enabled) {
-		if (ctx->book_event_size == 0) {
-			errmsg(stderr,
-				"book_event_size must be > 0 "
-				"when book is enabled\n");
-			free(tc);
-			return NULL;
+	if (tc->book_update_enabled
+			|| tc->book_event_flush_enabled) {
+		if (configure_book_fields(tc, ctx) != 0) {
+			goto cleanup_key;
 		}
-		tc->book_event_size = ctx->book_event_size;
-		size_t io_block = (ctx->feed_block_size > 0)
-			? ctx->feed_block_size : 65536;
-		tc->book_events_per_block =
-			(int)(io_block / tc->book_event_size);
-		if (tc->book_events_per_block < 1) {
-			tc->book_events_per_block = 1;
-		}
-		tc->book_event_buf_size = align_up(
-			(size_t)tc->book_events_per_block
-				* tc->book_event_size,
-			4096);
 	}
 
 	/* 4. Initialize SCQ pools */
@@ -731,35 +866,7 @@ void trcache_destroy(struct trcache *tc)
 	 * Flush remaining blocks and destroy book states before
 	 * tearing down the symbol table.
 	 */
-	{
-		int num_syms = atomic_load_explicit(
-			(int *)&tc->symbol_table->num_symbols,
-			memory_order_acquire);
-		for (int i = 0; i < num_syms; i++) {
-			struct symbol_entry *entry =
-				&tc->symbol_table->symbol_entries[i];
-			if (tc->trade_flush_ops.flush != NULL
-					&& entry->trd_buf != NULL) {
-				event_data_buffer_finalize(
-					entry->trd_buf,
-					(const struct event_data_flush_ops *)
-						&tc->trade_flush_ops);
-			}
-			if (tc->book_event_flush_ops.flush != NULL
-					&& entry->book_buf != NULL) {
-				event_data_buffer_finalize(
-					entry->book_buf,
-					(const struct event_data_flush_ops *)
-						&tc->book_event_flush_ops);
-			}
-			if (entry->book_state != NULL) {
-				tc->book_state_ops.destroy(
-					entry->book_state,
-					tc->book_state_ops.ctx);
-				entry->book_state = NULL;
-			}
-		}
-	}
+	finalize_event_buffers(tc);
 
 	/*
 	 * Destroy symbol table. This finalizes all candle lists,
@@ -1039,9 +1146,8 @@ int trcache_feed_trade_data(struct trcache *tc,
 	}
 
 	/* If we need free block, reap it from data buffer. */
-	if (trd_databuf->next_tail_write_idx ==
-			tc->trades_per_block - 1 &&
-			list_empty(&tls_data_ptr->local_free_list)) {
+	if (trd_databuf->next_tail_write_idx == tc->trades_per_block - 1
+			&& list_empty(&tls_data_ptr->local_free_list)) {
 
 		is_memory_pressure = atomic_load_explicit(
 			&tc->mem_acc.memory_pressure, memory_order_acquire);
@@ -1051,8 +1157,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 		}
 
 		event_data_buffer_reap_free_blocks(trd_databuf,
-			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id,
-			tc->trade_flush_ops.flush != NULL);
+			&tls_data_ptr->local_free_list, tls_data_ptr->thread_id);
 	}
 
 	/*
@@ -1081,56 +1186,43 @@ int trcache_feed_book_data(struct trcache *tc,
 	struct trcache_tls_data *tls = get_tls_data_or_create(tc);
 	struct event_data_buffer *book_buf;
 	struct symbol_entry *entry;
-	bool has_flush;
 
 	if (data == NULL || tls == NULL) {
-		errmsg(stderr,
-			"Invalid book event data or tls\n");
+		errmsg(stderr, "Invalid book event data or tls\n");
 		return -1;
 	}
 
-	if (!tc->book_enabled) {
-		errmsg(stderr,
-			"Book pipeline is not enabled\n");
+	if (!tc->book_update_enabled && !tc->book_event_flush_enabled) {
+		errmsg(stderr, "Book pipeline is not enabled\n");
 		return -1;
 	}
 
-	entry = symbol_table_lookup_entry(
-		tc->symbol_table, symbol_id);
+	entry = symbol_table_lookup_entry( tc->symbol_table, symbol_id);
 	if (entry == NULL) {
-		errmsg(stderr,
-			"Symbol id %d not found\n",
-			symbol_id);
+		errmsg(stderr, "Symbol id %d not found\n", symbol_id);
 		return -1;
 	}
 
 	book_buf = entry->book_buf;
 	if (book_buf == NULL) {
-		errmsg(stderr,
-			"Book buffer is NULL for symbol %d\n",
-			symbol_id);
+		errmsg(stderr, "Book buffer is NULL for symbol %d\n", symbol_id);
 		return -1;
 	}
-
-	has_flush =
-		(tc->book_event_flush_ops.flush != NULL);
 
 	/*
 	 * Reap free blocks from finished flushes when
 	 * the current block is about to become full and
 	 * the local free list is empty.
 	 */
-	if (book_buf->next_tail_write_idx ==
-			tc->book_events_per_block - 1
+	if (book_buf->next_tail_write_idx == tc->book_events_per_block - 1
 			&& list_empty(&tls->local_free_list)) {
+		/* TODO user thread consume logic */
 		event_data_buffer_reap_free_blocks(
-			book_buf, &tls->local_free_list,
-			tls->thread_id, has_flush);
+			book_buf, &tls->local_free_list, tls->thread_id);
 	}
 
 	if (event_data_buffer_push(book_buf, data,
-			&tls->local_free_list,
-			tls->thread_id) == -1) {
+			&tls->local_free_list, tls->thread_id) == -1) {
 		return -1;
 	}
 

@@ -121,26 +121,29 @@ struct event_data_buffer_cursor {
 /*
  * event_data_buffer - Buffer managing a linked list of event_data_block.
  *
- * @block_list:               Linked list for blocks.
- * @produced_count:           Number of data items supplied to this buffer.
- * @next_tail_write_idx:      Next write_idx of the tail block.
- * @num_cursor:               Number of valid cursors.
- * @trc:                      Back-pointer to the main trcache instance.
- * @symbol_id:                Integer symbol ID resolved via symbol table.
- * @block_allocation_size:    Pre-calculated size of one block (struct + data).
- * @event_size:               Size of one event record in bytes.
- * @events_per_block:         Number of event records per block.
- * @event_buf_size:           4 KiB-aligned data buffer size per block.
- * @memory_usage:             Memory (bytes) of this struct + all *active*
- *                            blocks.
+ * @block_list:                Linked list for blocks.
+ * @produced_count:            Number of data items supplied to this buffer.
+ * @next_tail_write_idx:       Next write_idx of the tail block.
+ * @num_cursor:                Number of valid cursors.
+ * @trc:                       Back-pointer to the main trcache instance.
+ * @symbol_id:                 Integer symbol ID resolved via symbol table.
+ * @block_allocation_size:     Pre-calculated size of one block (struct + data).
+ * @event_size:                Size of one event record in bytes.
+ * @events_per_block:          Number of event records per block.
+ * @event_buf_size:            4 KiB-aligned data buffer size per block.
+ * @has_flush:                 True when a flush callback is configured for
+ *                             this buffer. Controls whether full blocks are
+ *                             marked EVENT_BLOCK_FLUSH_NEEDED on push.
+ * @memory_usage:              Memory (bytes) of this struct + all *active*
+ *                             blocks.
  * @num_full_unflushed_blocks: Number of full blocks whose flush has not yet
- *                            completed. Incremented by the producer when a
- *                            block fills; decremented by the flush worker
- *                            when flush completes.
- * @ema_cycles_per_flush:     EMA of CPU cycles per completed block flush.
- *                            Written by the flush worker; read by the admin
- *                            thread for scheduling cost estimation.
- * @cursor_arr:               Cursor array (only valid types are initialized).
+ *                             completed. Incremented by the producer when a
+ *                             block fills; decremented by the flush worker
+ *                             when flush completes.
+ * @ema_cycles_per_flush:      EMA of CPU cycles per completed block flush.
+ *                             Written by the flush worker; read by the admin
+ *                             thread for scheduling cost estimation.
+ * @cursor_arr:                Cursor array (only valid types are initialized).
  *
  * @next_tail_write_idx is a cached prediction of the tail block's write-index
  * after the very next push. It lets external code (caller side) decide *before*
@@ -169,6 +172,7 @@ struct event_data_buffer {
 	size_t event_size;
 	int events_per_block;
 	size_t event_buf_size;
+	bool has_flush;
 
 	/*
 	 * Group 3: Memory Counter
@@ -248,12 +252,13 @@ static inline void event_data_buffer_release_cursor(
  * @param   events_per_block: Number of events per block.
  * @param   event_buf_size:   4 KiB-aligned data buffer size per block.
  * @param   num_cursors:      Number of cursors to initialize.
+ * @param   has_flush:        True when a flush callback is configured.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
 struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
 	int symbol_id, size_t event_size, int events_per_block,
-	size_t event_buf_size, int num_cursors);
+	size_t event_buf_size, int num_cursors, bool has_flush);
 
 /**
  * @brief   Destroy an event data buffer and free resources.
@@ -313,13 +318,12 @@ void event_data_buffer_consume(struct event_data_buffer *buf,
  * A block is eligible for reclamation only when all cursors have
  * advanced past it AND, if flush is configured, its flush has completed.
  *
- * @param   buf:                 Buffer to reap the free blocks.
- * @param   free_list:           Linked list pointer holding recycled blocks.
- * @param   thread_id:           The feed thread's unique ID.
- * @param   flush_enabled:       Non-zero if flush ops are configured.
+ * @param   buf:       Buffer to reap the free blocks.
+ * @param   free_list: Linked list pointer holding recycled blocks.
+ * @param   thread_id: The feed thread's unique ID.
  */
 void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
-	struct list_head *free_list, int thread_id, int flush_enabled);
+	struct list_head *free_list, int thread_id);
 
 /**
  * @brief   Flush full event blocks using the provided flush callbacks.

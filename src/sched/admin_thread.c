@@ -44,6 +44,55 @@ static inline size_t get_bitmap_bytes(int num_bits)
 }
 
 /**
+ * @brief   Allocate and zero-initialise a next/current bitmap pair.
+ *
+ * If words_per_worker is 0 both output pointers are set to NULL and
+ * the function succeeds immediately (disabled-feature fast path).
+ *
+ * On allocation failure both pointers are freed and set to NULL before
+ * returning -1, so the caller's cleanup_bitmaps path can unconditionally
+ * call free() on all bitmap pointers without risk of double-free.
+ *
+ * @param   next_out:        Receives pointer to the "next" bitmap array.
+ * @param   curr_out:        Receives pointer to the "current" bitmap array.
+ * @param   num_workers:     Number of workers (rows).
+ * @param   words_per_worker: Number of uint64_t words per worker (cols).
+ *
+ * @return  0 on success, -1 on allocation failure.
+ */
+static int alloc_zero_bitmap_pair(uint64_t **next_out,
+	uint64_t **curr_out,
+	size_t num_workers, size_t words_per_worker)
+{
+	size_t alloc;
+
+	if (words_per_worker == 0) {
+		*next_out = NULL;
+		*curr_out = NULL;
+		return 0;
+	}
+
+	alloc = num_workers * words_per_worker * sizeof(uint64_t);
+
+	*next_out = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(alloc, CACHE_LINE_SIZE));
+	*curr_out = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(alloc, CACHE_LINE_SIZE));
+
+	if (*next_out == NULL || *curr_out == NULL) {
+		free(*next_out);
+		free(*curr_out);
+		*next_out = NULL;
+		*curr_out = NULL;
+		return -1;
+	}
+
+	memset(*next_out, 0, alloc);
+	memset(*curr_out, 0, alloc);
+	return 0;
+}
+
+/**
  * @brief   Initialise the admin thread state.
  *
  * @param   tc: Owner of the admin state.
@@ -128,144 +177,67 @@ int admin_state_init(struct trcache *tc)
 	state->batch_flush_words_per_worker = batch_flush_words;
 
 	/*
-	 * Trade flush bitmaps: 1 bit per symbol, only
-	 * when trade flush callback is registered.
+	 * Trade flush: 1 bit per symbol, only when enabled.
+	 * Book update and book event flush: each 1 bit per symbol,
+	 * independently controlled by their respective flags.
 	 */
-	if (tc->trade_flush_ops.flush != NULL) {
-		trade_flush_words =
-			get_bitmap_bytes(tc->max_symbols) / 8;
-	} else {
-		trade_flush_words = 0;
-	}
-	state->trade_flush_words_per_worker =
-		trade_flush_words;
+	trade_flush_words = tc->trade_flush_enabled ?
+		get_bitmap_bytes(tc->max_symbols) / 8 : 0;
+	book_words = tc->book_update_enabled ?
+		get_bitmap_bytes(tc->max_symbols) / 8 : 0;
 
-	/*
-	 * Book bitmaps: 1 bit per symbol, only when
-	 * the book pipeline is enabled.
-	 */
-	if (tc->book_enabled) {
-		book_words =
-			get_bitmap_bytes(tc->max_symbols) / 8;
-	} else {
-		book_words = 0;
-	}
+	state->trade_flush_words_per_worker = trade_flush_words;
 	state->book_update_words_per_worker = book_words;
-	state->book_event_flush_words_per_worker = book_words;
+	state->book_event_flush_words_per_worker =
+		tc->book_event_flush_enabled ?
+			get_bitmap_bytes(tc->max_symbols) / 8 : 0;
 
 	/* Always-allocated: IM + batch flush bitmaps */
-	size_t im_alloc =
-		num_workers * in_mem_words
-			* sizeof(uint64_t);
-	size_t bf_alloc =
-		num_workers * batch_flush_words
-			* sizeof(uint64_t);
-
-	state->next_im_bitmaps = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(im_alloc, CACHE_LINE_SIZE));
-	state->current_im_bitmaps = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(im_alloc, CACHE_LINE_SIZE));
-	state->next_batch_flush_bitmaps = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(bf_alloc, CACHE_LINE_SIZE));
-	state->current_batch_flush_bitmaps = aligned_alloc(
-		CACHE_LINE_SIZE,
-		ALIGN_UP(bf_alloc, CACHE_LINE_SIZE));
-
-	if (state->next_im_bitmaps == NULL ||
-		state->current_im_bitmaps == NULL ||
-		state->next_batch_flush_bitmaps == NULL ||
-		state->current_batch_flush_bitmaps == NULL) {
+	if (alloc_zero_bitmap_pair(
+			&state->next_im_bitmaps,
+			&state->current_im_bitmaps,
+			num_workers, in_mem_words) != 0 ||
+		alloc_zero_bitmap_pair(
+			&state->next_batch_flush_bitmaps,
+			&state->current_batch_flush_bitmaps,
+			num_workers, batch_flush_words) != 0) {
 		errmsg(stderr,
 			"Admin bitmap buffer alloc failed\n");
 		goto cleanup_bitmaps;
 	}
 
-	memset(state->next_im_bitmaps, 0, im_alloc);
-	memset(state->current_im_bitmaps, 0, im_alloc);
-	memset(state->next_batch_flush_bitmaps,
-		0, bf_alloc);
-	memset(state->current_batch_flush_bitmaps,
-		0, bf_alloc);
-
 	/* Conditional: trade flush bitmaps */
-	if (trade_flush_words > 0) {
-		size_t tf_alloc =
-			num_workers * trade_flush_words
-				* sizeof(uint64_t);
-		state->next_trade_flush_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(tf_alloc,
-					CACHE_LINE_SIZE));
-		state->current_trade_flush_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(tf_alloc,
-					CACHE_LINE_SIZE));
-		if (state->next_trade_flush_bitmaps == NULL ||
-			state->current_trade_flush_bitmaps
-				== NULL) {
-			errmsg(stderr,
-				"Admin trade flush bitmap "
-				"alloc failed\n");
-			goto cleanup_bitmaps;
-		}
-		memset(state->next_trade_flush_bitmaps,
-			0, tf_alloc);
-		memset(state->current_trade_flush_bitmaps,
-			0, tf_alloc);
-	} else {
-		state->next_trade_flush_bitmaps = NULL;
-		state->current_trade_flush_bitmaps = NULL;
+	if (alloc_zero_bitmap_pair(
+			&state->next_trade_flush_bitmaps,
+			&state->current_trade_flush_bitmaps,
+			num_workers, trade_flush_words) != 0) {
+		errmsg(stderr,
+			"Admin trade flush bitmap alloc failed\n");
+		goto cleanup_bitmaps;
 	}
 
-	/* Conditional: book bitmaps */
-	if (book_words > 0) {
-		size_t bk_alloc =
-			num_workers * book_words
-				* sizeof(uint64_t);
-		state->next_book_update_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(bk_alloc,
-					CACHE_LINE_SIZE));
-		state->next_book_event_flush_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(bk_alloc,
-					CACHE_LINE_SIZE));
-		state->current_book_update_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(bk_alloc,
-					CACHE_LINE_SIZE));
-		state->current_book_event_flush_bitmaps =
-			aligned_alloc(CACHE_LINE_SIZE,
-				ALIGN_UP(bk_alloc,
-					CACHE_LINE_SIZE));
-		if (state->next_book_update_bitmaps == NULL ||
-			state->next_book_event_flush_bitmaps
-				== NULL ||
-			state->current_book_update_bitmaps
-				== NULL ||
-			state->current_book_event_flush_bitmaps
-				== NULL) {
-			errmsg(stderr,
-				"Admin book bitmap "
-				"alloc failed\n");
-			goto cleanup_bitmaps;
-		}
-		memset(state->next_book_update_bitmaps,
-			0, bk_alloc);
-		memset(state->next_book_event_flush_bitmaps,
-			0, bk_alloc);
-		memset(state->current_book_update_bitmaps,
-			0, bk_alloc);
-		memset(state->current_book_event_flush_bitmaps,
-			0, bk_alloc);
-	} else {
-		state->next_book_update_bitmaps = NULL;
-		state->next_book_event_flush_bitmaps = NULL;
-		state->current_book_update_bitmaps = NULL;
-		state->current_book_event_flush_bitmaps = NULL;
+	/* Conditional: book update bitmaps (independent) */
+	if (alloc_zero_bitmap_pair(
+			&state->next_book_update_bitmaps,
+			&state->current_book_update_bitmaps,
+			num_workers,
+			state->book_update_words_per_worker) != 0) {
+		errmsg(stderr,
+			"Admin book update bitmap alloc failed\n");
+		goto cleanup_bitmaps;
+	}
+
+	/* Conditional: book event flush bitmaps (independent) */
+	if (alloc_zero_bitmap_pair(
+			&state->next_book_event_flush_bitmaps,
+			&state->current_book_event_flush_bitmaps,
+			num_workers,
+			state->book_event_flush_words_per_worker)
+			!= 0) {
+		errmsg(stderr,
+			"Admin book event flush bitmap "
+			"alloc failed\n");
+		goto cleanup_bitmaps;
 	}
 
 	return 0;
@@ -525,7 +497,7 @@ static void update_trade_block_fill_rates(struct trcache *cache,
 			&tdb->num_full_unflushed_blocks,
 			memory_order_acquire);
 		tmp = (__uint128_t)(unflushed > 0 ? (uint64_t)unflushed : 0)
-			* 1000000000ull;
+				* 1000000000ull;
 		tmp /= dt_ns;
 		admin->trade_block_fill_rates[sym_idx] =
 			ema_update_u64(admin->trade_block_fill_rates[sym_idx],
@@ -537,8 +509,10 @@ static void update_trade_block_fill_rates(struct trcache *cache,
  * @brief   Update per-symbol book pipeline rates.
  *
  * Computes two independent demand signals:
+ *
  *   - book_update_rates:     events/sec from produced_count
  *     diff. Drives the book-update task (GROUP_IN_MEMORY).
+ *
  *   - book_block_fill_rates: unflushed blocks/sec, same
  *     method as trade flush. Drives the book-event-flush
  *     task (GROUP_FLUSH).
@@ -596,14 +570,12 @@ static void update_book_pipeline_rates(
 		int unflushed = atomic_load_explicit(
 			&buf->num_full_unflushed_blocks,
 			memory_order_acquire);
-		tmp = (__uint128_t)(unflushed > 0
-			? (uint64_t)unflushed : 0)
-			* 1000000000ull;
+		tmp = (__uint128_t)(unflushed > 0 ?
+				(uint64_t)unflushed : 0) * 1000000000ull;
 		tmp /= dt_ns;
 		admin->book_block_fill_rates[sym_idx] =
 			ema_update_u64(
-				admin->book_block_fill_rates
-					[sym_idx],
+				admin->book_block_fill_rates[sym_idx],
 				(uint64_t)tmp);
 	}
 }
@@ -612,6 +584,7 @@ static void update_book_pipeline_rates(
  * @brief   Refresh pipeline statistics for all symbols.
  *
  * Updates the admin-thread-local statistics arrays in 'admin_state':
+ *
  *   1. Candle pipeline snapshots and throughput rates (type × symbol).
  *   2. Trade block fill rates (symbol only, when trade flush is enabled).
  *   3. Book block fill rates (symbol only, when book is enabled).
@@ -659,14 +632,13 @@ void update_all_pipeline_stats(struct trcache *cache)
 		}
 	}
 
-	if (cache->trade_flush_ops.flush != NULL) {
-		update_trade_block_fill_rates(
-			cache, admin, num_symbols, now_ns);
+	if (cache->trade_flush_enabled) {
+		update_trade_block_fill_rates(cache, admin, num_symbols, now_ns);
 	}
 
-	if (cache->book_enabled) {
-		update_book_pipeline_rates(
-			cache, admin, num_symbols, now_ns);
+	if (cache->book_update_enabled ||
+			cache->book_event_flush_enabled) {
+		update_book_pipeline_rates(cache, admin, num_symbols, now_ns);
 	}
 }
 
@@ -726,14 +698,16 @@ static void update_all_task_costs(struct trcache *cache)
 	 * Trade flush cost is per-symbol only, stored in the
 	 * dedicated trade_flush_costs[] array.
 	 */
-	if (cache->trade_flush_ops.flush != NULL) {
+	if (cache->trade_flush_enabled) {
 		for (int sym_idx = 0; sym_idx < num_symbols;
 				sym_idx++) {
 			struct event_data_buffer *tdb =
 				table->symbol_entries[sym_idx].trd_buf;
+
 			if (tdb == NULL) {
 				continue;
 			}
+
 			double cost_tf = (double)atomic_load_explicit(
 				&tdb->ema_cycles_per_flush,
 				memory_order_acquire);
@@ -745,34 +719,36 @@ static void update_all_task_costs(struct trcache *cache)
 
 	/*
 	 * Book update + book event flush costs are per-symbol
-	 * only. ema_cycles_per_update tracks the cost of
-	 * calling book_state_ops.update() per event batch.
-	 * ema_cycles_per_flush tracks the IO flush cost.
+	 * only, and tracked independently.
 	 */
-	if (cache->book_enabled) {
+	if (cache->book_update_enabled ||
+			cache->book_event_flush_enabled) {
 		for (int sym_idx = 0; sym_idx < num_symbols;
 				sym_idx++) {
 			struct event_data_buffer *buf =
-				table->symbol_entries[sym_idx]
-					.book_buf;
+				table->symbol_entries[sym_idx].book_buf;
+
 			if (buf == NULL) {
 				continue;
 			}
-			double cost_upd =
-				(double)atomic_load_explicit(
-					&buf->ema_cycles_per_update,
-					memory_order_acquire);
-			double cost_flush =
-				(double)atomic_load_explicit(
-					&buf->ema_cycles_per_flush,
-					memory_order_acquire);
 
-			admin->book_update_costs[sym_idx] =
-				(cost_upd > 0)
-					? cost_upd : MIN_COST;
-			admin->book_event_flush_costs[sym_idx] =
-				(cost_flush > 0)
-					? cost_flush : MIN_COST;
+			if (cache->book_update_enabled) {
+				double cost_upd =
+					(double)atomic_load_explicit(
+						&buf->ema_cycles_per_update,
+						memory_order_acquire);
+				admin->book_update_costs[sym_idx] =
+					(cost_upd > 0) ? cost_upd : MIN_COST;
+			}
+
+			if (cache->book_event_flush_enabled) {
+				double cost_flush =
+					(double)atomic_load_explicit(
+						&buf->ema_cycles_per_flush,
+						memory_order_acquire);
+				admin->book_event_flush_costs[sym_idx] =
+					(cost_flush > 0) ? cost_flush : MIN_COST;
+			}
 		}
 	}
 }
@@ -809,11 +785,14 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 			 * each group needs to keep up with the current workload.
 			 */
 			total_im_cycles
-				+= (double)demand->produced_rate * cost->cost_apply;
+				+= (double)demand->produced_rate
+					* cost->cost_apply;
 			total_im_cycles
-				+= (double)demand->completed_rate * cost->cost_convert;
+				+= (double)demand->completed_rate
+					* cost->cost_convert;
 			total_flush_cycles
-				+= (double)demand->flushable_batch_rate * cost->cost_batch_flush;
+				+= (double)demand->flushable_batch_rate
+					* cost->cost_batch_flush;
 		}
 	}
 
@@ -836,19 +815,23 @@ static void calculate_total_cycle_needs(struct trcache *cache,
 	 *     production rate (events/sec from produced_count).
 	 *   - book_event_flush: Flush group, driven by
 	 *     unflushed block rate (blocks/sec).
+	 * Each is tracked independently.
 	 */
-	if (cache->book_enabled) {
+	if (cache->book_update_enabled ||
+			cache->book_event_flush_enabled) {
 		for (int sym_idx = 0; sym_idx < num_symbols;
 				sym_idx++) {
-			total_im_cycles +=
-				(double)admin->book_update_rates
-					[sym_idx]
-				* admin->book_update_costs[sym_idx];
-			total_flush_cycles +=
-				(double)admin->book_block_fill_rates
-					[sym_idx]
-				* admin->book_event_flush_costs
-					[sym_idx];
+			if (cache->book_update_enabled) {
+				total_im_cycles +=
+					(double)admin->book_update_rates[sym_idx]
+					* admin->book_update_costs[sym_idx];
+			}
+
+			if (cache->book_event_flush_enabled) {
+				total_flush_cycles +=
+					(double)admin->book_block_fill_rates[sym_idx]
+					* admin->book_event_flush_costs[sym_idx];
+			}
 		}
 	}
 
@@ -1040,12 +1023,15 @@ static void assign_trade_flush_tasks(struct admin_state *admin,
 	for (int sym_idx = 0; sym_idx < num_symbols; sym_idx++) {
 		struct event_data_buffer *tdb =
 			symtab->symbol_entries[sym_idx].trd_buf;
+
 		if (tdb == NULL) {
 			continue;
 		}
+
 		double tf_cost =
 			(double)admin->trade_block_fill_rates[sym_idx]
 			* admin->trade_flush_costs[sym_idx];
+
 		assign_task_to_budget_group(flush_state, tf_cost,
 			admin->next_trade_flush_bitmaps, trade_flush_words,
 			TF_BIT(sym_idx));
@@ -1077,9 +1063,9 @@ static void assign_book_update_tasks(
 	for (int sym_idx = 0; sym_idx < num_symbols;
 			sym_idx++) {
 		double cost =
-			(double)admin->book_update_rates
-				[sym_idx]
+			(double)admin->book_update_rates[sym_idx]
 			* admin->book_update_costs[sym_idx];
+
 		assign_task_to_budget_group(
 			im_state, cost,
 			admin->next_book_update_bitmaps,
@@ -1104,16 +1090,14 @@ static void assign_book_event_flush_tasks(
 	int num_symbols = atomic_load_explicit(
 		(int *)&symtab->num_symbols,
 		memory_order_acquire);
-	size_t words =
-		admin->book_event_flush_words_per_worker;
+	size_t words = admin->book_event_flush_words_per_worker;
 
 	for (int sym_idx = 0; sym_idx < num_symbols;
 			sym_idx++) {
 		double cost =
-			(double)admin->book_block_fill_rates
-				[sym_idx]
-			* admin->book_event_flush_costs
-				[sym_idx];
+			(double)admin->book_block_fill_rates[sym_idx]
+			* admin->book_event_flush_costs[sym_idx];
+
 		assign_task_to_budget_group(
 			flush_state, cost,
 			admin->next_book_event_flush_bitmaps,
@@ -1141,35 +1125,34 @@ static void assign_tasks_to_bitmaps(struct trcache *cache,
 	double total_im_cycles, double total_flush_cycles)
 {
 	size_t in_mem_words = admin->in_mem_words_per_worker;
-	size_t batch_flush_words =
-		admin->batch_flush_words_per_worker;
+	size_t batch_flush_words = admin->batch_flush_words_per_worker;
 
 	/* Clear the 'next' buffers for recalculation */
 	memset(admin->next_im_bitmaps, 0,
-		cache->num_workers * in_mem_words
-			* sizeof(uint64_t));
+		cache->num_workers * in_mem_words * sizeof(uint64_t));
+
 	memset(admin->next_batch_flush_bitmaps, 0,
-		cache->num_workers * batch_flush_words
-			* sizeof(uint64_t));
+		cache->num_workers * batch_flush_words * sizeof(uint64_t));
+
 	if (admin->next_trade_flush_bitmaps != NULL) {
 		memset(admin->next_trade_flush_bitmaps, 0,
 			cache->num_workers
 				* admin->trade_flush_words_per_worker
 				* sizeof(uint64_t));
 	}
+
 	if (admin->next_book_update_bitmaps != NULL) {
 		memset(admin->next_book_update_bitmaps, 0,
 			cache->num_workers
 				* admin->book_update_words_per_worker
 				* sizeof(uint64_t));
 	}
-	if (admin->next_book_event_flush_bitmaps
-			!= NULL) {
+
+	if (admin->next_book_event_flush_bitmaps != NULL) {
 		memset(
 			admin->next_book_event_flush_bitmaps,
 			0, cache->num_workers
-				* admin
-					->book_event_flush_words_per_worker
+				* admin->book_event_flush_words_per_worker
 				* sizeof(uint64_t));
 	}
 
@@ -1193,19 +1176,18 @@ static void assign_tasks_to_bitmaps(struct trcache *cache,
 	};
 	flush_state.current_budget = flush_state.budget_per_worker;
 
-	assign_candle_tasks(
-		cache, admin, symtab, &im_state, &flush_state);
+	assign_candle_tasks(cache, admin, symtab, &im_state, &flush_state);
 
-	if (cache->trade_flush_ops.flush != NULL) {
-		assign_trade_flush_tasks(
-			admin, symtab, &flush_state);
+	if (cache->trade_flush_enabled) {
+		assign_trade_flush_tasks(admin, symtab, &flush_state);
 	}
 
-	if (cache->book_enabled) {
-		assign_book_update_tasks(
-			admin, symtab, &im_state);
-		assign_book_event_flush_tasks(
-			admin, symtab, &flush_state);
+	if (cache->book_update_enabled) {
+		assign_book_update_tasks(admin, symtab, &im_state);
+	}
+
+	if (cache->book_event_flush_enabled) {
+		assign_book_event_flush_tasks(admin, symtab, &flush_state);
 	}
 }
 
@@ -1240,30 +1222,19 @@ static void publish_im_assignment(
 	size_t im_w = admin->in_mem_words_per_worker;
 	size_t bu_w = admin->book_update_words_per_worker;
 
-	uint64_t *next_im =
-		admin->next_im_bitmaps
-		+ (worker_idx * im_w);
-	uint64_t *cur_im =
-		admin->current_im_bitmaps
-		+ (worker_idx * im_w);
+	uint64_t *next_im = admin->next_im_bitmaps + (worker_idx * im_w);
+	uint64_t *cur_im = admin->current_im_bitmaps + (worker_idx * im_w);
 
 	bool group_changed = (old_group != new_group);
-	bool bitmaps_changed =
-		memcmp(next_im, cur_im,
-			sz->im_bytes) != 0;
+	bool bitmaps_changed = memcmp(next_im, cur_im, sz->im_bytes) != 0;
 
 	uint64_t *next_bu = NULL;
 	uint64_t *cur_bu = NULL;
+
 	if (bu_w > 0) {
-		next_bu =
-			admin->next_book_update_bitmaps
-			+ (worker_idx * bu_w);
-		cur_bu =
-			admin->current_book_update_bitmaps
-			+ (worker_idx * bu_w);
-		bitmaps_changed |=
-			memcmp(next_bu, cur_bu,
-				sz->bu_bytes) != 0;
+		next_bu = admin->next_book_update_bitmaps + (worker_idx * bu_w);
+		cur_bu = admin->current_book_update_bitmaps + (worker_idx * bu_w);
+		bitmaps_changed |= memcmp(next_bu, cur_bu, sz->bu_bytes) != 0;
 	}
 
 	if (!group_changed && !bitmaps_changed) {
@@ -1271,38 +1242,31 @@ static void publish_im_assignment(
 	}
 
 	/* Copy new bitmaps to worker + save */
-	memcpy(ws->in_memory_bitmap,
-		next_im, sz->im_bytes);
+	memcpy(ws->in_memory_bitmap, next_im, sz->im_bytes);
 	memcpy(cur_im, next_im, sz->im_bytes);
 
 	if (next_bu != NULL) {
-		memcpy(ws->book_update_bitmap,
-			next_bu, sz->bu_bytes);
+		memcpy(ws->book_update_bitmap, next_bu, sz->bu_bytes);
 		memcpy(cur_bu, next_bu, sz->bu_bytes);
 	}
 
+	/* Reset previous group's bitmaps */
 	if (group_changed) {
-		size_t bf_w =
-			admin->batch_flush_words_per_worker;
-		memset(
-			admin->current_batch_flush_bitmaps
-			+ (worker_idx * bf_w),
+		size_t bf_w = admin->batch_flush_words_per_worker;
+
+		memset(admin->current_batch_flush_bitmaps + (worker_idx * bf_w),
 			0, sz->bf_bytes);
+
 		if (sz->tf_bytes > 0) {
-			size_t tf_w = admin
-				->trade_flush_words_per_worker;
-			memset(
-				admin->current_trade_flush_bitmaps
-				+ (worker_idx * tf_w),
+			size_t tf_w = admin->trade_flush_words_per_worker;
+			memset(admin->current_trade_flush_bitmaps + (worker_idx * tf_w),
 				0, sz->tf_bytes);
 		}
+
 		if (sz->bef_bytes > 0) {
-			size_t bef_w = admin
-				->book_event_flush_words_per_worker;
-			memset(
-				admin->current_book_event_flush_bitmaps
-				+ (worker_idx * bef_w),
-				0, sz->bef_bytes);
+			size_t bef_w = admin->book_event_flush_words_per_worker;
+			memset(admin->current_book_event_flush_bitmaps
+					+ (worker_idx * bef_w), 0, sz->bef_bytes);
 		}
 	}
 
@@ -1326,54 +1290,35 @@ static void publish_flush_assignment(
 	int old_group, const struct publish_sizes *sz)
 {
 	int new_group = GROUP_FLUSH;
-	size_t bf_w =
-		admin->batch_flush_words_per_worker;
-	size_t tf_w =
-		admin->trade_flush_words_per_worker;
-	size_t bef_w =
-		admin->book_event_flush_words_per_worker;
+	size_t bf_w = admin->batch_flush_words_per_worker;
+	size_t tf_w = admin->trade_flush_words_per_worker;
+	size_t bef_w = admin->book_event_flush_words_per_worker;
 
 	/* batch_flush: always allocated */
-	uint64_t *next_bf =
-		admin->next_batch_flush_bitmaps
-		+ (worker_idx * bf_w);
-	uint64_t *cur_bf =
-		admin->current_batch_flush_bitmaps
-		+ (worker_idx * bf_w);
+	uint64_t *next_bf = admin->next_batch_flush_bitmaps + (worker_idx * bf_w);
+	uint64_t *cur_bf = admin->current_batch_flush_bitmaps + (worker_idx * bf_w);
 
 	bool group_changed = (old_group != new_group);
-	bool bitmaps_changed =
-		memcmp(next_bf, cur_bf,
-			sz->bf_bytes) != 0;
+	bool bitmaps_changed = memcmp(next_bf, cur_bf, sz->bf_bytes) != 0;
 
 	/* trade_flush: conditional */
 	uint64_t *next_tf = NULL;
 	uint64_t *cur_tf = NULL;
+
 	if (tf_w > 0) {
-		next_tf =
-			admin->next_trade_flush_bitmaps
-			+ (worker_idx * tf_w);
-		cur_tf =
-			admin->current_trade_flush_bitmaps
-			+ (worker_idx * tf_w);
-		bitmaps_changed |=
-			memcmp(next_tf, cur_tf,
-				sz->tf_bytes) != 0;
+		next_tf = admin->next_trade_flush_bitmaps + (worker_idx * tf_w);
+		cur_tf = admin->current_trade_flush_bitmaps + (worker_idx * tf_w);
+		bitmaps_changed |= memcmp(next_tf, cur_tf, sz->tf_bytes) != 0;
 	}
 
 	/* book_event_flush: conditional */
 	uint64_t *next_bef = NULL;
 	uint64_t *cur_bef = NULL;
+
 	if (bef_w > 0) {
-		next_bef =
-			admin->next_book_event_flush_bitmaps
-			+ (worker_idx * bef_w);
-		cur_bef =
-			admin->current_book_event_flush_bitmaps
-			+ (worker_idx * bef_w);
-		bitmaps_changed |=
-			memcmp(next_bef, cur_bef,
-				sz->bef_bytes) != 0;
+		next_bef = admin->next_book_event_flush_bitmaps + (worker_idx * bef_w);
+		cur_bef = admin->current_book_event_flush_bitmaps + (worker_idx * bef_w);
+		bitmaps_changed |= memcmp(next_bef, cur_bef, sz->bef_bytes) != 0;
 	}
 
 	if (!group_changed && !bitmaps_changed) {
@@ -1381,34 +1326,29 @@ static void publish_flush_assignment(
 	}
 
 	/* Copy new bitmaps to worker + save */
-	memcpy(ws->batch_flush_bitmap,
-		next_bf, sz->bf_bytes);
+	memcpy(ws->batch_flush_bitmap, next_bf, sz->bf_bytes);
 	memcpy(cur_bf, next_bf, sz->bf_bytes);
 
 	if (next_tf != NULL) {
-		memcpy(ws->trade_flush_bitmap,
-			next_tf, sz->tf_bytes);
+		memcpy(ws->trade_flush_bitmap, next_tf, sz->tf_bytes);
 		memcpy(cur_tf, next_tf, sz->tf_bytes);
 	}
+
 	if (next_bef != NULL) {
-		memcpy(ws->book_event_flush_bitmap,
-			next_bef, sz->bef_bytes);
+		memcpy(ws->book_event_flush_bitmap, next_bef, sz->bef_bytes);
 		memcpy(cur_bef, next_bef, sz->bef_bytes);
 	}
 
+	/* Reset previous group's bitmaps */
 	if (group_changed) {
-		size_t im_w =
-			admin->in_mem_words_per_worker;
-		memset(
-			admin->current_im_bitmaps
-			+ (worker_idx * im_w),
+		size_t im_w = admin->in_mem_words_per_worker;
+
+		memset(admin->current_im_bitmaps + (worker_idx * im_w),
 			0, sz->im_bytes);
+
 		if (sz->bu_bytes > 0) {
-			size_t bu_w = admin
-				->book_update_words_per_worker;
-			memset(
-				admin->current_book_update_bitmaps
-				+ (worker_idx * bu_w),
+			size_t bu_w = admin->book_update_words_per_worker;
+			memset(admin->current_book_update_bitmaps + (worker_idx * bu_w),
 				0, sz->bu_bytes);
 		}
 	}
@@ -1451,17 +1391,12 @@ static void publish_new_assignments_to_workers(
 		struct worker_state *ws =
 			&cache->worker_state_arr[i];
 		int old_group = atomic_load_explicit(
-			&ws->group_id,
-			memory_order_acquire);
+			&ws->group_id, memory_order_acquire);
 
 		if (i < num_im_workers) {
-			publish_im_assignment(
-				admin, ws, i,
-				old_group, &sz);
+			publish_im_assignment(admin, ws, i, old_group, &sz);
 		} else {
-			publish_flush_assignment(
-				admin, ws, i,
-				old_group, &sz);
+			publish_flush_assignment(admin, ws, i, old_group, &sz);
 		}
 	}
 }
@@ -1470,6 +1405,7 @@ static void publish_new_assignments_to_workers(
  * @brief   Balance work assignments across workers.
  *
  * This is the main scheduler function.
+ *
  * 1. Calculates total cycle requirements for (In-Memory) vs (Flush).
  * 2. Divides workers into two groups based on the cycle ratio.
  * 3. Calculates a cycle "budget" for each worker in each group.

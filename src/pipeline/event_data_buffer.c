@@ -38,12 +38,13 @@ static size_t calculate_block_struct_size(void)
  * @param   events_per_block: Number of events per block.
  * @param   event_buf_size:   4 KiB-aligned data buffer size per block.
  * @param   num_cursors:      Number of cursors to initialize.
+ * @param   has_flush:        True when a flush callback is configured.
  *
  * @return  Pointer to buffer, or NULL on failure.
  */
 struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
 	int symbol_id, size_t event_size, int events_per_block,
-	size_t event_buf_size, int num_cursors)
+	size_t event_buf_size, int num_cursors, bool has_flush)
 {
 	struct event_data_buffer *buf = NULL;
 	struct event_data_block *block = NULL;
@@ -69,6 +70,7 @@ struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
 	buf->event_size = event_size;
 	buf->events_per_block = events_per_block;
 	buf->event_buf_size = event_buf_size;
+	buf->has_flush = has_flush;
 	atomic_init(&buf->memory_usage.value, 0);
 	mem_add_atomic(&buf->memory_usage.value, sizeof(struct event_data_buffer));
 
@@ -173,8 +175,7 @@ void event_data_buffer_destroy(struct event_data_buffer *buf)
  * @return  0 on success, -1 on error.
  */
 int event_data_buffer_push(struct event_data_buffer *buf,
-	const void *data, struct list_head *free_list,
-	int thread_id)
+	const void *data, struct list_head *free_list, int thread_id)
 {
 	struct event_data_block *tail = NULL, *new_block = NULL;
 	_Atomic(size_t) *free_list_mem_counter =
@@ -301,7 +302,7 @@ int event_data_buffer_push(struct event_data_buffer *buf,
 	 * second-to-last block and will no longer be written to.
 	 */
 	if (tail->write_idx == buf->events_per_block &&
-			buf->trc->trade_flush_ops.flush != NULL) {
+			buf->has_flush) {
 		atomic_store_explicit(&tail->flush_state,
 			EVENT_BLOCK_FLUSH_NEEDED, memory_order_release);
 		atomic_fetch_add_explicit(&buf->num_full_unflushed_blocks,
@@ -324,9 +325,7 @@ int event_data_buffer_push(struct event_data_buffer *buf,
  * @return  1 if some entries are available, 0 if empty or error.
  */
 int event_data_buffer_peek(struct event_data_buffer *buf,
-	struct event_data_buffer_cursor *cursor,
-	void **data_array,
-	int *count)
+	struct event_data_buffer_cursor *cursor, void **data_array, int *count)
 {
 	struct event_data_block *block = NULL;
 	int write_idx;
@@ -340,16 +339,14 @@ int event_data_buffer_peek(struct event_data_buffer *buf,
 
 	assert(cursor->peek_block != NULL);
 	block = cursor->peek_block;
-	write_idx = atomic_load_explicit(
-		&block->write_idx, memory_order_acquire);
+	write_idx = atomic_load_explicit(&block->write_idx, memory_order_acquire);
 
 	if (cursor->peek_idx == write_idx) {
 		*count = 0;
 		return 0;
 	}
 
-	*data_array = (uint8_t *)block->data +
-		(cursor->peek_idx * buf->event_size);
+	*data_array = (uint8_t *)block->data + (cursor->peek_idx * buf->event_size);
 	*count = write_idx - cursor->peek_idx;
 
 	/* advance peek cursor */
@@ -419,13 +416,12 @@ void event_data_buffer_consume(struct event_data_buffer *buf,
  * to move fully consumed blocks to the 'free_list'. If the memory limit is
  * exceeded, it frees the blocks directly instead.
  *
- * @param   buf:                 Buffer to reap the free blocks.
- * @param   free_list:           Linked list pointer holding recycled blocks.
- * @param   thread_id:           The feed thread's unique ID.
- * @param   flush_enabled:       Non-zero if flush ops are configured.
+ * @param   buf:       Buffer to reap the free blocks.
+ * @param   free_list: Linked list pointer holding recycled blocks.
+ * @param   thread_id: The feed thread's unique ID.
  */
 void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
-	struct list_head *free_list, int thread_id, int flush_enabled)
+	struct list_head *free_list, int thread_id)
 {
 	struct event_data_block *tail = NULL, *block = NULL, *c = NULL;
 	struct list_head *first = NULL, *last = NULL, *node = NULL, *next = NULL;
@@ -458,9 +454,8 @@ void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
 			break;
 		}
 
-		if (flush_enabled &&
-				atomic_load_explicit(&block->flush_state,
-					memory_order_acquire)
+		if (buf->has_flush && atomic_load_explicit(
+				&block->flush_state, memory_order_acquire)
 				!= EVENT_BLOCK_FLUSH_DONE) {
 			break;
 		}
@@ -514,8 +509,7 @@ void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
  * @return  1 if the block transitioned to DONE, 0 if still in progress.
  */
 static int event_flush_drive_block(struct event_data_buffer *buf,
-	struct event_data_block *block,
-	const struct event_data_flush_ops *ops)
+	struct event_data_block *block, const struct event_data_flush_ops *ops)
 {
 	if (atomic_load_explicit(&block->flush_state, memory_order_acquire)
 			== EVENT_BLOCK_FLUSH_NEEDED) {

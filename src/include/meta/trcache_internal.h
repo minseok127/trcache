@@ -35,38 +35,45 @@ struct trcache_tls_data {
 /*
  * trcache - trcache internal state.
  *
- * @mem_acc:                 All modules use &mem_acc to update memory usage.
- * @admin_state:             State structure for admin thread.
- * @pthread_trcache_key:     Key for pthread_get/setspecific.
- * @tls_id_mutex:            Protects allocation/release of thread IDs.
- * @tls_id_assigned_flag:    _Atomic flags, which slots are in use.
- * @tls_data_ptr_arr:        Pointers to each thread's tls_data.
- * @symbol_table:            Abstracted symbol table.
- * @candle_configs:          Array of all candle configurations.
- * @num_candle_configs:      Total number of candle configurations.
- * @num_workers:             Number of worker threads.
- * @batch_candle_count:      Number of candles per column batch.
- * @batch_candle_count_pow2: Equal to log2(@batch_candle_count).
+ * @mem_acc:                    All modules use &mem_acc to update memory usage.
+ * @admin_state:                State structure for admin thread.
+ * @pthread_trcache_key:        Key for pthread_get/setspecific.
+ * @tls_id_mutex:               Protects allocation/release of thread IDs.
+ * @tls_id_assigned_flag:       _Atomic flags, which slots are in use.
+ * @tls_data_ptr_arr:           Pointers to each thread's tls_data.
+ * @symbol_table:               Abstracted symbol table.
+ * @candle_configs:             Array of all candle configurations.
+ * @num_candle_configs:         Total number of candle configurations.
+ * @num_workers:                Number of worker threads.
+ * @batch_candle_count:         Number of candles per column batch.
+ * @batch_candle_count_pow2:    Equal to log2(@batch_candle_count).
  * @batch_flush_threshold:      How many candle batches to buffer before flush.
  * @batch_flush_threshold_pow2: Equal to log2(@batch_flush_threshold_batches).
- * @worker_state_arr:        Per-worker state array of length @num_workers.
- * @admin_thread:            Handle for admin thread.
- * @worker_threads:          Array of handles for worker threads.
- * @worker_args:             Per-worker argument array used at start.
- * @max_symbols:             Maximum number of symbols.
- * @total_memory_limit:      Total memory limit for the instance.
- * @head_version_pool:       SCQ pool for candle_chunk_list's heads.
- * @chunk_pools:             Per-candle-type SCQ pools for candle_chunks.
- * @row_page_pools:          Per-candle-type SCQ pools for candle_row_pages.
- * @trade_data_size:         User-defined trade data size.
- * @trades_per_block:        Number of trade records per event data block.
- *                           Computed as io_block_size / trade_data_size.
- * @trade_data_buf_size:     Byte size of one block's data buffer (4 KiB-
- *                           aligned allocation that holds trades_per_block
- *                           records). Used when freeing blocks from the
- *                           thread-local free list.
- * @trade_flush_ops:         Optional callbacks to persist raw trade blocks.
- *                           .flush == NULL means raw trade flush is disabled.
+ * @worker_state_arr:           Per-worker state array of length @num_workers.
+ * @admin_thread:               Handle for admin thread.
+ * @worker_threads:             Array of handles for worker threads.
+ * @worker_args:                Per-worker argument array used at start.
+ * @max_symbols:                Maximum number of symbols.
+ * @total_memory_limit:         Total memory limit for the instance.
+ * @head_version_pool:          SCQ pool for candle_chunk_list's heads.
+ * @chunk_pools:                Per-candle-type SCQ pools for candle_chunks.
+ * @row_page_pools:             Per-candle-type SCQ pools for candle_row_pages.
+ * @trade_data_size:            User-defined trade data size.
+ * @trades_per_block:           Number of trade records per event data block.
+ *                              Computed as io_block_size / trade_data_size.
+ * @trade_data_buf_size:        Byte size of one block's data buffer (4 KiB-
+ *                              aligned allocation that holds trades_per_block
+ *                              records). Used when freeing blocks from the
+ *                              thread-local free list.
+ * @trade_flush_ops:            Callbacks to persist raw trade blocks.
+ * @book_state_ops:             Callbacks for managing order book state.
+ * @book_event_flush_ops:       Callbacks to persist book event blocks.
+ * @book_event_size:            Size of one book event record in bytes.
+ * @book_events_per_block:      Number of book event records per block.
+ * @book_event_buf_size:        4 KiB-aligned data buffer size per book block.
+ * @trade_flush_enabled:        True when trade_flush_ops are configured.
+ * @book_update_enabled:        True when book_state_ops are configured.
+ * @book_event_flush_enabled:   True when book_event_flush_ops are configured.
 */
 struct trcache {
 	/*
@@ -124,7 +131,9 @@ struct trcache {
 	size_t book_event_size;
 	int book_events_per_block;
 	size_t book_event_buf_size;
-	bool book_enabled;
+	bool trade_flush_enabled;
+	bool book_update_enabled;
+	bool book_event_flush_enabled;
 
 } ____cacheline_aligned;
 
