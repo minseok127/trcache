@@ -521,10 +521,8 @@ static void update_trade_block_fill_rates(struct trcache *cache,
  * @param   num_symbols: Current number of registered symbols.
  * @param   now_ns:      Current timestamp in nanoseconds.
  */
-static void update_book_pipeline_rates(
-	struct trcache *cache,
-	struct admin_state *admin, int num_symbols,
-	uint64_t now_ns)
+static void update_book_pipeline_rates(struct trcache *cache,
+	struct admin_state *admin, int num_symbols, uint64_t now_ns)
 {
 	struct symbol_table *table = cache->symbol_table;
 
@@ -1012,8 +1010,7 @@ static void assign_candle_tasks(struct trcache *cache,
  * @param   flush_state: Mutable budget state for the Flush group.
  */
 static void assign_trade_flush_tasks(struct admin_state *admin,
-	struct symbol_table *symtab,
-	struct budget_assign_state *flush_state)
+	struct symbol_table *symtab, struct budget_assign_state *flush_state)
 {
 	int num_symbols = atomic_load_explicit((int*)&symtab->num_symbols,
 		memory_order_acquire);
@@ -1048,10 +1045,8 @@ static void assign_trade_flush_tasks(struct admin_state *admin,
  * @param   symtab:   Symbol table.
  * @param   im_state: Mutable budget state for IM group.
  */
-static void assign_book_update_tasks(
-	struct admin_state *admin,
-	struct symbol_table *symtab,
-	struct budget_assign_state *im_state)
+static void assign_book_update_tasks(struct admin_state *admin,
+	struct symbol_table *symtab, struct budget_assign_state *im_state)
 {
 	int num_symbols = atomic_load_explicit(
 		(int *)&symtab->num_symbols,
@@ -1081,10 +1076,8 @@ static void assign_book_update_tasks(
  * @param   symtab:      Symbol table.
  * @param   flush_state: Mutable budget state for Flush group.
  */
-static void assign_book_event_flush_tasks(
-	struct admin_state *admin,
-	struct symbol_table *symtab,
-	struct budget_assign_state *flush_state)
+static void assign_book_event_flush_tasks(struct admin_state *admin,
+	struct symbol_table *symtab, struct budget_assign_state *flush_state)
 {
 	int num_symbols = atomic_load_explicit(
 		(int *)&symtab->num_symbols,
@@ -1212,8 +1205,7 @@ struct publish_sizes {
  * detection.  The group_id release store is issued last
  * so all bitmap writes are visible to the worker.
  */
-static void publish_im_assignment(
-	struct admin_state *admin,
+static void publish_im_assignment(struct admin_state *admin,
 	struct worker_state *ws, int worker_idx,
 	int old_group, const struct publish_sizes *sz)
 {
@@ -1283,8 +1275,7 @@ static void publish_im_assignment(
  * from IM, clears the admin's current IM-side copies.
  * The group_id release store is issued last.
  */
-static void publish_flush_assignment(
-	struct admin_state *admin,
+static void publish_flush_assignment(struct admin_state *admin,
 	struct worker_state *ws, int worker_idx,
 	int old_group, const struct publish_sizes *sz)
 {
@@ -1365,30 +1356,24 @@ static void publish_flush_assignment(
  * @param   admin:          Admin state with bitmap bufs.
  * @param   num_im_workers: Workers in In-Memory group.
  */
-static void publish_new_assignments_to_workers(
-	struct trcache *cache,
+static void publish_new_assignments_to_workers(struct trcache *cache,
 	struct admin_state *admin, int num_im_workers)
 {
 	struct publish_sizes sz = {
-		.im_bytes = admin->in_mem_words_per_worker
-			* sizeof(uint64_t),
+		.im_bytes =
+			admin->in_mem_words_per_worker * sizeof(uint64_t),
 		.bf_bytes =
-			admin->batch_flush_words_per_worker
-			* sizeof(uint64_t),
+			admin->batch_flush_words_per_worker * sizeof(uint64_t),
 		.tf_bytes =
-			admin->trade_flush_words_per_worker
-			* sizeof(uint64_t),
+			admin->trade_flush_words_per_worker * sizeof(uint64_t),
 		.bu_bytes =
-			admin->book_update_words_per_worker
-			* sizeof(uint64_t),
+			admin->book_update_words_per_worker * sizeof(uint64_t),
 		.bef_bytes =
-			admin->book_event_flush_words_per_worker
-			* sizeof(uint64_t),
+			admin->book_event_flush_words_per_worker * sizeof(uint64_t),
 	};
 
 	for (int i = 0; i < cache->num_workers; i++) {
-		struct worker_state *ws =
-			&cache->worker_state_arr[i];
+		struct worker_state *ws = &cache->worker_state_arr[i];
 		int old_group = atomic_load_explicit(
 			&ws->group_id, memory_order_acquire);
 
@@ -1461,8 +1446,8 @@ static void update_global_memory_stats(struct trcache *cache)
 {
 	size_t total_mem = 0;
 	struct symbol_table *table = cache->symbol_table;
-	int num_symbols = atomic_load_explicit((int*)&table->num_symbols,
-		memory_order_acquire);
+	int num_symbols = atomic_load_explicit(
+		(int*)&table->num_symbols, memory_order_acquire);
 	bool pressure;
 
 	/* 1. Sum feed thread free lists */
@@ -1494,14 +1479,12 @@ static void update_global_memory_stats(struct trcache *cache)
 
 		/* Sum trade buffer memory */
 		if (entry->trd_buf) {
-			total_mem += mem_get_atomic(
-				&entry->trd_buf->memory_usage.value);
+			total_mem += mem_get_atomic(&entry->trd_buf->memory_usage.value);
 		}
 
 		/* Sum book buffer memory */
 		if (entry->book_buf) {
-			total_mem += mem_get_atomic(
-				&entry->book_buf->memory_usage.value);
+			total_mem += mem_get_atomic(&entry->book_buf->memory_usage.value);
 		}
 
 		/* Sum CKL and CKI memory */
@@ -1509,6 +1492,7 @@ static void update_global_memory_stats(struct trcache *cache)
 				type_idx++) {
 			struct candle_chunk_list *list
 				= entry->candle_chunk_list_ptrs[type_idx];
+
 			if (list) {
 				if (list->chunk_index) {
 					total_mem += mem_get_atomic(

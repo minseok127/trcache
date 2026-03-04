@@ -324,8 +324,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* Allocate book update bitmap if enabled */
 	if (tc->book_update_enabled) {
-		size_t book_bitmap_bytes =
-			get_bitmap_bytes(tc->max_symbols);
+		size_t book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
 
 		state->book_update_bitmap = aligned_alloc(
 			CACHE_LINE_SIZE,
@@ -345,8 +344,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* Allocate book event flush bitmap if enabled */
 	if (tc->book_event_flush_enabled) {
-		size_t book_bitmap_bytes =
-			get_bitmap_bytes(tc->max_symbols);
+		size_t book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
 
 		state->book_event_flush_bitmap = aligned_alloc(
 			CACHE_LINE_SIZE,
