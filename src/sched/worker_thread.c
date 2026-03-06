@@ -264,7 +264,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	struct worker_state *state;
 	int num_tasks;
 	size_t in_memory_bitmap_bytes, batch_flush_bitmap_bytes;
-	size_t trade_flush_bitmap_bytes;
+	size_t book_bitmap_bytes;
 
 	if (!tc) {
 		errmsg(stderr, "Invalid trcache pointer\n");
@@ -274,78 +274,69 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	state = &tc->worker_state_arr[worker_id];
 	state->worker_id = worker_id;
 	state->done = false;
+	state->trade_flush_bitmap = NULL;
+	state->book_update_bitmap = NULL;
+	state->book_event_flush_bitmap = NULL;
 
 	/*
 	 * Calculate bitmap sizes.
 	 * Total tasks = num_candle_types * max_symbols
 	 * In-memory bitmap needs 2 bits per task (Apply, Convert).
 	 * Flush bitmap needs 1 bit per task (candle batch Flush).
-	 * Trade flush bitmap needs 1 bit per symbol (trade block Flush).
 	 */
 	num_tasks = tc->num_candle_configs * tc->max_symbols;
 	in_memory_bitmap_bytes = get_bitmap_bytes(num_tasks * 2);
 	batch_flush_bitmap_bytes = get_bitmap_bytes(num_tasks);
-	trade_flush_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
+	book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
 
-	/* Allocate cacheline-aligned bitmaps */
-	state->in_memory_bitmap = aligned_alloc(
-		CACHE_LINE_SIZE, ALIGN_UP(in_memory_bitmap_bytes, CACHE_LINE_SIZE));
+	/* 1. In-memory bitmap (always required) */
+	state->in_memory_bitmap = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(in_memory_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->in_memory_bitmap == NULL) {
 		errmsg(stderr, "in_memory_bitmap allocation failed\n");
 		return -1;
 	}
 	memset(state->in_memory_bitmap, 0, in_memory_bitmap_bytes);
 
-	state->batch_flush_bitmap = aligned_alloc(
-		CACHE_LINE_SIZE, ALIGN_UP(batch_flush_bitmap_bytes, CACHE_LINE_SIZE));
+	/* 2. Batch flush bitmap (always required) */
+	state->batch_flush_bitmap = aligned_alloc(CACHE_LINE_SIZE,
+		ALIGN_UP(batch_flush_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->batch_flush_bitmap == NULL) {
-		errmsg(stderr, "batch_flush_bitmap allocation failed\n");
-		free(state->in_memory_bitmap);
-		return -1;
+		errmsg(stderr,
+			"batch_flush_bitmap allocation failed\n");
+		goto cleanup;
 	}
 	memset(state->batch_flush_bitmap, 0, batch_flush_bitmap_bytes);
 
+	/* 3. Trade flush bitmap (conditional) */
 	if (tc->trade_flush_enabled) {
 		state->trade_flush_bitmap = aligned_alloc(
 			CACHE_LINE_SIZE,
-			ALIGN_UP(trade_flush_bitmap_bytes, CACHE_LINE_SIZE));
+			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
 		if (state->trade_flush_bitmap == NULL) {
 			errmsg(stderr,
 				"trade_flush_bitmap "
 				"alloc failed\n");
-			free(state->batch_flush_bitmap);
-			free(state->in_memory_bitmap);
-			return -1;
+			goto cleanup;
 		}
-		memset(state->trade_flush_bitmap, 0, trade_flush_bitmap_bytes);
-	} else {
-		state->trade_flush_bitmap = NULL;
+		memset(state->trade_flush_bitmap, 0, book_bitmap_bytes);
 	}
 
-	/* Allocate book update bitmap if enabled */
+	/* 4. Book update bitmap (conditional) */
 	if (tc->book_update_enabled) {
-		size_t book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
-
 		state->book_update_bitmap = aligned_alloc(
 			CACHE_LINE_SIZE,
 			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
 		if (state->book_update_bitmap == NULL) {
 			errmsg(stderr,
 				"book_update_bitmap alloc failed\n");
-			free(state->trade_flush_bitmap);
-			free(state->batch_flush_bitmap);
-			free(state->in_memory_bitmap);
-			return -1;
+			goto cleanup;
 		}
 		memset(state->book_update_bitmap, 0, book_bitmap_bytes);
-	} else {
-		state->book_update_bitmap = NULL;
 	}
 
-	/* Allocate book event flush bitmap if enabled */
+	/* 5. Book event flush bitmap (conditional) */
 	if (tc->book_event_flush_enabled) {
-		size_t book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
-
 		state->book_event_flush_bitmap = aligned_alloc(
 			CACHE_LINE_SIZE,
 			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
@@ -353,21 +344,28 @@ int worker_state_init(struct trcache *tc, int worker_id)
 			errmsg(stderr,
 				"book_event_flush_bitmap "
 				"alloc failed\n");
-			free(state->book_update_bitmap);
-			free(state->trade_flush_bitmap);
-			free(state->batch_flush_bitmap);
-			free(state->in_memory_bitmap);
-			return -1;
+			goto cleanup;
 		}
 		memset(state->book_event_flush_bitmap, 0, book_bitmap_bytes);
-	} else {
-		state->book_event_flush_bitmap = NULL;
 	}
 
 	/* Default to in-memory group */
 	atomic_init(&state->group_id, GROUP_IN_MEMORY);
 
 	return 0;
+
+cleanup:
+	free(state->book_update_bitmap);
+	free(state->trade_flush_bitmap);
+	free(state->batch_flush_bitmap);
+	free(state->in_memory_bitmap);
+	state->in_memory_bitmap = NULL;
+	state->batch_flush_bitmap = NULL;
+	state->trade_flush_bitmap = NULL;
+	state->book_update_bitmap = NULL;
+	state->book_event_flush_bitmap = NULL;
+
+	return -1;
 }
 
 /**

@@ -47,19 +47,43 @@ The validator (`validator_app`) is built in `validator/` and requires external C
 cd validator && ./validator_app config.json
 ```
 
+## Code Style
+
+- 80-character line limit (code files; docs are exempt).
+- Always use braces for `if`/`else`/`for`/`while`, even single-line bodies.
+- Include paths: `-I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include`. Internal headers live under `src/include/<module>/`.
+- Trade pipeline uses `candle` terminology; book pipeline uses `snapshot`/`record`.
+
+## Testing
+
+There is no unit test suite. Correctness is validated via:
+- **Benchmarks** (`benchmark/`) — stress-test throughput and read latency.
+- **Live validator** (`validator/`) — feeds real Binance Futures data and checks for gaps/tick errors.
+
 ## Architecture
 
 ### Pipeline Stages
 
-Trades flow through a 3-stage lock-free pipeline:
+Two independent pipelines share the same worker pool:
 
+**Trade pipeline** (candle aggregation):
 ```
 trcache_feed_trade_data()
-  → trade_data_buffer  (per-symbol MPMC queue)
+  → event_data_buffer  (per-symbol SPMC queue)
   → [Apply]   worker threads aggregate trades into row-oriented candles (AoS)
   → [Convert] worker threads transform complete rows into SIMD-aligned column batches (SoA)
   → [Flush]   worker threads pass batches to user callbacks
 ```
+
+**Book pipeline** (order book state, optional):
+```
+trcache_feed_book_data()
+  → event_data_buffer  (per-symbol SPMC queue)
+  → [Apply]   worker threads call book_state_ops.update() to maintain book state
+  → [Flush]   worker threads pass completed event blocks to book_event_flush_ops
+```
+
+Book state is passed to candle `init`/`update` callbacks, enabling book-aware candle construction.
 
 Query APIs read from immutable column batches lock-free, concurrently with writes.
 
@@ -80,7 +104,7 @@ Query APIs read from immutable column batches lock-free, concurrently with write
 
 ### Concurrency Model
 
-- **Workers** are divided into three groups: In-Memory (Apply + Convert), Batch-Flush, and Trade-Flush. The admin thread dynamically adjusts group sizes based on EMA of per-stage cycle costs.
+- **Workers** are divided into two groups: In-Memory (Apply + Convert + Book Update) and Flush (Batch-Flush + Trade-Flush + Book-Event-Flush). The admin thread dynamically adjusts group sizes based on EMA of per-stage cycle costs.
 - **atomsnap** provides the versioned atomic snapshot abstraction used for lock-free reads of row pages and column batches.
 - **scalable_queue** is the MPMC pool with per-thread TLS free lists to minimize contention.
 - Memory pressure is tracked via a global atomic flag; when high, objects are freed rather than pooled.

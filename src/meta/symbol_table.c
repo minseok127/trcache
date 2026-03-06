@@ -63,7 +63,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 
 	pthread_mutex_init(&table->ht_hash_table_mutex, NULL);
 
-	/* Create ID map with string callbacks */
+	/* 1. Create ID map with string callbacks */
 	table->symbol_id_map = ht_create(
 		8192,					/* initial capacity */
 		0xDEADBEEFULL,			/* seed */
@@ -72,63 +72,55 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		duplicate_symbol_str,	/* dup_func */
 		free_symbol_str			/* free_func */
 	);
-
 	if (table->symbol_id_map == NULL) {
 		errmsg(stderr, "Failure on ht_create()\n");
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		goto cleanup_mutex;
 	}
 
-	/* Pre-allocate the fixed-size symbol entry array */
-	table->symbol_entries = calloc(max_capacity, sizeof(struct symbol_entry));
+	/* 2. Pre-allocate the fixed-size symbol entry array */
+	table->symbol_entries = calloc(max_capacity,
+		sizeof(struct symbol_entry));
 	if (table->symbol_entries == NULL) {
-		errmsg(stderr, "Allocation of symbol_entries array failed\n");
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		errmsg(stderr,
+			"symbol_entries array allocation failed\n");
+		goto cleanup_id_map;
 	}
 
 	/*
-	 * Allocate and initialize the new global ownership flag arrays.
-	 * All flags are initialized to -1 (free).
+	 * 3. Allocate and initialize global ownership flag arrays.
+	 *    All flags are initialized to -1 (free).
 	 */
 	num_tasks = (size_t)num_candle_configs * (size_t)max_capacity;
 	in_mem_size = num_tasks * sizeof(struct in_memory_owner);
 	batch_flush_size = num_tasks * sizeof(_Atomic(int));
 
 	table->in_memory_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE, ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));
+		CACHE_LINE_SIZE,
+		ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));
 	if (table->in_memory_ownership_flags == NULL) {
-		errmsg(stderr, "in_memory_ownership_flags allocation failed\n");
-		free(table->symbol_entries);
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		errmsg(stderr,
+			"in_memory_ownership_flags "
+			"allocation failed\n");
+		goto cleanup_entries;
 	}
-	/* Initialize all flags to -1 (free) */
 	memset(table->in_memory_ownership_flags, -1, in_mem_size);
 
 	table->batch_flush_ownership_flags = aligned_alloc(
-		CACHE_LINE_SIZE, ALIGN_UP(batch_flush_size, CACHE_LINE_SIZE));
+		CACHE_LINE_SIZE,
+		ALIGN_UP(batch_flush_size, CACHE_LINE_SIZE));
 	if (table->batch_flush_ownership_flags == NULL) {
-		errmsg(stderr, "batch_flush_ownership_flags allocation failed\n");
-		free(table->in_memory_ownership_flags);
-		free(table->symbol_entries);
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		errmsg(stderr,
+			"batch_flush_ownership_flags "
+			"allocation failed\n");
+		goto cleanup_in_mem_flags;
 	}
-	/* Initialize all flags to -1 (free) */
-	memset(table->batch_flush_ownership_flags, -1, batch_flush_size);
+	memset(table->batch_flush_ownership_flags, -1,
+		batch_flush_size);
 
 	/*
-	 * Per-symbol ownership flags for raw trade block flush, book update,
-	 * and book event flush. Each array is indexed by sym_idx only and is
-	 * independent of candle type. Initialised to -1 (free).
+	 * Per-symbol ownership flags for raw trade block flush,
+	 * book update, and book event flush. Each array is indexed
+	 * by sym_idx only and is independent of candle type.
 	 */
 	table->trade_flush_ownership_flags =
 		alloc_ownership_flags(max_capacity);
@@ -136,13 +128,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		errmsg(stderr,
 			"trade_flush_ownership_flags "
 			"allocation failed\n");
-		free(table->batch_flush_ownership_flags);
-		free(table->in_memory_ownership_flags);
-		free(table->symbol_entries);
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		goto cleanup_batch_flush_flags;
 	}
 
 	table->book_update_ownership_flags =
@@ -151,14 +137,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		errmsg(stderr,
 			"book_update_ownership_flags "
 			"allocation failed\n");
-		free(table->trade_flush_ownership_flags);
-		free(table->batch_flush_ownership_flags);
-		free(table->in_memory_ownership_flags);
-		free(table->symbol_entries);
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		goto cleanup_trade_flush_flags;
 	}
 
 	table->book_event_flush_ownership_flags =
@@ -167,21 +146,37 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 		errmsg(stderr,
 			"book_event_flush_ownership_flags "
 			"allocation failed\n");
-		free(table->book_update_ownership_flags);
-		free(table->trade_flush_ownership_flags);
-		free(table->batch_flush_ownership_flags);
-		free(table->in_memory_ownership_flags);
-		free(table->symbol_entries);
-		ht_destroy(table->symbol_id_map);
-		pthread_mutex_destroy(&table->ht_hash_table_mutex);
-		free(table);
-		return NULL;
+		goto cleanup_book_update_flags;
 	}
 
 	table->capacity = max_capacity;
 	table->num_symbols = 0;
 
 	return table;
+
+cleanup_book_update_flags:
+	free(table->book_update_ownership_flags);
+
+cleanup_trade_flush_flags:
+	free(table->trade_flush_ownership_flags);
+
+cleanup_batch_flush_flags:
+	free(table->batch_flush_ownership_flags);
+
+cleanup_in_mem_flags:
+	free(table->in_memory_ownership_flags);
+
+cleanup_entries:
+	free(table->symbol_entries);
+
+cleanup_id_map:
+	ht_destroy(table->symbol_id_map);
+
+cleanup_mutex:
+	pthread_mutex_destroy(&table->ht_hash_table_mutex);
+	free(table);
+
+	return NULL;
 }
 
 /**

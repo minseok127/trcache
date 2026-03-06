@@ -430,6 +430,148 @@ static void trcache_per_thread_destructor(void *value)
 	pthread_mutex_unlock(&tc->tls_id_mutex);
 }
 
+/**
+ * @brief   Log a detailed memory limit error breakdown.
+ *
+ * Called when total_memory_limit < minimum required memory. Prints
+ * per-candle-type memory sizes and a suggestion.
+ *
+ * @param   tc:  Partially filled trcache (only total_memory_limit used).
+ * @param   ctx: Init context with config details.
+ * @param   min_required: Calculated minimum required memory.
+ */
+static void log_memory_limit_error(const struct trcache *tc,
+	const struct trcache_init_ctx *ctx, size_t min_required)
+{
+	size_t candles_per_chunk
+		= (size_t)(1 << ctx->batch_candle_count_pow2);
+	size_t min_chunks_per_list
+		= (size_t)(1 << ctx->cached_batch_count_pow2);
+
+	errmsg(stderr,
+		"[trcache_init] Failed: total_memory_limit "
+		"(%.1f MB) is less than the minimum required "
+		"memory (%.1f MB).\n",
+		(double)tc->total_memory_limit / (1024.0 * 1024.0),
+		(double)(min_required) / (1024.0 * 1024.0));
+
+	errmsg(stderr, "[trcache_init] Global settings:\n"
+		" - max_symbols: %d\n"
+		" - cached_batches_per_list: %d (1 << %d)\n"
+		" - candles_per_batch: %d (1 << %d)\n",
+		ctx->max_symbols,
+		(1 << ctx->cached_batch_count_pow2),
+		ctx->cached_batch_count_pow2,
+		(1 << ctx->batch_candle_count_pow2),
+		ctx->batch_candle_count_pow2);
+
+	errmsg(stderr,
+		"[trcache_init] Per-type memory breakdown "
+		"(for 1 symbol):\n");
+
+	for (int i = 0; i < ctx->num_candle_configs; i++) {
+		const struct trcache_candle_config *config
+			= &ctx->candle_configs[i];
+
+		size_t chunk_batch_size
+			= calculate_chunk_plus_batch_size(config, candles_per_chunk);
+
+		size_t row_page_size
+			= sizeof(struct candle_row_page)
+				+ (TRCACHE_ROWS_PER_PAGE * config->user_candle_size);
+
+		row_page_size = align_up(row_page_size, TRCACHE_SIMD_ALIGN);
+
+		size_t pages_per_chunk
+			= (candles_per_chunk
+				+ TRCACHE_ROWS_PER_PAGE - 1) / TRCACHE_ROWS_PER_PAGE;
+
+		size_t mem_per_symbol =
+			(min_chunks_per_list * chunk_batch_size) +
+			(min_chunks_per_list * pages_per_chunk * row_page_size);
+
+		errmsg(stderr,
+			" - Candle Type[%d]: "
+			"user_candle_size = %zu bytes\n"
+			"   -> 1 Chunk (Batch + Struct): %.2f KB\n"
+			"   -> 1 Chunk (Row Pages): %.2f KB "
+			"(%zu pages * %.0f bytes)\n"
+			"   -> Min per Symbol (x%zu chunks): "
+			"%.2f KB\n",
+			i, config->user_candle_size,
+			(double)chunk_batch_size / 1024.0,
+			(double)(pages_per_chunk * row_page_size)
+				/ 1024.0,
+			pages_per_chunk, (double)row_page_size,
+			min_chunks_per_list,
+			(double)mem_per_symbol / 1024.0);
+	}
+
+	errmsg(stderr,
+		"[trcache_init] Suggestion: Increase "
+		"total_memory_limit, or decrease max_symbols "
+		"or cached_batch_count_pow2.\n");
+}
+
+/**
+ * @brief   Deep-copy candle configs from ctx into tc.
+ *
+ * Allocates tc->candle_configs and deep-copies field_definitions
+ * for each candle type. On failure, cleans up partial copies and
+ * returns -1.
+ *
+ * @param   tc:  Destination trcache (num_candle_configs must be set).
+ * @param   ctx: Source init context.
+ *
+ * @return  0 on success, -1 on failure.
+ */
+static int deep_copy_candle_configs(struct trcache *tc,
+	const struct trcache_init_ctx *ctx)
+{
+	size_t configs_size
+		= sizeof(trcache_candle_config) * tc->num_candle_configs;
+
+	tc->candle_configs = malloc(configs_size);
+	if (tc->candle_configs == NULL) {
+		errmsg(stderr,
+			"Failed to allocate memory "
+			"for candle configs\n");
+		return -1;
+	}
+	memcpy(tc->candle_configs, ctx->candle_configs, configs_size);
+
+	for (int i = 0; i < tc->num_candle_configs; i++) {
+		struct trcache_candle_config *config = &tc->candle_configs[i];
+
+		if (config->num_fields > 0 && config->field_definitions != NULL) {
+			size_t defs_size
+				= sizeof(struct trcache_field_def) * config->num_fields;
+			struct trcache_field_def *defs_copy = malloc(defs_size);
+
+			if (defs_copy == NULL) {
+				errmsg(stderr,
+					"Failed to allocate memory "
+					"for field def %d\n", i);
+
+				for (int j = 0; j < i; j++) {
+					free((void *)tc->candle_configs[j].field_definitions);
+				}
+
+				free(tc->candle_configs);
+				tc->candle_configs = NULL;
+				return -1;
+			}
+			memcpy(defs_copy, config->field_definitions, defs_size);
+			config->field_definitions = defs_copy;
+		} else {
+			config->field_definitions = NULL;
+			config->num_fields = 0;
+		}
+	}
+
+	return 0;
+}
+
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
 /**
@@ -456,8 +598,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	atomic_init(&tc->mem_acc.memory_pressure, false);
 
 	/* Validate ctx input first */
-	if (ctx == NULL || ctx->max_symbols <= 0
-			|| ctx->num_worker_threads <= 2) {
+	if (ctx == NULL) {
 		errmsg(stderr, "trcache_init_ctx is NULL\n");
 		free(tc);
 		return NULL;
@@ -466,11 +607,13 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		free(tc);
 		return NULL;
 	} else if (ctx->num_worker_threads <= 2) {
-		errmsg(stderr, "num_worker_threads is less than 2\n");
+		errmsg(stderr,
+			"num_worker_threads must be > 2\n");
 		free(tc);
 		return NULL;
 	} else if (ctx->trade_data_size == 0) {
-		errmsg(stderr, "trade_data_size must be greater than 0\n");
+		errmsg(stderr,
+			"trade_data_size must be > 0\n");
 		free(tc);
 		return NULL;
 	}
@@ -491,63 +634,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	 * for auxiliary structures and operational headroom.
 	 */
 	if (tc->total_memory_limit < min_required_memory) {
-		errmsg(stderr, "[trcache_init] Failed: total_memory_limit (%.1f MB) "
-			"is less than the minimum required memory (%.1f MB).\n",
-			(double)tc->total_memory_limit / (1024.0 * 1024.0),
-			(double)(min_required_memory) / (1024.0 * 1024.0));
-		
-		errmsg(stderr, "[trcache_init] Global settings:\n"
-			" - max_symbols: %d\n"
-			" - cached_batches_per_list: %d (1 << %d)\n"
-			" - candles_per_batch: %d (1 << %d)\n",
-			ctx->max_symbols,
-			(1 << ctx->cached_batch_count_pow2),
-			ctx->cached_batch_count_pow2,
-			(1 << ctx->batch_candle_count_pow2),
-			ctx->batch_candle_count_pow2);
-
-		errmsg(stderr,
-			"[trcache_init] Per-type memory breakdown (for 1 symbol):\n");
-		size_t candles_per_chunk
-			= (size_t)(1 << ctx->batch_candle_count_pow2);
-		size_t min_chunks_per_list
-			= (size_t)(1 << ctx->cached_batch_count_pow2);
-		
-		for (int i = 0; i < ctx->num_candle_configs; i++) {
-			const struct trcache_candle_config *config
-				= &ctx->candle_configs[i];
-			
-			size_t chunk_batch_size = calculate_chunk_plus_batch_size(
-				config, candles_per_chunk);
-			
-			size_t row_page_size = sizeof(struct candle_row_page) +
-				(TRCACHE_ROWS_PER_PAGE * config->user_candle_size);
-			row_page_size = align_up(row_page_size, TRCACHE_SIMD_ALIGN);
-			
-			size_t pages_per_chunk
-				= (candles_per_chunk + TRCACHE_ROWS_PER_PAGE - 1)
-					/ TRCACHE_ROWS_PER_PAGE;
-			
-			size_t mem_per_symbol =
-				(min_chunks_per_list * chunk_batch_size) +
-				(min_chunks_per_list * pages_per_chunk * row_page_size);
-
-			errmsg(stderr,
-				" - Candle Type[%d]: user_candle_size = %zu bytes\n"
-				"   -> 1 Chunk (Batch + Struct): %.2f KB\n"
-				"   -> 1 Chunk (Row Pages): %.2f KB (%zu pages * %.0f bytes)\n"
-				"   -> Min per Symbol (x%zu chunks): %.2f KB\n",
-				i, config->user_candle_size,
-				(double)chunk_batch_size / 1024.0,
-				(double)(pages_per_chunk * row_page_size) / 1024.0,
-				pages_per_chunk, (double)row_page_size,
-				min_chunks_per_list, (double)mem_per_symbol / 1024.0);
-		}
-
-		errmsg(stderr,
-			"[trcache_init] Suggestion: Increase total_memory_limit, or "
-			"decrease max_symbols or cached_batch_count_pow2.\n");
-		
+		log_memory_limit_error(tc, ctx, min_required_memory);
 		free(tc);
 		return NULL;
 	}
@@ -571,8 +658,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	tc->max_symbols = ctx->max_symbols;
 	tc->trade_data_size = ctx->trade_data_size;
 	tc->trade_flush_ops = ctx->trade_flush_ops;
-	tc->trade_flush_enabled =
-		(ctx->trade_flush_ops.flush != NULL);
+	tc->trade_flush_enabled = (ctx->trade_flush_ops.flush != NULL);
 
 	/*
 	 * Derive the number of trade records per block from the requested
@@ -588,13 +674,10 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	/* Copy book pipeline configuration and set enable flags */
 	tc->book_state_ops = ctx->book_state_ops;
 	tc->book_event_flush_ops = ctx->book_event_flush_ops;
-	tc->book_update_enabled =
-		(ctx->book_state_ops.init != NULL);
-	tc->book_event_flush_enabled =
-		(ctx->book_event_flush_ops.flush != NULL);
+	tc->book_update_enabled = (ctx->book_state_ops.init != NULL);
+	tc->book_event_flush_enabled = (ctx->book_event_flush_ops.flush != NULL);
 
-	if (tc->book_update_enabled
-			|| tc->book_event_flush_enabled) {
+	if (tc->book_update_enabled || tc->book_event_flush_enabled) {
 		if (configure_book_fields(tc, ctx) != 0) {
 			goto cleanup_key;
 		}
@@ -636,44 +719,11 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	}
 
 	/* 6. Copy candle configurations (deep copy field definitions) */
-	if (ctx->candle_configs && tc->num_candle_configs > 0) {
-		size_t configs_size
-			= sizeof(trcache_candle_config) * tc->num_candle_configs;
-		tc->candle_configs = malloc(configs_size);
-		if (tc->candle_configs == NULL) {
-			errmsg(stderr, "Failed to allocate memory for candle configs\n");
-			goto cleanup_symbol_table;
-		}
-		memcpy(tc->candle_configs, ctx->candle_configs, configs_size);
-
-		for (int i = 0; i < tc->num_candle_configs; i++) {
-			struct trcache_candle_config *config = &tc->candle_configs[i];
-
-			if (config->num_fields > 0 && config->field_definitions != NULL) {
-				size_t defs_size
-					= sizeof(struct trcache_field_def) * config->num_fields;
-				struct trcache_field_def *defs_copy = malloc(defs_size);
-
-				if (defs_copy == NULL) {
-					errmsg(stderr,
-						"Failed to allocate memory for field def %d\n", i);
-					/* Clean up previously allocated definitions */
-					for (int j = 0; j < i; j++) {
-						free((void *)tc->candle_configs[j].field_definitions);
-					}
-					free(tc->candle_configs);
-					goto cleanup_symbol_table;
-				}
-				memcpy(defs_copy, config->field_definitions, defs_size);
-				config->field_definitions = defs_copy; /* Point to the copy */
-			} else {
-				/* Ensure consistent state even if no fields */
-				config->field_definitions = NULL;
-				config->num_fields = 0;
-			}
-		}
-	} else {
+	if (!ctx->candle_configs || tc->num_candle_configs <= 0) {
 		errmsg(stderr, "Invalid candle config\n");
+		goto cleanup_symbol_table;
+	}
+	if (deep_copy_candle_configs(tc, ctx) != 0) {
 		goto cleanup_symbol_table;
 	}
 
@@ -700,9 +750,11 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	for (int i = 0; i < tc->num_workers; i++) {
 		if (worker_state_init(tc, i) != 0) {
 			errmsg(stderr, "worker_state_init failed for worker %d\n", i);
+
 			for (int j = 0; j < i; j++) {
 				worker_state_destroy(&tc->worker_state_arr[j]);
 			}
+
 			free(tc->worker_state_arr);
 			goto cleanup_admin_state;
 		}
@@ -729,13 +781,16 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 				 i, strerror(ret));
 			/* Signal already created threads and admin to stop */
 			tc->admin_state.done = true; /* Try to stop admin if created */
+
 			for (int j = 0; j < i; j++) {
 				tc->worker_state_arr[j].done = true;
 			}
+
 			/* Join threads that were successfully created */
 			for (int j = 0; j < i; j++) {
 				pthread_join(tc->worker_threads[j], NULL);
 			}
+
 			goto cleanup_worker_thread_resources;
 		}
 	}
@@ -745,14 +800,17 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	if (ret != 0) {
 		errmsg(stderr, "Failure on pthread_create() for admin: %s\n",
 			strerror(ret));
+
 		/* Signal all worker threads to stop */
 		for (int i = 0; i < tc->num_workers; i++) {
 			tc->worker_state_arr[i].done = true;
 		}
+
 		/* Join all worker threads */
 		for (int i = 0; i < tc->num_workers; i++) {
 			pthread_join(tc->worker_threads[i], NULL);
 		}
+
 		goto cleanup_worker_thread_resources;
 	}
 
