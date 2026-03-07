@@ -1163,6 +1163,50 @@ static void user_thread_apply_trades(struct event_data_buffer *buf,
 }
 
 /**
+ * @brief   Apply book events from the buffer by the user thread.
+ *
+ * This function is called by the user thread (producer) when the
+ * event_data_buffer is under memory pressure. It attempts to acquire
+ * a cursor and process pending book events, thereby freeing up space
+ * in the buffer. This helps to alleviate back-pressure without
+ * blocking.
+ *
+ * @param   buf:    Buffer to consume from.
+ * @param   entry:  Target symbol entry.
+ */
+static void user_thread_apply_book_updates(
+	struct event_data_buffer *buf, struct symbol_entry *entry)
+{
+	struct trcache *tc = buf->trc;
+	struct event_data_buffer_cursor *cur;
+	void *ctx = tc->book_state_ops.ctx;
+	void *array;
+	int count;
+
+	cur = event_data_buffer_acquire_cursor(buf, 0);
+	if (cur == NULL) {
+		return;
+	}
+
+	if (entry->book_state == NULL) {
+		entry->book_state =
+			tc->book_state_ops.init(tc, entry->id, ctx);
+	}
+
+	while (event_data_buffer_peek(buf, cur, &array, &count)
+			&& count > 0) {
+		for (int i = 0; i < count; i++) {
+			void *event = (uint8_t *)array
+				+ (i * buf->event_size);
+			tc->book_state_ops.update(entry->book_state, event, ctx);
+		}
+		event_data_buffer_consume(buf, cur, count);
+	}
+
+	event_data_buffer_release_cursor(cur);
+}
+
+/**
  * @brief   Push a single trade into the internal pipeline.
  *
  * @param   tc:        Pointer to trcache instance.
@@ -1274,7 +1318,13 @@ int trcache_feed_book_data(struct trcache *tc,
 	 */
 	if (book_buf->next_tail_write_idx == tc->book_events_per_block - 1
 			&& list_empty(&tls->local_free_list)) {
-		/* TODO user thread consume logic */
+		bool is_memory_pressure = atomic_load_explicit(
+			&tc->mem_acc.memory_pressure, memory_order_acquire);
+
+		if (is_memory_pressure) {
+			user_thread_apply_book_updates(book_buf, entry);
+		}
+
 		event_data_buffer_reap_free_blocks(
 			book_buf, &tls->local_free_list, tls->thread_id);
 	}
