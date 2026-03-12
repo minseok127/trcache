@@ -238,7 +238,7 @@ trcache_feed_trade_data()
 
 - **Lock-Free Primitives**:
   - `atomsnap`: Versioning mechanism for atomic pointer snapshots.
-  - `scalable_queue`: Per-thread MPMC queue for object pooling with O(1) operations.
+  - `scalable_queue`: MPMC queue for object pooling with O(1) operations.
 
 - **Memory Management**:
   - Non-blocking reclamation for chunks/pages.
@@ -377,8 +377,7 @@ The routing of `trade_data` to either the `update` or `init` callback is determi
 When a column batch is complete, trcache calls `flush()` once to submit the write,
 then calls `is_done()` immediately after. If `is_done()` returns false, the worker
 moves on to other work and calls `is_done()` again on the next pass — it does not
-block or retry in place. Set `batch_flush_ops = {}` (all NULL) to skip persistence;
-candle data remains queryable in memory.
+block or retry in place. Set `batch_flush_ops = {}` (all NULL) to skip persistence.
 
 #### Synchronous example
 ```c
