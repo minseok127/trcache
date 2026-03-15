@@ -132,6 +132,46 @@ static int configure_book_fields(struct trcache *tc,
 	return 0;
 }
 
+static void direct_apply_trades(struct event_data_buffer *buf,
+	struct symbol_entry *symbol_entry);
+static void direct_apply_book_updates(
+	struct event_data_buffer *buf, struct symbol_entry *entry);
+
+/**
+ * @brief   Drain unconsumed events from all buffers into candles/book state.
+ *
+ * Called from trcache_destroy() after all worker threads have been joined
+ * but before TLS data and event buffers are torn down. For each symbol,
+ * book events are drained first (to bring book_state up to date), then
+ * trade events are drained (with the current book_state passed to candle
+ * callbacks).
+ *
+ * @param   tc: Pointer to trcache instance.
+ */
+static void drain_remaining_events(struct trcache *tc)
+{
+	int num_syms = atomic_load_explicit(
+		(int *)&tc->symbol_table->num_symbols,
+		memory_order_acquire);
+
+	for (int i = 0; i < num_syms; i++) {
+		struct symbol_entry *entry =
+			&tc->symbol_table->symbol_entries[i];
+
+		/* Drain book events first to bring book_state up to date */
+		if (tc->book_update_enabled && entry->book_buf != NULL) {
+			direct_apply_book_updates(
+				entry->book_buf, entry);
+		}
+
+		/* Drain trade events with current book_state */
+		if (entry->trd_buf != NULL) {
+			direct_apply_trades(
+				entry->trd_buf, entry);
+		}
+	}
+}
+
 /**
  * @brief   Finalize all per-symbol event buffers and destroy book states.
  *
@@ -884,6 +924,14 @@ void trcache_destroy(struct trcache *tc)
 		}
 	}
 
+	/*
+	 * Drain unconsumed events from all buffers into candles and
+	 * book state. Book events are drained first so that trade
+	 * apply callbacks receive up-to-date book state. Must run
+	 * before TLS destruction since it uses SCQ pools internally.
+	 */
+	drain_remaining_events(tc);
+
 	/* 2. Destroy per-thread data that might still exist */
 	pthread_mutex_lock(&tc->tls_id_mutex);
 	for (int i = 0; i < MAX_NUM_THREADS; i++) {
@@ -1107,17 +1155,16 @@ static struct candle_chunk_list *get_chunk_list(struct trcache *tc,
 }
 
 /**
- * @brief   Apply trades from the buffer by the user thread.
+ * @brief   Apply trades from the buffer directly in the caller's context.
  *
- * This function is called by the user thread (producer) when the
- * event_data_buffer is under memory pressure. It attempts to acquire a cursor
- * for each candle type and process pending trades, thereby freeing up space
- * in the buffer. This helps to alleviate back-pressure without blocking.
+ * Bypasses the worker pool and consumes pending trades inline. Called
+ * from the feed path under memory pressure (to relieve back-pressure)
+ * and from trcache_destroy() to drain unconsumed events into candles.
  *
  * @param   buf:           Buffer to consume from.
  * @param   symbol_entry:  Target symbol entry.
  */
-static void user_thread_apply_trades(struct event_data_buffer *buf,
+static void direct_apply_trades(struct event_data_buffer *buf,
 	struct symbol_entry *symbol_entry)
 {
 	struct event_data_buffer_cursor *cur;
@@ -1144,7 +1191,8 @@ static void user_thread_apply_trades(struct event_data_buffer *buf,
 		while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 			for (int j = 0; j < count; j++) {
 				trade_data = (uint8_t *)array + (j * tc->trade_data_size);
-				candle_chunk_list_apply_trade(list, trade_data, NULL);
+				candle_chunk_list_apply_trade(list, trade_data,
+					symbol_entry->book_state);
 			}
 			event_data_buffer_consume(buf, cur, count);
 		}
@@ -1163,18 +1211,17 @@ static void user_thread_apply_trades(struct event_data_buffer *buf,
 }
 
 /**
- * @brief   Apply book events from the buffer by the user thread.
+ * @brief   Apply book events from the buffer directly in the caller's
+ *          context.
  *
- * This function is called by the user thread (producer) when the
- * event_data_buffer is under memory pressure. It attempts to acquire
- * a cursor and process pending book events, thereby freeing up space
- * in the buffer. This helps to alleviate back-pressure without
- * blocking.
+ * Bypasses the worker pool and consumes pending book events inline.
+ * Called from the feed path under memory pressure and from
+ * trcache_destroy() to drain unconsumed events into book state.
  *
  * @param   buf:    Buffer to consume from.
  * @param   entry:  Target symbol entry.
  */
-static void user_thread_apply_book_updates(
+static void direct_apply_book_updates(
 	struct event_data_buffer *buf, struct symbol_entry *entry)
 {
 	struct trcache *tc = buf->trc;
@@ -1255,7 +1302,7 @@ int trcache_feed_trade_data(struct trcache *tc,
 			&tc->mem_acc.memory_pressure, memory_order_acquire);
 
 		if (is_memory_pressure) {
-			user_thread_apply_trades(trd_databuf, symbol_entry);
+			direct_apply_trades(trd_databuf, symbol_entry);
 		}
 
 		event_data_buffer_reap_free_blocks(trd_databuf,
@@ -1322,7 +1369,7 @@ int trcache_feed_book_data(struct trcache *tc,
 			&tc->mem_acc.memory_pressure, memory_order_acquire);
 
 		if (is_memory_pressure) {
-			user_thread_apply_book_updates(book_buf, entry);
+			direct_apply_book_updates(book_buf, entry);
 		}
 
 		event_data_buffer_reap_free_blocks(

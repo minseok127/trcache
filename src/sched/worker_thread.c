@@ -109,7 +109,8 @@ static void worker_do_apply(struct symbol_entry *entry, int candle_idx)
 	while (event_data_buffer_peek(buf, cur, &array, &count) && count > 0) {
 		for (int i = 0; i < count; i++) {
 			trade_data = (uint8_t *)array + (i * trade_data_size);
-			candle_chunk_list_apply_trade(list, trade_data, NULL);
+			candle_chunk_list_apply_trade(list, trade_data,
+				entry->book_state);
 		}
 
 		event_data_buffer_consume(buf, cur, count);
