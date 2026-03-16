@@ -2,9 +2,11 @@
 #define SCQ_H
 
 #include <stdatomic.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "compat/thread_compat.h"
 
 #include "utils/memstat.h"
 

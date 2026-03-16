@@ -2,14 +2,15 @@
  * @file core/trcache_internal.c
  * @brief APIs for trcache, and thread-local cache management for trcache.
  */
-#define _GNU_SOURCE
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdatomic.h>
-#include <pthread.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "concurrent/scalable_queue.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/event_data_buffer.h"
@@ -623,7 +624,7 @@ static int deep_copy_candle_configs(struct trcache *tc,
  */
 struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 {
-	struct trcache *tc = aligned_alloc(CACHE_LINE_SIZE, 
+	struct trcache *tc = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(sizeof(struct trcache), CACHE_LINE_SIZE));
 	size_t min_required_memory;
 	int ret;
@@ -640,26 +641,26 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	/* Validate ctx input first */
 	if (ctx == NULL) {
 		errmsg(stderr, "trcache_init_ctx is NULL\n");
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	} else if (ctx->max_symbols <= 0) {
 		errmsg(stderr, "Invalid max_symbols\n");
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	} else if (ctx->num_worker_threads <= 2) {
 		errmsg(stderr,
 			"num_worker_threads must be > 2\n");
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	} else if (ctx->trade_data_size == 0) {
 		errmsg(stderr,
 			"trade_data_size must be > 0\n");
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	}
 
 	if (!validate_ops(ctx)) {
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	}
 
@@ -675,7 +676,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 	 */
 	if (tc->total_memory_limit < min_required_memory) {
 		log_memory_limit_error(tc, ctx, min_required_memory);
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	}
 
@@ -684,7 +685,7 @@ struct trcache *trcache_init(const struct trcache_init_ctx *ctx)
 		trcache_per_thread_destructor);
 	if (ret != 0) {
 		errmsg(stderr, "Failure on pthread_key_create()\n");
-		free(tc);
+		trc_aligned_free(tc);
 		return NULL;
 	}
 
@@ -893,7 +894,7 @@ cleanup_scq_pools:
 
 cleanup_key:
 	pthread_key_delete(tc->pthread_trcache_key);
-	free(tc);
+	trc_aligned_free(tc);
 
 	return NULL;
 }
@@ -1007,7 +1008,7 @@ void trcache_destroy(struct trcache *tc)
 	}
 
 	/* 7. Free the main structure */
-	free(tc);
+	trc_aligned_free(tc);
 }
 
 /**

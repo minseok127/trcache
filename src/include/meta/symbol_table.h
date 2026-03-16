@@ -2,7 +2,7 @@
 #define SYMBOL_TABLE_H
 
 #include <stddef.h>
-#include <pthread.h>
+#include "compat/thread_compat.h"
 #include <stdatomic.h>
 
 #include "pipeline/candle_chunk_list.h"

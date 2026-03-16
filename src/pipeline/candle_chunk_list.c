@@ -6,14 +6,16 @@
  * updating, and flushing of candle_chunk by worker threads go through this
  * module.
  */
-#define _GNU_SOURCE
+#include <assert.h>
+#include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-#include <stdatomic.h>
-#include <inttypes.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
 #include "utils/log.h"
@@ -230,7 +232,7 @@ struct candle_chunk_list *create_candle_chunk_list(
 		return NULL;
 	}
 
-	list = aligned_alloc(CACHE_LINE_SIZE, 
+	list = trc_aligned_alloc(CACHE_LINE_SIZE, 
 		ALIGN_UP(sizeof(struct candle_chunk_list), CACHE_LINE_SIZE));
 	if (list == NULL) {
 		errmsg(stderr, "#candle_chunk_list allocation failed\n");

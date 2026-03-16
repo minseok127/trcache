@@ -2,8 +2,18 @@
 #define TSC_CLOCK_H
 
 #include <stdint.h>
+
+#include "compat/builtin_compat.h"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <time.h>
 #include <unistd.h>
+#endif
 
 /**
  * @brief   Fetch the current 64-bit cycle counter value.
@@ -12,9 +22,13 @@
  */
 static inline uint64_t tsc_cycles(void)
 {
+#ifdef _MSC_VER
+	return __rdtsc();
+#else
 	unsigned hi, lo;
 	__asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
 	return ((uint64_t)hi << 32) | lo;
+#endif
 }
 
 /**
@@ -31,18 +45,31 @@ static inline double tsc_cycles_per_sec(void)
 {
 	static double cached_hz = 0.0;
 
-	if (__builtin_expect(cached_hz == 0.0, 0)) {
-		struct timespec ts0, ts1, req = {0, 10 * 1000 * 1000}; /* 10 ms */
+	if (trc_expect(cached_hz == 0.0, 0)) {
 		uint64_t c0, c1, ns;
 
+#ifdef _WIN32
+		LARGE_INTEGER freq, t0, t1;
+		QueryPerformanceFrequency(&freq);
+		QueryPerformanceCounter(&t0);
+		c0 = tsc_cycles();
+		Sleep(10);
+		QueryPerformanceCounter(&t1);
+		c1 = tsc_cycles();
+		ns = (uint64_t)((t1.QuadPart - t0.QuadPart) *
+			1000000000LL / freq.QuadPart);
+#else
+		struct timespec ts0, ts1;
+		struct timespec req = {0, 10 * 1000 * 1000}; /* 10 ms */
 		clock_gettime(CLOCK_MONOTONIC_RAW, &ts0);
 		c0 = tsc_cycles();
 		nanosleep(&req, NULL);
 		clock_gettime(CLOCK_MONOTONIC_RAW, &ts1);
 		c1 = tsc_cycles();
-
 		ns = (uint64_t)(ts1.tv_sec - ts0.tv_sec) * 1000000000ull +
 			(uint64_t)(ts1.tv_nsec - ts0.tv_nsec);
+#endif
+
 		cached_hz = (double)(c1 - c0) * 1e9 / (double)ns;
 	}
 

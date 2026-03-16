@@ -14,7 +14,12 @@ extern "C" {
  * stated.
  */
 
+#ifdef _WIN32
+#include <malloc.h>   /* _alloca */
+#define alloca _alloca
+#else
 #include <alloca.h>
+#endif
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -42,7 +47,11 @@ extern "C" {
  * Data structure memory alignement macro.
  */
 #ifndef ____cacheline_aligned
+#ifdef _MSC_VER
+#define ____cacheline_aligned __declspec(align(CACHE_LINE_SIZE))
+#else
 #define ____cacheline_aligned __attribute__((aligned(CACHE_LINE_SIZE)))
+#endif
 #endif /* ____cacheline_aligned */
 
 typedef struct trcache trcache;

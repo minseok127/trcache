@@ -2,13 +2,14 @@
  * @file   concurrent/scalable_queue.c
  * @brief  Implementation of the scalable_queue data structure.
  */
-#define _GNU_SOURCE
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdatomic.h>
-#include <pthread.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "concurrent/scalable_queue.h"
 #include "meta/trcache_internal.h"
 #include "utils/log.h"
@@ -74,7 +75,7 @@ struct scalable_queue *scq_init(struct trcache *tc)
 
 	/* Get the spinlock to assign scq id */
 	while (atomic_exchange(&global_scq_id_flag, 1) == 1) {
-		__asm__ __volatile__("pause");
+		trc_cpu_pause();
 	}
 
 	scq->scq_id = -1;
@@ -120,7 +121,7 @@ void scq_destroy(struct scalable_queue *scq)
 
 	/* Get the spinlock to return scq id */
 	while (atomic_exchange(&global_scq_id_flag, 1) == 1) {
-		__asm__ __volatile__("pause");
+		trc_cpu_pause();
 	}
 
 	atomic_store(&global_scq_id_arr[scq->scq_id], 0);
@@ -218,7 +219,7 @@ static void scq_free_nodes(struct scalable_queue *scq,
 	}
 
 	tail_node->next = NULL;
-	__sync_synchronize();
+	trc_memory_barrier();
 
 	prev_tail = atomic_exchange(&free_node_list->shared_tail, tail_node);
 	assert(prev_tail != NULL);
@@ -245,7 +246,7 @@ static void scq_tls_data_cleanup(struct scq_tls_data *tls_data)
 	/* 1. Dump local free list to shared free list */
 	if (free_list->local_head != NULL) {
 		free_list->local_tail->next = NULL;
-		__sync_synchronize();
+		trc_memory_barrier();
 
 		prev_tail = atomic_exchange(&free_list->shared_tail,
 			free_list->local_tail);
@@ -283,7 +284,7 @@ static void scq_tls_data_cleanup(struct scq_tls_data *tls_data)
 		 *     enqueue list.
 		 */
 		deq_list->local_tail->next = NULL;
-		__sync_synchronize();
+		trc_memory_barrier();
 
 		prev_tail = atomic_exchange(&tls_data->shared_tail,
 			deq_list->local_tail);
@@ -518,7 +519,7 @@ static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
 			free_node_list->local_tail = NULL;
 		} else {
 			while (node->next == NULL) {
-				__asm__ __volatile__("pause");
+				trc_cpu_pause();
 			}
 			free_node_list->local_head = node->next;
 		}
@@ -542,7 +543,7 @@ static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
 				free_node_list->local_tail = NULL;
 			} else {
 				while (node->next == NULL) {
-					__asm__ __volatile__("pause");
+					trc_cpu_pause();
 				}
 				free_node_list->local_head = node->next;
 			}
@@ -582,7 +583,7 @@ static struct scq_node *scq_allocate_node(struct scalable_queue *scq,
 				free_node_list->local_tail = NULL;
 			} else {
 				while (node->next == NULL) {
-					__asm__ __volatile__("pause");
+					trc_cpu_pause();
 				}
 				free_node_list->local_head = node->next;
 			}
@@ -626,7 +627,7 @@ void scq_enqueue(struct scalable_queue *scq, void *datum)
 
 	node->datum = datum;
 	node->next = NULL;
-	__sync_synchronize();
+	trc_memory_barrier();
 
 	prev_tail = atomic_exchange(&tls_data->shared_tail, node);
 	assert(prev_tail != NULL);
@@ -661,7 +662,7 @@ static bool pop_from_dequeued_list(struct scalable_queue *scq,
 		dequeued_node_list->local_initial_head = NULL;
 	} else {
 		while (node->next == NULL) {
-			__asm__ __volatile__("pause");
+			trc_cpu_pause();
 		}
 
 		dequeued_node_list->local_head = node->next;

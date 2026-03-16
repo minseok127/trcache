@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+### Linux (Makefile)
+
 ```bash
 # Build library (release, default)
 make
@@ -26,6 +28,24 @@ make -C validator all
 ```
 
 Build outputs: `libtrcache.a` and `libtrcache.so` in the project root.
+
+### Windows (CMake)
+
+```powershell
+# MSVC 64-bit
+cmake -B build -A x64
+cmake --build build --config Release    # or Debug
+
+# MinGW
+cmake -B build -G "MinGW Makefiles"
+cmake --build build
+```
+
+CMake debug mode: `-DCMAKE_BUILD_TYPE=Debug` (MinGW) or `--config Debug` (MSVC).
+
+Note: CMake builds the static library only. Benchmarks and validator are Makefile-only targets.
+
+### Build Outputs
 
 Benchmark executables (`feed_only_benchmark`, `static_read_benchmark`, `htap_benchmark`) are built in `benchmark/`.
 
@@ -52,6 +72,7 @@ cd validator && ./validator_app config.json
 - 80-character line limit (code files; docs are exempt).
 - Always use braces for `if`/`else`/`for`/`while`, even single-line bodies.
 - Include paths: `-I$(PROJECT_ROOT) -I$(PROJECT_ROOT)/src/include`. Internal headers live under `src/include/<module>/`.
+- Cross-platform compatibility headers live in `src/include/compat/` (builtins, aligned memory, threads). Use these instead of platform-specific APIs directly.
 - Trade pipeline uses `candle` terminology; book pipeline uses `snapshot`/`record`.
 
 ## Testing
@@ -101,6 +122,7 @@ Query APIs read from immutable column batches lock-free, concurrently with write
 | Admin thread | `src/sched/admin_thread.c` | EMA-based throughput monitoring; dynamic worker rebalancing |
 | Atomic snapshot | `src/concurrent/atomsnap.c` | Versioned atomic pointer for lock-free reads |
 | Scalable queue | `src/concurrent/scalable_queue.c` | MPMC queue with per-thread TLS; used for object pooling |
+| Hash table | `src/utils/hash_table.c` | Open-addressing hash table; used by symbol table |
 
 ### Concurrency Model
 
@@ -118,7 +140,7 @@ Query APIs read from immutable column batches lock-free, concurrently with write
 
 ### Validator (C++)
 
-Located in `validator/`, built with g++ C++17. Connects to Binance Futures WebSocket, feeds live trades into the engine, and checks data integrity (gap and tick-error detection). Results are appended to CSV files in `validator/results/`. Configuration is driven by `validator/config.json`.
+Located in `validator/`, built with g++ C++17. Connects to Binance Futures WebSocket, feeds live trades into the engine, and checks data integrity (gap and tick-error detection). Configuration is driven by `validator/config.json`.
 
 ## Important Constants (not in trcache.h)
 

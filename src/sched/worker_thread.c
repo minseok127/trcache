@@ -3,12 +3,16 @@
  * @brief  Implementation of the worker thread main routine.
  */
 
-#define _GNU_SOURCE
-#include <sched.h>
-#include <stdlib.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sched.h>
+#endif
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "sched/worker_thread.h"
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
@@ -291,7 +295,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	book_bitmap_bytes = get_bitmap_bytes(tc->max_symbols);
 
 	/* 1. In-memory bitmap (always required) */
-	state->in_memory_bitmap = aligned_alloc(CACHE_LINE_SIZE,
+	state->in_memory_bitmap = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(in_memory_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->in_memory_bitmap == NULL) {
 		errmsg(stderr, "in_memory_bitmap allocation failed\n");
@@ -300,7 +304,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	memset(state->in_memory_bitmap, 0, in_memory_bitmap_bytes);
 
 	/* 2. Batch flush bitmap (always required) */
-	state->batch_flush_bitmap = aligned_alloc(CACHE_LINE_SIZE,
+	state->batch_flush_bitmap = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(batch_flush_bitmap_bytes, CACHE_LINE_SIZE));
 	if (state->batch_flush_bitmap == NULL) {
 		errmsg(stderr,
@@ -311,7 +315,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* 3. Trade flush bitmap (conditional) */
 	if (tc->trade_flush_enabled) {
-		state->trade_flush_bitmap = aligned_alloc(
+		state->trade_flush_bitmap = trc_aligned_alloc(
 			CACHE_LINE_SIZE,
 			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
 		if (state->trade_flush_bitmap == NULL) {
@@ -325,7 +329,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* 4. Book update bitmap (conditional) */
 	if (tc->book_update_enabled) {
-		state->book_update_bitmap = aligned_alloc(
+		state->book_update_bitmap = trc_aligned_alloc(
 			CACHE_LINE_SIZE,
 			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
 		if (state->book_update_bitmap == NULL) {
@@ -338,7 +342,7 @@ int worker_state_init(struct trcache *tc, int worker_id)
 
 	/* 5. Book event flush bitmap (conditional) */
 	if (tc->book_event_flush_enabled) {
-		state->book_event_flush_bitmap = aligned_alloc(
+		state->book_event_flush_bitmap = trc_aligned_alloc(
 			CACHE_LINE_SIZE,
 			ALIGN_UP(book_bitmap_bytes, CACHE_LINE_SIZE));
 		if (state->book_event_flush_bitmap == NULL) {
@@ -356,10 +360,10 @@ int worker_state_init(struct trcache *tc, int worker_id)
 	return 0;
 
 cleanup:
-	free(state->book_update_bitmap);
-	free(state->trade_flush_bitmap);
-	free(state->batch_flush_bitmap);
-	free(state->in_memory_bitmap);
+	trc_aligned_free(state->book_update_bitmap);
+	trc_aligned_free(state->trade_flush_bitmap);
+	trc_aligned_free(state->batch_flush_bitmap);
+	trc_aligned_free(state->in_memory_bitmap);
 	state->in_memory_bitmap = NULL;
 	state->batch_flush_bitmap = NULL;
 	state->trade_flush_bitmap = NULL;
@@ -381,11 +385,11 @@ void worker_state_destroy(struct worker_state *state)
 	}
 
 	/* Free bitmaps */
-	free(state->in_memory_bitmap);
-	free(state->batch_flush_bitmap);
-	free(state->trade_flush_bitmap);
-	free(state->book_update_bitmap);
-	free(state->book_event_flush_bitmap);
+	trc_aligned_free(state->in_memory_bitmap);
+	trc_aligned_free(state->batch_flush_bitmap);
+	trc_aligned_free(state->trade_flush_bitmap);
+	trc_aligned_free(state->book_update_bitmap);
+	trc_aligned_free(state->book_event_flush_bitmap);
 	state->in_memory_bitmap = NULL;
 	state->batch_flush_bitmap = NULL;
 	state->trade_flush_bitmap = NULL;
@@ -403,7 +407,7 @@ void worker_state_destroy(struct worker_state *state)
 static inline int get_next_bit_offset(uint64_t work_chunk)
 {
 	/* Assumes work_chunk != 0 */
-	return __builtin_ctzll(work_chunk);
+	return trc_ctzll(work_chunk);
 }
 
 /**
@@ -1005,7 +1009,7 @@ void *worker_thread_main(void *arg)
 
 		/* Busy-wait (Low Latency) */
 		if (!work_done) {
-			__asm__ __volatile__("pause");
+			trc_cpu_pause();
 		} 
 	}
 

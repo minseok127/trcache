@@ -2,7 +2,7 @@
 #define TRCACHE_INTERNAL_H
 
 #include <stddef.h>
-#include <pthread.h>
+#include "compat/thread_compat.h"
 
 #include "concurrent/scalable_queue.h"
 #include "meta/symbol_table.h"

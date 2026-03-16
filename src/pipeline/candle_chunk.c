@@ -6,13 +6,15 @@
  * row-oriented pages, converts them to column-oriented batches, and finally
  * flushes the result.
  */
-#define _GNU_SOURCE
+#include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-#include <stdatomic.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk.h"
 #include "utils/log.h"
@@ -78,7 +80,7 @@ static struct candle_row_page *alloc_row_page_object(struct candle_chunk *chunk)
 
 	/* 2. Pool empty or memory pressure, allocate new one */
 	if (row_page == NULL) {
-		row_page = aligned_alloc(TRCACHE_SIMD_ALIGN, chunk->row_page_mem_size);
+		row_page = trc_aligned_alloc(TRCACHE_SIMD_ALIGN, chunk->row_page_mem_size);
 		if (row_page == NULL) {
 			errmsg(stderr, "#candle_row_page allocation failed\n");
 			return NULL;
@@ -124,7 +126,7 @@ static void free_row_page_object(void *object, void *free_context)
 		/* Free the page and update object memory tracking */
 		mem_sub_atomic(&row_page_pool->object_memory_usage.value,
 			chunk->row_page_mem_size);
-		free(row_page);
+		trc_aligned_free(row_page);
 	} else {
 		/* Return the page to the pool */
 		scq_enqueue(row_page_pool, row_page);
@@ -163,7 +165,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 	/* 2. Pool empty or memory pressure, allocate new one */
 	if (chunk == NULL) {
 		allocated_new = true;
-		chunk = aligned_alloc(CACHE_LINE_SIZE, 
+		chunk = trc_aligned_alloc(CACHE_LINE_SIZE, 
 			align_up(sizeof(struct candle_chunk), CACHE_LINE_SIZE));
 		if (chunk == NULL) {
 			errmsg(stderr, "#candle_chunk allocation failed\n");
@@ -172,7 +174,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 
 		if (pthread_spin_init(&chunk->spinlock, PTHREAD_PROCESS_PRIVATE) != 0) {
 			errmsg(stderr, "Initialization of spinlock failed\n");
-			free(chunk);
+			trc_aligned_free(chunk);
 			return NULL;
 		}
 
@@ -180,7 +182,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 		if (chunk->row_gate == NULL) {
 			errmsg(stderr, "Failure on atomsnap_init_gate\n");
 			pthread_spin_destroy(&chunk->spinlock);
-			free(chunk);
+			trc_aligned_free(chunk);
 			return NULL;
 		}
 
@@ -190,7 +192,7 @@ struct candle_chunk *create_candle_chunk(struct trcache *trc,
 			errmsg(stderr, "Failure on trcache_batch_alloc_on_heap()\n");
 			pthread_spin_destroy(&chunk->spinlock);
 			atomsnap_destroy_gate(chunk->row_gate);
-			free(chunk);
+			trc_aligned_free(chunk);
 			return NULL;
 		}
 	} else {
@@ -277,7 +279,7 @@ void candle_chunk_destroy(struct candle_chunk *chunk)
 		pthread_spin_destroy(&chunk->spinlock);
 		atomsnap_destroy_gate(chunk->row_gate);
 		trcache_batch_free(chunk->column_batch);
-		free(chunk);
+		trc_aligned_free(chunk);
 	} else {
 		scq_enqueue(chunk->chunk_pool, chunk);
 	}

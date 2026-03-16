@@ -2,14 +2,18 @@
  * @file   admin_thread.c
  * @brief  Implementation of the admin thread main routine.
  */
-#define _GNU_SOURCE
 #include <math.h>
-#include <sched.h>
-#include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#ifndef _WIN32
+#include <sched.h>
+#endif
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "concurrent/scalable_queue.h"
 #include "sched/admin_thread.h"
 #include "meta/symbol_table.h"
@@ -73,14 +77,14 @@ static int alloc_zero_bitmap_pair(uint64_t **next_out,
 
 	alloc = num_workers * words_per_worker * sizeof(uint64_t);
 
-	*next_out = aligned_alloc(CACHE_LINE_SIZE,
+	*next_out = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(alloc, CACHE_LINE_SIZE));
-	*curr_out = aligned_alloc(CACHE_LINE_SIZE,
+	*curr_out = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(alloc, CACHE_LINE_SIZE));
 
 	if (*next_out == NULL || *curr_out == NULL) {
-		free(*next_out);
-		free(*curr_out);
+		trc_aligned_free(*next_out);
+		trc_aligned_free(*curr_out);
 		*next_out = NULL;
 		*curr_out = NULL;
 		return -1;
@@ -242,16 +246,16 @@ int admin_state_init(struct trcache *tc)
 	return 0;
 
 cleanup_bitmaps:
-	free(state->next_im_bitmaps);
-	free(state->next_batch_flush_bitmaps);
-	free(state->next_trade_flush_bitmaps);
-	free(state->current_im_bitmaps);
-	free(state->current_batch_flush_bitmaps);
-	free(state->current_trade_flush_bitmaps);
-	free(state->next_book_update_bitmaps);
-	free(state->next_book_event_flush_bitmaps);
-	free(state->current_book_update_bitmaps);
-	free(state->current_book_event_flush_bitmaps);
+	trc_aligned_free(state->next_im_bitmaps);
+	trc_aligned_free(state->next_batch_flush_bitmaps);
+	trc_aligned_free(state->next_trade_flush_bitmaps);
+	trc_aligned_free(state->current_im_bitmaps);
+	trc_aligned_free(state->current_batch_flush_bitmaps);
+	trc_aligned_free(state->current_trade_flush_bitmaps);
+	trc_aligned_free(state->next_book_update_bitmaps);
+	trc_aligned_free(state->next_book_event_flush_bitmaps);
+	trc_aligned_free(state->current_book_update_bitmaps);
+	trc_aligned_free(state->current_book_event_flush_bitmaps);
 
 cleanup_stats:
 	free(state->stage_snaps);
@@ -296,16 +300,16 @@ void admin_state_destroy(struct admin_state *state)
 	free(state->book_event_flush_costs);
 
 	/* Free the dynamically allocated bitmap buffers */
-	free(state->next_im_bitmaps);
-	free(state->next_batch_flush_bitmaps);
-	free(state->next_trade_flush_bitmaps);
-	free(state->current_im_bitmaps);
-	free(state->current_batch_flush_bitmaps);
-	free(state->current_trade_flush_bitmaps);
-	free(state->next_book_update_bitmaps);
-	free(state->next_book_event_flush_bitmaps);
-	free(state->current_book_update_bitmaps);
-	free(state->current_book_event_flush_bitmaps);
+	trc_aligned_free(state->next_im_bitmaps);
+	trc_aligned_free(state->next_batch_flush_bitmaps);
+	trc_aligned_free(state->next_trade_flush_bitmaps);
+	trc_aligned_free(state->current_im_bitmaps);
+	trc_aligned_free(state->current_batch_flush_bitmaps);
+	trc_aligned_free(state->current_trade_flush_bitmaps);
+	trc_aligned_free(state->next_book_update_bitmaps);
+	trc_aligned_free(state->next_book_event_flush_bitmaps);
+	trc_aligned_free(state->current_book_update_bitmaps);
+	trc_aligned_free(state->current_book_event_flush_bitmaps);
 }
 
 #define RATE_EMA_SHIFT (2)     /* 2^2 = 4 */
@@ -397,12 +401,6 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	const struct sched_stage_snapshot *oldc, uint64_t dt_ns,
 	struct trcache *cache)
 {
-	/*
-	 * __uint128_t is used to avoid overflow when multiplying by 1e9.
-	 * For high-frequency symbols, diff can be large enough that
-	 * diff * 1,000,000,000 exceeds 2^64, causing silent truncation.
-	 */
-	__uint128_t tmp;
 	uint64_t diff;
 
 	/*
@@ -419,9 +417,8 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	 * to be applied to the in-memory candle pipeline.
 	 */
 	diff = newc->produced_seq - oldc->produced_seq;
-	tmp = (__uint128_t)diff * 1000000000ull;
-	tmp /= dt_ns;
-	r->produced_rate = ema_update_u64(r->produced_rate, (uint64_t)tmp);
+	r->produced_rate = ema_update_u64(r->produced_rate,
+		trc_mul64_div64(diff, 1000000000ull, dt_ns));
 
 	/*
 	 * completed_rate: CONVERT demand signal (candles/sec).
@@ -435,9 +432,8 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	} else {
 		diff = newc->completed_seq - oldc->completed_seq;
 	}
-	tmp = (__uint128_t)diff * 1000000000ull;
-	tmp /= dt_ns;
-	r->completed_rate = ema_update_u64(r->completed_rate, (uint64_t)tmp);
+	r->completed_rate = ema_update_u64(r->completed_rate,
+		trc_mul64_div64(diff, 1000000000ull, dt_ns));
 
 	/*
 	 * flushable_batch_rate: FLUSH demand signal.
@@ -450,10 +446,8 @@ static void update_stage_rate(struct sched_stage_rate *r,
 	} else {
 		diff = 0;
 	}
-	tmp = (__uint128_t)diff * 1000000000ull;
-	tmp /= dt_ns;
 	r->flushable_batch_rate = ema_update_u64(r->flushable_batch_rate,
-		(uint64_t)tmp);
+		trc_mul64_div64(diff, 1000000000ull, dt_ns));
 }
 
 /**
@@ -483,7 +477,6 @@ static void update_trade_block_fill_rates(struct trcache *cache,
 			table->symbol_entries[sym_idx].trd_buf;
 		uint64_t last_ts = admin->trade_fill_timestamps[sym_idx];
 		uint64_t dt_ns = (last_ts == 0) ? 0 : (now_ns - last_ts);
-		__uint128_t tmp;
 		int unflushed;
 
 		admin->trade_fill_timestamps[sym_idx] = now_ns;
@@ -495,12 +488,12 @@ static void update_trade_block_fill_rates(struct trcache *cache,
 		unflushed = atomic_load_explicit(
 			&tdb->num_full_unflushed_blocks,
 			memory_order_acquire);
-		tmp = (__uint128_t)(unflushed > 0 ? (uint64_t)unflushed : 0)
-				* 1000000000ull;
-		tmp /= dt_ns;
 		admin->trade_block_fill_rates[sym_idx] =
 			ema_update_u64(admin->trade_block_fill_rates[sym_idx],
-				(uint64_t)tmp);
+				trc_mul64_div64(
+					unflushed > 0 ?
+						(uint64_t)unflushed : 0,
+					1000000000ull, dt_ns));
 	}
 }
 
@@ -534,8 +527,6 @@ static void update_book_pipeline_rates(struct trcache *cache,
 			admin->book_fill_timestamps[sym_idx];
 		uint64_t dt_ns =
 			(last_ts == 0) ? 0 : (now_ns - last_ts);
-		__uint128_t tmp;
-
 		admin->book_fill_timestamps[sym_idx] = now_ns;
 
 		if (dt_ns == 0 || buf == NULL) {
@@ -553,12 +544,11 @@ static void update_book_pipeline_rates(struct trcache *cache,
 			cur_produced;
 
 		uint64_t diff = cur_produced - old_produced;
-		tmp = (__uint128_t)diff * 1000000000ull;
-		tmp /= dt_ns;
 		admin->book_update_rates[sym_idx] =
 			ema_update_u64(
 				admin->book_update_rates[sym_idx],
-				(uint64_t)tmp);
+				trc_mul64_div64(diff,
+					1000000000ull, dt_ns));
 
 		/*
 		 * Flush rate: unflushed blocks/sec.
@@ -567,13 +557,13 @@ static void update_book_pipeline_rates(struct trcache *cache,
 		int unflushed = atomic_load_explicit(
 			&buf->num_full_unflushed_blocks,
 			memory_order_acquire);
-		tmp = (__uint128_t)(unflushed > 0 ?
-				(uint64_t)unflushed : 0) * 1000000000ull;
-		tmp /= dt_ns;
 		admin->book_block_fill_rates[sym_idx] =
 			ema_update_u64(
 				admin->book_block_fill_rates[sym_idx],
-				(uint64_t)tmp);
+				trc_mul64_div64(
+					unflushed > 0 ?
+						(uint64_t)unflushed : 0,
+					1000000000ull, dt_ns));
 	}
 }
 

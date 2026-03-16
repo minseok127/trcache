@@ -108,8 +108,6 @@ Exchange Server              Local Machine
 
 ![Engine Latency Comparison](validator/results/engine_latency_comparison.png)
 
-Raw histogram data available in `validator/results/`.
-
 ---
 
 ## Benchmark Stress Test
@@ -200,9 +198,44 @@ All measurements use 1 concurrent reader thread.
 
 ## Build
 
+### Linux (Makefile)
+
+**Release:**
 ```bash
-make                    # build release mode (O2), same with BUILD_MODE=release
-make BUILD_MODE=debug   # build with debug symbols and assertions
+make
+```
+
+**Debug:**
+```bash
+make BUILD_MODE=debug
+```
+
+### Windows (CMake, MSVC 64-bit)
+
+**Release:**
+```powershell
+cmake -B build -A x64
+cmake --build build --config Release
+```
+
+**Debug:**
+```powershell
+cmake -B build -A x64
+cmake --build build --config Debug
+```
+
+### Windows (CMake, MinGW)
+
+**Release:**
+```powershell
+cmake -B build -G "MinGW Makefiles"
+cmake --build build
+```
+
+**Debug:**
+```powershell
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
 ```
 
 ---

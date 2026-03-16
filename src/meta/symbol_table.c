@@ -3,13 +3,15 @@
  * @brief   Implements a thread-safe symbol table with lock-free reads by
  *          atomsnap and mutex-protected copy-on-write updates for writes.
  */
-#define _GNU_SOURCE
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
 #include <assert.h>
 #include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/symbol_table.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_list.h"
@@ -32,7 +34,7 @@
 static _Atomic(int) *alloc_ownership_flags(int count)
 {
 	size_t size = (size_t)count * sizeof(_Atomic(int));
-	_Atomic(int) *flags = aligned_alloc(
+	_Atomic(int) *flags = trc_aligned_alloc(
 		CACHE_LINE_SIZE, ALIGN_UP(size, CACHE_LINE_SIZE));
 
 	if (flags != NULL) {
@@ -94,7 +96,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	in_mem_size = num_tasks * sizeof(struct in_memory_owner);
 	batch_flush_size = num_tasks * sizeof(_Atomic(int));
 
-	table->in_memory_ownership_flags = aligned_alloc(
+	table->in_memory_ownership_flags = trc_aligned_alloc(
 		CACHE_LINE_SIZE,
 		ALIGN_UP(in_mem_size, CACHE_LINE_SIZE));
 	if (table->in_memory_ownership_flags == NULL) {
@@ -105,7 +107,7 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	}
 	memset(table->in_memory_ownership_flags, -1, in_mem_size);
 
-	table->batch_flush_ownership_flags = aligned_alloc(
+	table->batch_flush_ownership_flags = trc_aligned_alloc(
 		CACHE_LINE_SIZE,
 		ALIGN_UP(batch_flush_size, CACHE_LINE_SIZE));
 	if (table->batch_flush_ownership_flags == NULL) {
@@ -155,16 +157,16 @@ struct symbol_table *symbol_table_init(int max_capacity, int num_candle_configs)
 	return table;
 
 cleanup_book_update_flags:
-	free(table->book_update_ownership_flags);
+	trc_aligned_free(table->book_update_ownership_flags);
 
 cleanup_trade_flush_flags:
-	free(table->trade_flush_ownership_flags);
+	trc_aligned_free(table->trade_flush_ownership_flags);
 
 cleanup_batch_flush_flags:
-	free(table->batch_flush_ownership_flags);
+	trc_aligned_free(table->batch_flush_ownership_flags);
 
 cleanup_in_mem_flags:
-	free(table->in_memory_ownership_flags);
+	trc_aligned_free(table->in_memory_ownership_flags);
 
 cleanup_entries:
 	free(table->symbol_entries);
@@ -216,11 +218,11 @@ void symbol_table_destroy(struct symbol_table *table)
 		free(entry->symbol_str);
 	}
 
-	free(table->in_memory_ownership_flags);
-	free(table->batch_flush_ownership_flags);
-	free(table->trade_flush_ownership_flags);
-	free(table->book_update_ownership_flags);
-	free(table->book_event_flush_ownership_flags);
+	trc_aligned_free(table->in_memory_ownership_flags);
+	trc_aligned_free(table->batch_flush_ownership_flags);
+	trc_aligned_free(table->trade_flush_ownership_flags);
+	trc_aligned_free(table->book_update_ownership_flags);
+	trc_aligned_free(table->book_event_flush_ownership_flags);
 
 	free(table->symbol_entries);
 	free(table);

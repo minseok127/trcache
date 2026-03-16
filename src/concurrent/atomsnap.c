@@ -38,17 +38,20 @@
  * 'top_handle' (Batch Steal).
  */
 
-#define _GNU_SOURCE
+#include <assert.h>
+#include <inttypes.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdatomic.h>
-#include <pthread.h>
-#include <assert.h>
-#include <inttypes.h>
-#include <stdbool.h>
+#ifndef _WIN32
 #include <sys/mman.h>
+#endif
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "concurrent/atomsnap.h"
 
 #define PAGE_SIZE             (4096)
@@ -257,20 +260,20 @@ static inline struct atomsnap_version *resolve_handle(uint32_t handle_raw)
 	atomsnap_handle_t h;
 	struct memory_arena *arena;
 
-	if (__builtin_expect(handle_raw == HANDLE_NULL, 0)) {
+	if (trc_expect(handle_raw == HANDLE_NULL, 0)) {
 		return NULL;
 	}
 
 	h.raw = handle_raw;
 
 	/* Bounds check */
-	if (__builtin_expect(h.arena_idx >= MAX_ARENAS, 0)) {
+	if (trc_expect(h.arena_idx >= MAX_ARENAS, 0)) {
 		return NULL;
 	}
 
 	arena = g_arena_table[h.arena_idx];
 
-	if (__builtin_expect(arena == NULL, 0)) {
+	if (trc_expect(arena == NULL, 0)) {
 		return NULL;
 	}
 
@@ -329,7 +332,9 @@ static bool reclaim_last_arena_if_empty(struct thread_context *ctx)
 	 * have been returned to the arena's stack.
 	 */
 	if (depth == (SLOTS_PER_ARENA - 1)) {
+#ifndef _WIN32
 		madvise(arena, sizeof(struct memory_arena), MADV_DONTNEED);
+#endif
 		ctx->active_arena_count--;
 		return true;
 	}
@@ -399,7 +404,7 @@ static inline struct thread_context *get_or_init_thread_context(void)
 
 	ctx = (struct thread_context *)pthread_getspecific(g_tls_key);
 
-	if (__builtin_expect(ctx == NULL, 0)) {
+	if (trc_expect(ctx == NULL, 0)) {
 		if (atomsnap_thread_init_internal() != 0) {
 			return NULL;
 		}
@@ -520,7 +525,7 @@ static int init_arena(struct thread_context *ctx)
 			return -1;
 		}
 
-		arena = aligned_alloc(PAGE_SIZE, sizeof(struct memory_arena));
+		arena = trc_aligned_alloc(PAGE_SIZE, sizeof(struct memory_arena));
 		if (!arena) {
 			errmsg("Memory allocation failed for new arena\n");
 			return -1;

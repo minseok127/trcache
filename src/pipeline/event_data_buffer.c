@@ -7,13 +7,15 @@
  * and consume entries; when threshold reached, block is enqueued back
  * to free list by producer's context.
  */
-#define _GNU_SOURCE
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdatomic.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/event_data_buffer.h"
 #include "utils/list_head.h"
@@ -56,7 +58,7 @@ struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
 		return NULL;
 	}
 
-	buf = aligned_alloc(CACHE_LINE_SIZE,
+	buf = trc_aligned_alloc(CACHE_LINE_SIZE,
 		ALIGN_UP(sizeof(struct event_data_buffer), CACHE_LINE_SIZE));
 
 	if (buf == NULL) {
@@ -82,20 +84,20 @@ struct event_data_buffer *event_data_buffer_init(struct trcache *tc,
 	block_struct_size = calculate_block_struct_size();
 	block_total_size = block_struct_size + event_buf_size;
 
-	block = aligned_alloc(CACHE_LINE_SIZE, block_struct_size);
+	block = trc_aligned_alloc(CACHE_LINE_SIZE, block_struct_size);
 	if (block == NULL) {
 		errmsg(stderr, "#event_data_block allocation failed\n");
-		free(buf);
+		trc_aligned_free(buf);
 		return NULL;
 	}
 
 	memset(block, 0, sizeof(struct event_data_block));
 
-	block->data = aligned_alloc(EVENT_DATA_BUF_ALIGN, event_buf_size);
+	block->data = trc_aligned_alloc(EVENT_DATA_BUF_ALIGN, event_buf_size);
 	if (block->data == NULL) {
 		errmsg(stderr, "event_data_block data buffer allocation failed\n");
-		free(block);
-		free(buf);
+		trc_aligned_free(block);
+		trc_aligned_free(buf);
 		return NULL;
 	}
 
@@ -152,8 +154,8 @@ void event_data_buffer_destroy(struct event_data_buffer *buf)
 		while (c != &buf->block_list) {
 			n = c->next;
 			block = __get_evt_block_ptr(c);
-			free(block->data);
-			free(block);
+			trc_aligned_free(block->data);
+			trc_aligned_free(block);
 			mem_sub_atomic(&buf->memory_usage.value,
 				buf->block_allocation_size);
 			c = n;
@@ -161,7 +163,7 @@ void event_data_buffer_destroy(struct event_data_buffer *buf)
 	}
 
 	mem_sub_atomic(&buf->memory_usage.value, sizeof(struct event_data_buffer));
-	free(buf);
+	trc_aligned_free(buf);
 }
 
 /**
@@ -234,7 +236,7 @@ int event_data_buffer_push(struct event_data_buffer *buf,
 				return -1;
 			}
 
-			new_block = aligned_alloc(CACHE_LINE_SIZE,
+			new_block = trc_aligned_alloc(CACHE_LINE_SIZE,
 				calculate_block_struct_size());
 
 			if (new_block == NULL) {
@@ -248,13 +250,13 @@ int event_data_buffer_push(struct event_data_buffer *buf,
 			 */
 			memset(new_block, 0, sizeof(struct event_data_block));
 
-			new_block->data = aligned_alloc(EVENT_DATA_BUF_ALIGN,
+			new_block->data = trc_aligned_alloc(EVENT_DATA_BUF_ALIGN,
 				buf->event_buf_size);
 
 			if (new_block->data == NULL) {
 				errmsg(stderr,
 					"event_data_block data buffer allocation failed\n");
-				free(new_block);
+				trc_aligned_free(new_block);
 				return -1;
 			}
 
@@ -476,8 +478,8 @@ void event_data_buffer_reap_free_blocks(struct event_data_buffer *buf,
 			while (node != NULL) {
 				c = __get_evt_block_ptr(node);
 				next = (node == last) ? NULL : node->next;
-				free(c->data);
-				free(c);
+				trc_aligned_free(c->data);
+				trc_aligned_free(c);
 				node = next;
 			}
 

@@ -1,8 +1,8 @@
 CC = gcc
 AR = ar
 
-CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC -march=native
-CFLAGS_DEBUG = -Wall -Wextra -O0 -g -std=c11 -fPIC -DTRCACHE_DEBUG -march=native
+CFLAGS_RELEASE = -Wall -Wextra -O2 -std=c11 -fPIC -march=native -D_GNU_SOURCE
+CFLAGS_DEBUG = -Wall -Wextra -O0 -g -std=c11 -fPIC -DTRCACHE_DEBUG -march=native -D_GNU_SOURCE
 
 BUILD_MODE ?= release
 

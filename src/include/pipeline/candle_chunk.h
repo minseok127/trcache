@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
-#include <pthread.h>
+#include "compat/thread_compat.h"
 
 #include "concurrent/atomsnap.h"
 #include "concurrent/scalable_queue.h"

@@ -12,13 +12,15 @@
  *   - Readers load them with 'memory_order_acquire', *before* acquiring
  *     the atomsnap version (see struct comment in the implementation).
  */
-#define _GNU_SOURCE
+#include <assert.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-#include <inttypes.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/trcache_internal.h"
 #include "pipeline/candle_chunk_index.h"
 #include "utils/log.h"
@@ -54,10 +56,10 @@ static struct candle_chunk_index_version *alloc_index_version_object(
 	array_size = newcap * sizeof(struct candle_chunk_index_entry);
 	array_size = ALIGN_UP(array_size, TRCACHE_SIMD_ALIGN);
 
-	idx_ver->array = aligned_alloc(TRCACHE_SIMD_ALIGN, array_size);
+	idx_ver->array = trc_aligned_alloc(TRCACHE_SIMD_ALIGN, array_size);
 	if (idx_ver->array == NULL) {
 		errmsg(stderr,
-			"Failure on aligned_alloc() for array (newcap=%" PRIu64 ")\n",
+			"Failure on trc_aligned_alloc() for array (newcap=%" PRIu64 ")\n",
 			newcap);
 		free(idx_ver);
 		return NULL;
@@ -98,7 +100,7 @@ static void candle_chunk_index_version_free(void *object, void *free_context)
 
 	mem_sub_atomic(&idx->memory_usage.value, total_size);
 
-	free(idx_ver->array);
+	trc_aligned_free(idx_ver->array);
 	free(idx_ver);
 }
 

@@ -2,10 +2,12 @@
  * @file   trcache_candle_batch.c
  * @brief  Heap-side implementation of contiguous, SIMD-aligned batches.
  */
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 
+#include "compat/builtin_compat.h"
+#include "compat/memory_compat.h"
+#include "compat/thread_compat.h"
 #include "meta/trcache_internal.h"
 #include "utils/log.h"
 
@@ -24,18 +26,13 @@
  */
 static void *simd_aligned_alloc(size_t align, size_t bytes)
 {
-#if defined(_ISOC11_SOURCE) || (__STDC_VERSION__ >= 201112L)
 	size_t sz = (bytes + align - 1) & ~(align - 1);
-	return aligned_alloc(align, sz);
-#else
-	void *p = NULL;
-	return (posix_memalign(&p, align, bytes) == 0) ? p : NULL;
-#endif
+	return trc_aligned_alloc(align, sz);
 }
 
 static void simd_aligned_free(void *p)
 {
-	free(p);
+	trc_aligned_free(p);
 }
 
 static size_t align_up(size_t x, size_t a)
