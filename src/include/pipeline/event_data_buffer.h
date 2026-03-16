@@ -27,9 +27,9 @@ struct event_data_flush_ops {
 #ifndef __cacheline_aligned
 #ifdef _MSC_VER
 #define __cacheline_aligned __declspec(align(64))
-#else
+#else  /* !_MSC_VER */
 #define __cacheline_aligned __attribute__((aligned(64)))
-#endif
+#endif /* _MSC_VER */
 #endif /* __cacheline_aligned */
 
 /*

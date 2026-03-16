@@ -16,7 +16,7 @@
 /* ------------------------------------------------------------------ */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
-#endif
+#endif /* WIN32_LEAN_AND_MEAN */
 #include <windows.h>
 #include <stdlib.h>  /* for abort() */
 
@@ -191,13 +191,13 @@ static inline int pthread_once(pthread_once_t *once,
 	return 0;
 }
 
-#else
+#else  /* !_WIN32 */
 /* ------------------------------------------------------------------ */
 /*  Linux / POSIX path                                                */
 /* ------------------------------------------------------------------ */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
-#endif
+#endif /* _GNU_SOURCE */
 #include <pthread.h>
 #endif /* _WIN32 */
 

@@ -17,9 +17,9 @@ extern "C" {
 #ifdef _WIN32
 #include <malloc.h>   /* _alloca */
 #define alloca _alloca
-#else
+#else  /* !_WIN32 */
 #include <alloca.h>
-#endif
+#endif /* _WIN32 */
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -49,9 +49,9 @@ extern "C" {
 #ifndef ____cacheline_aligned
 #ifdef _MSC_VER
 #define ____cacheline_aligned __declspec(align(CACHE_LINE_SIZE))
-#else
+#else  /* !_MSC_VER */
 #define ____cacheline_aligned __attribute__((aligned(CACHE_LINE_SIZE)))
-#endif
+#endif /* _MSC_VER */
 #endif /* ____cacheline_aligned */
 
 typedef struct trcache trcache;

@@ -29,7 +29,7 @@ static inline int trc_ctzll(uint64_t x)
 	return (int)idx;
 }
 
-#else /* GCC / Clang */
+#else  /* !_MSC_VER */
 
 static inline int trc_ctzll(uint64_t x)
 {
@@ -44,9 +44,9 @@ static inline int trc_ctzll(uint64_t x)
 
 #ifdef _MSC_VER
 #define trc_expect(expr, val) (expr)
-#else
+#else  /* !_MSC_VER */
 #define trc_expect(expr, val) __builtin_expect((expr), (val))
-#endif
+#endif /* _MSC_VER */
 
 /* ------------------------------------------------------------------ */
 /*  trc_memory_barrier — full memory fence                            */
@@ -59,14 +59,14 @@ static inline void trc_memory_barrier(void)
 	MemoryBarrier();
 }
 
-#else
+#else  /* !_MSC_VER */
 
 static inline void trc_memory_barrier(void)
 {
 	__sync_synchronize();
 }
 
-#endif
+#endif /* _MSC_VER */
 
 /* ------------------------------------------------------------------ */
 /*  trc_cpu_pause — yield to hyper-thread sibling                     */
@@ -80,14 +80,14 @@ static inline void trc_cpu_pause(void)
 	_mm_pause();
 }
 
-#else
+#else  /* !_MSC_VER */
 
 static inline void trc_cpu_pause(void)
 {
 	__asm__ __volatile__("pause");
 }
 
-#endif
+#endif /* _MSC_VER */
 
 /* ------------------------------------------------------------------ */
 /*  trc_mul64_div64 — overflow-safe (a * b) / c for uint64_t          */
@@ -106,10 +106,10 @@ static inline uint64_t trc_mul64_div64(uint64_t a, uint64_t b,
 	}
 #ifdef _MSC_VER
 	return (a / c) * b + ((a % c) * b) / c;
-#else
+#else  /* !_MSC_VER */
 	__uint128_t tmp = (__uint128_t)a * b;
 	return (uint64_t)(tmp / c);
-#endif
+#endif /* _MSC_VER */
 }
 
 #endif /* TRCACHE_BUILTIN_COMPAT_H */

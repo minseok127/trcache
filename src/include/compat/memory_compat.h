@@ -24,7 +24,7 @@ static inline void trc_aligned_free(void *ptr)
 	_aligned_free(ptr);
 }
 
-#else /* POSIX */
+#else  /* !_WIN32 */
 #include <stdlib.h>
 
 static inline void *trc_aligned_alloc(size_t align, size_t size)
