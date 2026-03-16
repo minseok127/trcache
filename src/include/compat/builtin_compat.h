@@ -6,7 +6,7 @@
  * @brief   GCC built-in -> MSVC intrinsic compatibility layer.
  *
  * Provides platform-neutral wrappers for:
- *   __builtin_ctzll   -> trc_ctzll
+ *   __builtin_ctzll    -> trc_ctzll
  *   __builtin_expect   -> trc_expect
  *   __sync_synchronize -> trc_memory_barrier
  *   asm pause          -> trc_cpu_pause
